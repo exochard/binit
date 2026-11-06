@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 
 mod engine;
 mod manager;
+mod package;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -45,6 +46,8 @@ struct Plugin {
     depends: Vec<String>,
     #[serde(default)]
     completions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    commands: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -165,14 +168,20 @@ fn validate_plugin(plugin: &Plugin) -> Result<()> {
         || !valid_name(&plugin.id)
         || !valid_relative(&plugin.entry)
         || !plugin.entry.ends_with(".bash")
-        || !["startup", "prompt", "completion"].contains(&plugin.load.as_str())
+        || !["startup", "prompt", "completion", "command"].contains(&plugin.load.as_str())
         || plugin
             .requires
             .iter()
             .chain(&plugin.depends)
             .chain(&plugin.completions)
+            .chain(&plugin.commands)
             .any(|s| !valid_name(s))
         || (plugin.load == "completion") == plugin.completions.is_empty()
+        || (plugin.load == "command") == plugin.commands.is_empty()
+        || plugin
+            .commands
+            .iter()
+            .any(|s| s == "binit" || s.starts_with("__binit_"))
     {
         return Err(format!("invalid plugin manifest: {}", plugin.id).into());
     }
@@ -250,31 +259,15 @@ fn prepare(config: &Path, state: &Path) -> Result<String> {
     let mut packages = BTreeMap::new();
     let mut catalog = Vec::new();
     for spec in config.plugins {
-        let root = config_path.parent().unwrap().join(spec.path);
-        if !fs::symlink_metadata(&root)?.is_dir() {
-            return Err("plugin root must be a directory, not a symlink".into());
-        }
-        let mut files = BTreeMap::new();
-        collect(&root, Path::new(""), &mut files)?;
-        let plugin: Plugin = toml::from_str(std::str::from_utf8(
-            files.get("plugin.toml").ok_or("missing plugin.toml")?,
-        )?)?;
-        validate_plugin(&plugin)?;
-        if !files.contains_key(&plugin.entry) {
-            return Err(format!("missing entry for {}", plugin.id).into());
-        }
+        let path = config_path.parent().unwrap().join(spec.path);
+        let (item, files) = manager::package(&path, spec.enabled)?;
+        let plugin = &item.plugin;
         if plugins.contains_key(&plugin.id) {
             return Err(format!("duplicate plugin: {}", plugin.id).into());
         }
-        catalog.push(manager::Installed {
-            plugin: plugin.clone(),
-            enabled: spec.enabled,
-            source: Some(fs::canonicalize(&root)?),
-        });
-        for (name, bytes) in files {
-            packages.insert(format!("plugins/{}/{name}", plugin.id), bytes);
-        }
-        plugins.insert(plugin.id.clone(), plugin);
+        plugins.insert(plugin.id.clone(), plugin.clone());
+        catalog.push(item);
+        packages.extend(files);
     }
     publish(catalog, packages, state)
 }
@@ -289,6 +282,7 @@ fn publish(
     }
     let mut plugins = BTreeMap::new();
     let mut completions = BTreeSet::new();
+    let mut commands = BTreeSet::new();
     for item in &catalog {
         validate_plugin(&item.plugin)?;
         if !item.enabled {
@@ -297,6 +291,11 @@ fn publish(
         for command in &item.plugin.completions {
             if !completions.insert(command.clone()) {
                 return Err(format!("duplicate completion: {command}").into());
+            }
+        }
+        for command in &item.plugin.commands {
+            if !commands.insert(command.clone()) {
+                return Err(format!("duplicate command trigger: {command}").into());
             }
         }
         plugins.insert(item.plugin.id.clone(), item.plugin.clone());
@@ -318,13 +317,14 @@ fn publish(
     for id in &order {
         let p = &plugins[id];
         init.push_str(&format!(
-            "__binit_register {} \"$__binit_generation_dir\"/{} {} {} {} {}\n",
+            "__binit_register {} \"$__binit_generation_dir\"/{} {} {} {} {} {}\n",
             quote(id),
             quote(&format!("plugins/{id}/{}", p.entry)),
             quote(&p.load),
             quote(&p.requires.join(" ")),
             quote(&p.depends.join(" ")),
-            quote(&p.completions.join(" "))
+            quote(&p.completions.join(" ")),
+            quote(&p.commands.join(" "))
         ));
     }
     init.push_str("__binit_activate\n");
@@ -540,7 +540,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] --state DIRECTORY\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  add PATH [--disabled]   Install a content-pinned local plugin\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit profile, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] --state DIRECTORY\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }

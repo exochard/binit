@@ -125,6 +125,12 @@ complete -F __lazy lazy_cmd
 
 
 class CompletionTests(unittest.TestCase):
+    def test_debug_stdout_does_not_hide_the_native_builtin(self):
+        with Session(framework=True, extra="set -T\ntrap 'printf \"TRACE:%s\\n\" \"$BASH_COMMAND\"' DEBUG\n") as session:
+            session.send("binit completion\n")
+            session.wait(lambda: "Completion menu: on" in session.text)
+            session.open()
+
     def test_missing_cursor_reply_preserves_input_received_during_probe(self):
         with Session(extra="binit_complete off\n") as baseline:
             baseline.send(b'printf "%s" al\t[xyz')

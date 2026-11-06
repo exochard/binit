@@ -4,7 +4,7 @@ The manager snapshots local plugins through `add`, `update`, or a complete `prep
 
 ## Lifecycle
 
-`binit add PATH` installs and enables a local package. Add `--disabled` to keep it inactive. `binit plugins` lists the settings for the next shell; `binit profile` describes the running shell. `binit inspect ID` shows the recorded source and entry digest.
+`binit add PATH` installs a local package directory or a source declaration file. Add `--disabled` to keep it inactive. `binit plugins` lists the settings for the next shell; `binit profile` describes the running shell, including reasons for unavailable plugins. `binit inspect ID` shows the source, command triggers and entry digest.
 
 `enable` and `disable` operate on the stored snapshot, even if its original source has moved. `update ID` captures changes from the recorded source; `update ID PATH` selects a new source with the same plugin ID. `remove` drops the package from the current catalog while preserving its source directory and earlier generations.
 
@@ -25,11 +25,67 @@ requires = ["git"]
 depends = []
 ```
 
-`load` accepts `startup`, `prompt`, or `completion`. Completion plugins also declare `completions = ["command"]`. Dependencies must be enabled and form an acyclic graph. An explicit dependency can cause a plugin to load earlier than its usual trigger.
+`load` accepts `startup`, `prompt`, `completion`, or `command`. Completion plugins declare `completions = ["command"]`; first-use plugins declare `commands = ["tool"]`. Dependencies must be enabled and form an acyclic graph. An explicit dependency can load a plugin earlier than its usual trigger.
 
 An existing completion specification blocks the corresponding completion plugin, including when another plugin depends on it. Dependants become unavailable. Plugins must use unique function names and respect the runtime's `__binit_` namespace.
 
 Package files must be regular files. Symlinks are rejected. Limits are 128 files and 2 MiB per package, with directory nesting capped at 16 levels. The entry path must stay inside the package. Unknown manifest fields fail validation with an error.
+
+## Existing Bash scripts
+
+Keep a declaration outside an upstream checkout, for example `tools.toml`:
+
+```toml
+schema = 1
+id = "tools"
+path = "../checkout"
+files = ["init.sh", "shell/completion.bash"]
+load = "command"
+commands = ["tool"]
+```
+
+Install it with `binit add tools.toml`. Configuration files used by `prepare`
+can also name declarations in their plugin paths. The upstream directory
+needs no Binit manifest.
+
+`path` is relative to the declaration, or absolute. Paths are literal: tilde,
+environment variables and globs are not expanded. `files` selects between
+one and 125 regular Bash scripts. They are copied with their relative layout
+and sourced in listed order. Symlinks at any selected path component are
+rejected. The package limit includes the declaration and generated files.
+
+`update ID` rereads the recorded declaration and selected source files.
+Enable, disable, apply and rollback use pinned snapshots. `$BASH_SOURCE`
+points into that snapshot; scripts must have their required external tools
+and resources available. Scripts are sourced inside a loader function, so
+top-level `declare` follows Bash function scope. Persistent declarations need
+`declare -g` or ordinary assignments.
+
+## First-use loading
+
+A `command` plugin stays pending until one of its declared names is called.
+The loader removes its own wrappers, sources the plugin once in the calling
+Bash, then invokes the requested function or executable with the original
+arguments. Its return status passes through. Exports and directory changes
+remain in that shell. Ordinary commands acquire no dispatcher or `DEBUG` trap.
+
+Names start with a letter and contain at most 64 letters, digits, underscores
+or hyphens. Existing functions, aliases, builtins and keywords block the
+plugin before it loads; `binit profile` reports the conflict. External
+executables can be triggers. Defining a function or alias for another trigger
+after initialization also blocks loading, preserving the custom definition
+before the upstream script can replace it.
+
+`command tool` bypasses a function wrapper, as it normally does in Bash.
+Calls in a subshell, pipeline or command substitution initialize that child;
+the parent retains its pending state. A trigger invokes functions or
+executables; aliases created during loading are subject to Bash's normal
+parse-time expansion.
+
+Inside an initialized shell, `binit load ID` loads a pending plugin explicitly.
+Loaded plugins are not sourced again. A failed or blocked plugin reports its
+reason rather than retrying automatically. Source failures may leave partial
+effects, as described below.
 
 ## Hooks
 

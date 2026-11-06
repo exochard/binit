@@ -44,6 +44,18 @@ before changing the completion bridge. `CC` chooses the C compiler and
 `BINIT_BASH_INCLUDE` overrides the Bash header directory. A manager/runtime
 build without the native module is available through `--no-default-features`.
 
+To check existing plugins, pass reviewed local scripts to the compatibility
+checker. It uses a private home and state directory and writes file hashes
+and results to `evidence/plugin-compatibility.json`:
+
+```bash
+python3 scripts/check_plugins.py --fzf /usr/share/fzf --bash-completion /usr/share/bash-completion/bash_completion --nvm /path/to/nvm.sh
+```
+
+Each option is independent. The checker initializes NVM and queries its
+version; it does not install Node. See [the compatibility receipt](docs/plugin-compatibility.md)
+for the locally qualified sources.
+
 ## Plugins and runtime changes
 
 The [plugin interface](docs/plugins.md) documents manifests and public Bash

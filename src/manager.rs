@@ -89,19 +89,8 @@ pub(super) fn package(
     path: &Path,
     enabled: bool,
 ) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
-    if !fs::symlink_metadata(path)?.is_dir() {
-        return Err("plugin root must be a directory, not a symlink".into());
-    }
+    let (plugin, files) = package::read(path)?;
     let source = fs::canonicalize(path)?;
-    let mut files = BTreeMap::new();
-    collect(&source, Path::new(""), &mut files)?;
-    let plugin: Plugin = toml::from_str(std::str::from_utf8(
-        files.get("plugin.toml").ok_or("missing plugin.toml")?,
-    )?)?;
-    validate_plugin(&plugin)?;
-    if !files.contains_key(&plugin.entry) {
-        return Err(format!("missing entry for {}", plugin.id).into());
-    }
     let files = files
         .into_iter()
         .map(|(name, bytes)| (format!("plugins/{}/{name}", plugin.id), bytes))
@@ -230,9 +219,10 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
         .get(&file)
         .ok_or("plugin entry is missing from the lock")?;
     println!(
-        "Plugin: {id}\nNext shell: {}\nLoad: {}\nRequires: {}\nDepends: {}\nSource: {}\nEntry SHA256: {digest}",
+        "Plugin: {id}\nNext shell: {}\nLoad: {}\nCommands: {}\nRequires: {}\nDepends: {}\nSource: {}\nEntry SHA256: {digest}",
         if entry.enabled { "enabled" } else { "disabled" },
         entry.plugin.load,
+        entry.plugin.commands.join(", "),
         entry.plugin.requires.join(", "),
         entry.plugin.depends.join(", "),
         entry

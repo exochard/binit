@@ -837,3 +837,332 @@ fn schema_one_generations_migrate_without_losing_plugins() {
         "legacy plugin has no source path",
     );
 }
+
+#[test]
+fn declarations_pin_selected_scripts_in_order_and_support_lifecycle_changes() {
+    let f = Fixture::new();
+    f.write("upstream/first.sh", "BINIT_SEQUENCE=first\n");
+    f.write("upstream/second 'file.sh", "BINIT_SEQUENCE+=:second\n");
+    f.write("upstream/unselected.sh", "return 99\n");
+    let declaration = f.write(
+        "declarations/tools.toml",
+        r#"
+schema=1
+id='tools'
+path='../upstream'
+files=['first.sh', "second 'file.sh"]
+load='startup'
+"#,
+    );
+    success(f.cli(&["add", declaration.to_str().unwrap()]));
+    assert!(!f.root().join("upstream/plugin.toml").exists());
+    assert!(
+        !f.generation()
+            .join("plugins/tools/files/unselected.sh")
+            .exists()
+    );
+    assert!(
+        f.generation()
+            .join("plugins/tools/declaration.toml")
+            .is_file()
+    );
+    f.write("upstream/first.sh", "BINIT_SEQUENCE=changed\n");
+    success(f.cli(&["disable", "tools"]));
+    success(f.cli(&["enable", "tools"]));
+    let script = "source \"$BINIT_TEST_INIT\"; printf %s \"$BINIT_SEQUENCE\"";
+    assert_eq!(success(f.bash(script)), "first:second");
+    success(f.cli(&["update", "tools"]));
+    assert_eq!(success(f.bash(script)), "changed:second");
+    success(f.cli(&["rollback"]));
+    assert_eq!(success(f.bash(script)), "first:second");
+    success(f.prepare(&["declarations/tools.toml"]));
+    assert_eq!(success(f.bash(script)), "changed:second");
+}
+
+#[test]
+fn first_use_runs_once_in_the_calling_shell_and_preserves_arguments_and_status() {
+    let f = Fixture::new();
+    f.write("after/marker", "");
+    f.plugin(
+        "tools",
+        "load='command'\ncommands=['tool', 'helper']",
+        r#"
+BINIT_LOADS=$(( ${BINIT_LOADS:-0} + 1 ))
+id=upstream
+name=upstream
+helper() { printf helper; }
+tool() { export BINIT_CALLED=present; cd "$BINIT_TEST_ROOT/after"; printf '<%s>' "$@"; return 37; }
+"#,
+    );
+    success(f.prepare(&["tools"]));
+    assert_eq!(
+        success(f.bash(
+            r#"
+set -u
+trap ':' DEBUG
+before=$(trap -p DEBUG)
+source "$BINIT_TEST_INIT"
+[[ ${__binit_state[tools]} == pending && ! -v BINIT_LOADS ]] || exit 2
+tool 'two words' '$(touch forbidden)' --flag
+status=$?
+[[ $status == 37 && $BINIT_LOADS == 1 && $BINIT_CALLED == present ]] || exit 3
+[[ $PWD == "$BINIT_TEST_ROOT/after" && $id == upstream && $name == upstream ]] || exit 4
+[[ $(trap -p DEBUG) == "$before" ]] || exit 5
+helper
+[[ $BINIT_LOADS == 1 && ${__binit_state[tools]} == loaded ]] || exit 6
+"#
+        )),
+        "<two words><$(touch forbidden)><--flag>helper"
+    );
+    assert!(!f.root().join("forbidden").exists());
+}
+
+#[test]
+fn first_use_can_initialize_an_external_command_without_defining_a_function() {
+    let f = Fixture::new();
+    let executable = f.write(
+        "bin/tool",
+        "#!/bin/bash\nprintf '%s:%s' \"$BINIT_EXTERNAL\" \"$1\"; exit 23\n",
+    );
+    fs::set_permissions(executable, fs::Permissions::from_mode(0o700)).unwrap();
+    f.plugin(
+        "tools",
+        "load='command'\ncommands=['tool']\nrequires=['tool']",
+        "export BINIT_EXTERNAL=initialized\n",
+    );
+    success(f.prepare(&["tools"]));
+    assert_eq!(
+        success(f.bash(
+            r#"
+PATH="$BINIT_TEST_ROOT/bin:$PATH"
+source "$BINIT_TEST_INIT"
+tool 'two words'; status=$?
+[[ $status == 23 && ${__binit_state[tools]} == loaded ]] || exit 2
+[[ $(type -t tool) == file ]] || exit 3
+"#
+        )),
+        "initialized:two words"
+    );
+}
+
+#[test]
+fn first_use_preserves_ifs_and_ignores_debug_stdout_when_tracking_functions() {
+    for prelude in ["IFS=:", ":"] {
+        let f = Fixture::new();
+        for name in ["tool", "helper"] {
+            let file = f.write(
+                &format!("bin/{name}"),
+                "#!/bin/bash\nprintf %s \"$BINIT_EXTERNAL\"\n",
+            );
+            fs::set_permissions(file, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        f.plugin("base", "load='prompt'", ":\n");
+        f.plugin("tools", "load='command'\ncommands=['tool','helper']\ndepends=['base']\nrequires=['true','printf']", "BINIT_SAVED_IFS=$IFS; export BINIT_EXTERNAL=loaded\n");
+        success(f.prepare(&["base", "tools"]));
+        success(f.bash(&format!(
+            r#"
+FUNCNEST=20
+PATH="$BINIT_TEST_ROOT/bin:$PATH"
+{prelude}
+set -T
+trap 'printf "TRACE:%s\n" "$BASH_COMMAND"' DEBUG
+source "$BINIT_TEST_INIT"
+IFS=:
+tool || exit 2
+helper || exit 3
+[[ $BINIT_SAVED_IFS == : && $IFS == : && $- == *T* ]] || exit 4
+[[ ${{__binit_state[tools]}} == loaded && $(type -t tool) == *file* ]] || exit 5
+"#
+        )));
+    }
+}
+
+#[test]
+fn source_and_hook_scopes_do_not_shadow_ordinary_plugin_variables() {
+    for (load, options, trigger) in [
+        ("startup", "", ":"),
+        ("prompt", "", "__binit_prompt_dispatch"),
+        (
+            "completion",
+            "completions=['scope_tool']",
+            "COMP_WORDS=(scope_tool); __binit_complete; [[ $? == 124 ]] || exit 2",
+        ),
+    ] {
+        let f = Fixture::new();
+        f.plugin("scope", &format!("load='{load}'\n{options}"), "id=upstream; command=upstream; name=upstream; status=upstream; callback=upstream; value=upstream\n");
+        success(f.prepare(&["scope"]));
+        success(f.bash(&format!(r#"
+set -u
+source "$BINIT_TEST_INIT"
+{trigger}
+[[ $id == upstream && $command == upstream && $name == upstream && $status == upstream && $callback == upstream && $value == upstream ]] || exit 3
+"#)));
+    }
+}
+
+#[test]
+fn existing_functions_aliases_builtins_and_keywords_block_first_use_loading() {
+    for (name, prelude) in [
+        ("tool", "tool() { :; }"),
+        ("tool", "alias tool='printf original'"),
+        ("printf", ":"),
+        ("if", ":"),
+    ] {
+        let f = Fixture::new();
+        f.plugin(
+            "tools",
+            &format!("load='command'\ncommands=['{name}']"),
+            "BINIT_SHOULD_NOT_LOAD=1\n",
+        );
+        success(f.prepare(&["tools"]));
+        success(f.bash(&format!(
+            r#"
+{prelude}
+set -T
+trap 'printf "TRACE:%s\n" "$BASH_COMMAND"' DEBUG
+before=$(type -- {name})
+source "$BINIT_TEST_INIT"
+[[ ${{__binit_state[tools]}} == blocked && ! -v BINIT_SHOULD_NOT_LOAD ]] || exit 2
+[[ $(type -- {name}) == "$before" ]] || exit 3
+[[ ${{__binit_reason[tools]}} == 'command already defined: {name}' ]] || exit 4
+"#
+        )));
+    }
+}
+
+#[test]
+fn first_use_preserves_replaced_sibling_functions_and_detects_readonly_stubs() {
+    let f = Fixture::new();
+    f.plugin(
+        "tools",
+        "load='command'\ncommands=['tool', 'other']",
+        "tool() { printf loaded; }; other() { printf overwritten; }\n",
+    );
+    success(f.prepare(&["tools"]));
+    assert_eq!(
+        success(f.bash(
+            r#"
+source "$BINIT_TEST_INIT"
+other() { printf custom; }
+tool && exit 2
+[[ ${__binit_state[tools]} == blocked ]] || exit 3
+other
+"#
+        )),
+        "custom"
+    );
+    success(f.bash(r#"
+FUNCNEST=20
+source "$BINIT_TEST_INIT"
+readonly -f tool
+tool && exit 2
+[[ ${__binit_state[tools]} == blocked && ${__binit_reason[tools]} == 'readonly command: tool' ]] || exit 3
+"#));
+}
+
+#[test]
+fn failed_loads_report_a_reason_and_explicit_loading_uses_the_same_state() {
+    let f = Fixture::new();
+    f.plugin(
+        "failure",
+        "load='command'\ncommands=['broken']",
+        "return 17\n",
+    );
+    f.plugin(
+        "missing",
+        "load='command'\ncommands=['absent']\nrequires=['binit_missing_requirement']",
+        ":\n",
+    );
+    f.plugin(
+        "tools",
+        "load='command'\ncommands=['tool']",
+        "BINIT_LOADS=$(( ${BINIT_LOADS:-0} + 1 )); tool() { :; }\n",
+    );
+    success(f.prepare(&["failure", "missing", "tools"]));
+    success(f.bash(r#"
+source "$BINIT_TEST_INIT"
+broken && exit 2
+[[ ${__binit_state[failure]} == failed && ${__binit_reason[failure]} == 'entry returned 17' ]] || exit 3
+declare -F broken >/dev/null && exit 4
+absent && exit 5
+[[ ${__binit_reason[missing]} == 'missing command: binit_missing_requirement' ]] || exit 6
+binit load tools || exit 7
+tool
+binit load tools || exit 8
+[[ $BINIT_LOADS == 1 ]] || exit 9
+binit load '$(touch forbidden)' && exit 10
+[[ $? == 2 ]] || exit 11
+"#));
+    assert!(!f.root().join("forbidden").exists());
+}
+
+#[test]
+fn declaration_boundary_failures_and_duplicate_triggers_preserve_the_generation() {
+    let f = Fixture::new();
+    f.plugin("original", "load='startup'", ":\n");
+    success(f.prepare(&["original"]));
+    let original = f.generation();
+    f.write("upstream/valid.sh", ":\n");
+    symlink(
+        f.root().join("upstream/valid.sh"),
+        f.root().join("upstream/link.sh"),
+    )
+    .unwrap();
+    symlink(
+        f.root().join("upstream"),
+        f.root().join("upstream/linked-directory"),
+    )
+    .unwrap();
+    for (files, expected) in [
+        ("[]", "between 1 and 125"),
+        ("['../outside.sh']", "invalid declared file"),
+        ("['./valid.sh']", "invalid declared file"),
+        ("['link.sh']", "symlink in declared file"),
+        ("['linked-directory/valid.sh']", "symlink in declared file"),
+        ("['valid.sh','valid.sh']", "duplicate declared file"),
+    ] {
+        let declaration = f.write(
+            "adapter.toml",
+            &format!("schema=1\nid='adapter'\npath='upstream'\nfiles={files}\nload='startup'\n"),
+        );
+        failure(f.cli(&["add", declaration.to_str().unwrap()]), expected);
+        assert_eq!(f.generation(), original);
+    }
+    f.plugin("one", "load='command'\ncommands=['tool']", ":\n");
+    f.plugin("two", "load='command'\ncommands=['tool']", ":\n");
+    failure(f.prepare(&["one", "two"]), "duplicate command trigger");
+    assert_eq!(f.generation(), original);
+}
+
+#[test]
+fn startup_conflicts_and_dependencies_preserve_first_use_ownership() {
+    let f = Fixture::new();
+    f.plugin("startup", "load='startup'", "tool() { printf original; }\n");
+    f.plugin(
+        "lazy",
+        "load='command'\ncommands=['tool']",
+        "BINIT_SHOULD_NOT_LOAD=1\n",
+    );
+    success(f.prepare(&["startup", "lazy"]));
+    assert_eq!(
+        success(f.bash(
+            r#"
+source "$BINIT_TEST_INIT"
+[[ ${__binit_state[lazy]} == blocked && ! -v BINIT_SHOULD_NOT_LOAD ]] || exit 2
+tool
+"#
+        )),
+        "original"
+    );
+    f.plugin("base", "load='prompt'", "BINIT_SEQUENCE=base\n");
+    f.plugin(
+        "dependent",
+        "load='command'\ncommands=['dependent']\ndepends=['base']",
+        "BINIT_SEQUENCE+=:dependent; dependent() { printf %s \"$BINIT_SEQUENCE\"; }\n",
+    );
+    success(f.prepare(&["base", "dependent"]));
+    assert_eq!(
+        success(f.bash("source \"$BINIT_TEST_INIT\"; dependent")),
+        "base:dependent"
+    );
+}

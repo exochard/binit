@@ -78,6 +78,12 @@ Changes apply to a new shell opened with `binit shell`. Running shells keep thei
 `binit apply` refreshes the runtime while retaining pinned plugins. Demo
 startup applies a new build automatically for its next shell.
 
+Existing Bash scripts can be installed through a user-owned TOML declaration;
+the upstream checkout needs no manifest. Select files and use `load = "command"`
+with `commands = ["tool"]` to source them on first use. `binit load ID` loads a
+pending plugin explicitly in the current shell. See [declarations and first-use
+loading](docs/plugins.md#existing-bash-scripts) for examples and scope limits.
+
 `binit add PATH --disabled` installs a plugin for later activation. `binit prepare CONFIG` replaces the complete catalog from a configuration file; ordinary demo startup preserves the catalog. Use `BINIT_DEMO_STATE=/absolute/path make demo` for a separate demo configuration.
 
 ## Included plugins
@@ -118,6 +124,6 @@ executable for that invocation. Script arguments and exit status pass through;
 plugin state is not required. The experimental builds have not met the release
 performance gate.
 
-The current prototype loads local plugin directories. The [0.1 release plan](docs/release-0.1.md) includes pinned Git sources, broader loading policies, and further native interactive features. The experimental interpreter has not met the 25% execution target.
+The current prototype loads local packages and source declarations. The [0.1 release plan](docs/release-0.1.md) includes pinned Git sources, installation, and further native interactive features. The experimental interpreter has not met the 25% execution target.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and [the benchmark procedure](docs/benchmarks.md) for engine experiments. Original Binit code is under [MIT](LICENSE); [GNU-linked artifacts have additional distribution requirements](docs/licensing.md).

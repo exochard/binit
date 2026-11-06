@@ -170,3 +170,20 @@ three difference groups as the unmodified reference: help formatting, trap
 listing order and out-of-range printf precision. They remain compatibility
 failures. The rejected short-key candidate did not receive the full upstream
 suite.
+
+## Research-led allocation screens
+
+The [performance research](performance-research.md) ranks five candidates
+against primary paper records and the pinned GNU source. Two isolated O2
+allocation treatments were tested on the unchanged suite. In-place quote
+removal reached a paired ratio of 0.9838 against reference; guarded transfer
+of assignment results reached 1.0075. Both missed the fixed 0.98 screen.
+Neither patch is selected. The
+[receipt](../benchmarks/results/expansion-trials-x86_64.json) preserves raw
+paired durations, source/patch provenance and semantic check digests.
+
+`scripts/engine_trial.py` reproduces these experimental builds from tracked
+patches and plans in `engines/bash/experiments/`. It checks the authenticated
+base and the complete patched tree, then marks the result as an experiment.
+These builds cannot qualify for release. The default source lock, compiler
+training and validation counts remain unchanged.

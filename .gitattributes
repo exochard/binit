@@ -1,0 +1,2 @@
+# Unified diff context retains the exact GNU Bash source whitespace.
+engines/bash/experiments/*.patch -whitespace

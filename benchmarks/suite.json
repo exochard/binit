@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "metric": "geometric mean of candidate/reference elapsed time ratios",
+  "maximum_ratio": 0.75,
+  "minimum_improved_families": 3,
+  "maximum_family_regression": 1.05,
+  "minimum_seconds": 0.2,
+  "samples_per_run": 30,
+  "runs": 3,
+  "cases": [
+    {"name": "arithmetic-sum", "family": "arithmetic"},
+    {"name": "arithmetic-grid", "family": "arithmetic"},
+    {"name": "strings-paths", "family": "strings"},
+    {"name": "strings-records", "family": "strings"},
+    {"name": "arrays-indexed", "family": "arrays"},
+    {"name": "arrays-counts", "family": "arrays"},
+    {"name": "functions-calls", "family": "functions"},
+    {"name": "functions-dispatch", "family": "functions"},
+    {"name": "patterns-regex", "family": "patterns"},
+    {"name": "patterns-glob", "family": "patterns"},
+    {"name": "filesystem-tests", "family": "filesystem"},
+    {"name": "filesystem-read", "family": "filesystem"},
+    {"name": "pipelines-tools", "family": "pipelines"},
+    {"name": "pipelines-read", "family": "pipelines"},
+    {"name": "substitution-builtin", "family": "substitution"},
+    {"name": "substitution-pipeline", "family": "substitution"}
+  ]
+}

@@ -1,0 +1,10 @@
+/target/
+/.local-demo*/
+/.scratch*/
+/.cache/
+/evidence/
+__pycache__/
+*.pyc
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

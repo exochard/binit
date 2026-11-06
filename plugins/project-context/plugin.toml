@@ -1,0 +1,4 @@
+schema = 1
+id = "project-context"
+entry = "plugin.bash"
+load = "startup"

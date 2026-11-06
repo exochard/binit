@@ -1,0 +1,6 @@
+schema = 1
+id = "git-completion"
+entry = "plugin.bash"
+load = "completion"
+requires = ["git"]
+completions = ["git"]

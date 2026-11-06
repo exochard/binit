@@ -1,0 +1,199 @@
+{
+  "schema": 1,
+  "suite_sha256": "fa24c57db6a714c983dddbc29a3aec92fa6f2212f3ad229ae889bd93652e32ef",
+  "fixture_sha256": "c1ea7fc4eb1f2f15515a8c366799192c8c7ad273615f432da4d403e5f3b20a1d",
+  "cases": [
+    {
+      "name": "arithmetic-sum",
+      "family": "arithmetic",
+      "count": 411729,
+      "expected": {
+        "stdout": "dfb1301d45d2291a4880b6e2449983329c72775d3fcda28e61963acb37f89558",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "02e18799ca47fc8c79bfc835a2dd5cb689857a400b59fab86e451788882e8891"
+    },
+    {
+      "name": "arithmetic-grid",
+      "family": "arithmetic",
+      "count": 7394,
+      "expected": {
+        "stdout": "fec15211ae21a8cd80a9ff3a2f8c517651f7465650307f473215ce84c37fb2f6",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "14e5c27968d368ebb747ac2495fb9076d48c1c2ab0e46a59b22f709e0a2d1aa1"
+    },
+    {
+      "name": "strings-paths",
+      "family": "strings",
+      "count": 73931,
+      "expected": {
+        "stdout": "cc5b97e48a98b04b75f1e04ace9ee42d7bd6c33f6642b77ff481d502e3348c04",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "95bd9c5f4e87117f580d5f8e01bbd5508c97d12744de3ef42e2b81437db9cac7"
+    },
+    {
+      "name": "strings-records",
+      "family": "strings",
+      "count": 60711,
+      "expected": {
+        "stdout": "bb46048687cf5a2a47bf9791a1ef20d0fcd2510ad07b47dc31d257d8b21bc8d5",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "49063a7251fee45b4701bc0dda8dbe90058271cf06bb040e7388833c62e81a99"
+    },
+    {
+      "name": "arrays-indexed",
+      "family": "arrays",
+      "count": 4588,
+      "expected": {
+        "stdout": "9cf7cba7eb33ff9ba191ff0d99b8797b5145458cea4d3dea79cf730e562643ff",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "3203f47b28cf2882a4a9c9b7f6809b53e3f9542b04785ecebbffab3dc4e4ccd5"
+    },
+    {
+      "name": "arrays-counts",
+      "family": "arrays",
+      "count": 149982,
+      "expected": {
+        "stdout": "8635ef6cf0dd5d5580fc39b48a3a86cdecfea67896310d6278cc389e99522fd4",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "bfbbd14608eec2a9e278f6f48c40c221cfa984bce269ca7ab4087bf057b06fa2"
+    },
+    {
+      "name": "functions-calls",
+      "family": "functions",
+      "count": 71622,
+      "expected": {
+        "stdout": "79fd9f20298fc2a36cc90c6a8519425fe52eab414f020270c430c179920ae00d",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "c877e0e0b02fdf14cbd415dd303e9b996a7bd4c521c66926b5886a921ac4ce51"
+    },
+    {
+      "name": "functions-dispatch",
+      "family": "functions",
+      "count": 76631,
+      "expected": {
+        "stdout": "162f1283639958e5bc5a19b4d0443996cca98c0db06cf5b6f97633fd0013d521",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "b7be2f929c01a8977d8f879e8c60ba58effd0c746bfbd36d3f49f1fb65fc1bff"
+    },
+    {
+      "name": "patterns-regex",
+      "family": "patterns",
+      "count": 39308,
+      "expected": {
+        "stdout": "58748e44f2e7fdef23372698868e1e6344dce441e4557daea9e7b4a97fae54df",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "cbe0fbdc709d9493eef861c939cda6c99b12685a8a73b4bf34ad11fe243330fa"
+    },
+    {
+      "name": "patterns-glob",
+      "family": "patterns",
+      "count": 3103,
+      "expected": {
+        "stdout": "cfa9f89ba060bdcc4d2140f97cc32cd28c67a3f4178831310a25c5ecc35f702d",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "a0391be44644d9c476780e4e2501d103de375fc10bce0adf9a62aa38d39f3983"
+    },
+    {
+      "name": "filesystem-tests",
+      "family": "filesystem",
+      "count": 1321,
+      "expected": {
+        "stdout": "83db1f7ebafe8e8b7c3accee2a7367ed99588db43e87e00fd6cb1ff6ff6d9859",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "bdd0fe5b08842d016284b2033408aea2ae7c18c0cc81266500d39e48af01f5cd"
+    },
+    {
+      "name": "filesystem-read",
+      "family": "filesystem",
+      "count": 1054,
+      "expected": {
+        "stdout": "921d2c127294caaac9377c55d0c5ad35ffb0d6adad71f108c845bb18da1115d6",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "b631ce882f30e77b0f473b57dbf3b3ed25e3126cfaa569dca40e22cae408fb42"
+    },
+    {
+      "name": "pipelines-tools",
+      "family": "pipelines",
+      "count": 521,
+      "expected": {
+        "stdout": "4624b76f75c5c3e7d8031a52bd2f298313d37a205e3926d32aea933fe53f26fe",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "f51603bc324f9310f4f69a8d4d5cf12e2aabe0d78eea589975e71f022abfb00e"
+    },
+    {
+      "name": "pipelines-read",
+      "family": "pipelines",
+      "count": 427,
+      "expected": {
+        "stdout": "3f60e00ea995c1567e388111aa22a0ff64489f4053595d369ece200a1621871b",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "ddd09a1f3b03f006d1a75b927df4825989ab04f8ed6fffa56d74e839d6e7fd17"
+    },
+    {
+      "name": "substitution-builtin",
+      "family": "substitution",
+      "count": 2526,
+      "expected": {
+        "stdout": "55dbd107f580bf50e7cf047f83e92e5712af09aa3a3aa9007df37f8a87031600",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "d11e1599547790609a3b3b407d15396587b2b5f4a0a84bb6587f99654ff91de7"
+    },
+    {
+      "name": "substitution-pipeline",
+      "family": "substitution",
+      "count": 706,
+      "expected": {
+        "stdout": "3f234454cd4479e797937c1c6b3ea324c7dd1cc09ef4114187618388cff76da5",
+        "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": 0,
+        "files": "103b2c5427a76677d05aa43a9ece9456e758deb5a2feac6c96a2346d8522b91a"
+      },
+      "script_sha256": "c0fbe70e79c91449a65bc9e5f56328a807d0e9242c3b113a9aa50e472ee3832b"
+    }
+  ]
+}

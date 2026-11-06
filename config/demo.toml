@@ -1,0 +1,10 @@
+schema = 1
+
+[[plugins]]
+path = "../plugins/project-context"
+
+[[plugins]]
+path = "../plugins/git-prompt"
+
+[[plugins]]
+path = "../plugins/git-completion"

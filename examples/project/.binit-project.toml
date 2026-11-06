@@ -1,0 +1,5 @@
+label = "example"
+
+[env]
+PROJECT_MODE = "development"
+PROJECT_MESSAGE = "Literal data: $(printf this-is-not-executed)"

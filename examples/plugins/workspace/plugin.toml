@@ -1,0 +1,4 @@
+schema = 1
+id = "workspace"
+entry = "plugin.bash"
+load = "startup"

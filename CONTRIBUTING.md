@@ -8,10 +8,16 @@ before it can ship.
 ## Development
 
 Use Linux, Bash 5.2 or newer, Rust with edition 2024 support, Python 3.12 or
-newer, Git, ShellCheck, and GNU coreutils. Install the Rust `clippy` and
-`rustfmt` components. From the checkout:
+newer, Git, ShellCheck, and GNU coreutils. Native completion also needs a C
+compiler and Bash/Readline development headers. Verification uses CMake and
+the pinned Python tools in `requirements-dev.txt`. On Debian or Ubuntu, the
+header packages are `bash-builtins` and `libreadline-dev`.
+Install the Rust `clippy` and `rustfmt` components. From the checkout:
 
 ```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+source .venv/bin/activate
 cargo fetch --locked
 cargo build --release --locked --offline
 bash scripts/verify.bash
@@ -30,6 +36,13 @@ The verification script checks formatting and ShellCheck, then runs Clippy,
 Rust integration tests, Python tests, and real terminal smoke tests. Keep
 tests focused on behavior: argument handling, shell state preservation, and
 recovery are more useful than matching generated implementation text.
+
+The native menu tests use a real Bash PTY with a terminal emulator. They check
+the visible screen and command-line state, including cancellation, paste,
+and terminal control characters. Read [the architecture](docs/architecture.md)
+before changing the completion bridge. `CC` chooses the C compiler and
+`BINIT_BASH_INCLUDE` overrides the Bash header directory. A manager/runtime
+build without the native module is available through `--no-default-features`.
 
 ## Plugins and runtime changes
 

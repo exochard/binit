@@ -81,6 +81,44 @@ fn run_reports_missing_arguments_and_engine_failures() {
 struct Fixture {
     dir: TempDir,
 }
+
+#[test]
+fn apply_keeps_disabled_plugins_and_their_pinned_source() {
+    let f = Fixture::new();
+    f.plugin("sample", "load='startup'", "original() { :; }\n");
+    assert!(f.prepare(&["sample"]).status.success());
+    assert!(f.cli(&["disable", "sample"]).status.success());
+    f.write("sample/plugin.bash", "unreviewed() { :; }\n");
+    assert!(f.cli(&["apply"]).status.success());
+    let current = fs::read_to_string(f.state().join("current")).unwrap();
+    let package = f
+        .state()
+        .join("generations")
+        .join(current)
+        .join("plugins/sample/plugin.bash");
+    assert_eq!(fs::read_to_string(package).unwrap(), "original() { :; }\n");
+    let result = f.cli(&["plugins"]);
+    assert!(result.status.success());
+    assert!(String::from_utf8_lossy(&result.stdout).contains("disabled"));
+}
+
+#[test]
+#[cfg(feature = "completion-menu")]
+fn native_module_is_pinned_and_verified_with_the_generation() {
+    let f = Fixture::new();
+    assert!(f.cli(&["apply"]).status.success());
+    let current = fs::read_to_string(f.state().join("current")).unwrap();
+    let module = f
+        .state()
+        .join("generations")
+        .join(current)
+        .join("completion.so");
+    assert!(fs::metadata(&module).unwrap().len() > 0);
+    fs::write(module, b"changed").unwrap();
+    let result = f.cli(&["status"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("content changed: completion.so"));
+}
 impl Fixture {
     fn new() -> Self {
         let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join(".scratch-tests");
@@ -766,6 +804,12 @@ fn schema_one_generations_migrate_without_losing_plugins() {
     let table = lock.as_table_mut().unwrap();
     table.insert("schema".into(), toml::Value::Integer(1));
     table.remove("catalog");
+    table
+        .get_mut("files")
+        .unwrap()
+        .as_table_mut()
+        .unwrap()
+        .remove("completion.so");
     let encoded = toml::to_string_pretty(&lock).unwrap();
     let id = format!("{:x}", Sha256::digest(encoded.as_bytes()));
     let legacy = f.state().join("generations").join(&id);

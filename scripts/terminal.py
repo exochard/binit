@@ -28,12 +28,12 @@ def cli(state, *args):
 
 
 class Terminal:
-    def __init__(self, rcfile, directory, safe=False, state=None, demo=False):
+    def __init__(self, rcfile, directory, safe=False, state=None, demo=False, term="dumb"):
         started = time.perf_counter_ns()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(directory)
-            env = dict(os.environ, TERM="dumb", PS1="READY> ", BINIT_SAFE="1" if safe else "0",
+            env = dict(os.environ, TERM=term, PS1="READY> ", BINIT_SAFE="1" if safe else "0",
                        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
             env.pop("BASH_ENV", None)
             env.pop("ENV", None)
@@ -76,19 +76,39 @@ class Terminal:
         return self.read_until(self.prompt)
 
     def close(self):
+        if self.fd is None:
+            return
         try:
-            os.write(self.fd, b"\x15exit\n")
+            done, _ = os.waitpid(self.pid, os.WNOHANG)
+            if done:
+                return
+            os.write(self.fd, b"\x03")
+            try:
+                self.read_until(self.prompt, seconds=.5)
+            except (AssertionError, OSError):
+                pass
+            try:
+                os.write(self.fd, b"exit\n")
+            except OSError:
+                pass
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 done, _ = os.waitpid(self.pid, os.WNOHANG)
                 if done:
                     return
-                select.select([self.fd], [], [], 0.05)
-            # Only this helper's own forked child may be signalled.
-            os.kill(self.pid, signal.SIGTERM)
+                if select.select([self.fd], [], [], 0.05)[0]:
+                    try:
+                        os.read(self.fd, 65536)
+                    except OSError:
+                        pass
+            # Interactive Bash ignores SIGTERM; this is only the helper's child.
+            os.kill(self.pid, signal.SIGKILL)
             os.waitpid(self.pid, 0)
+        except ChildProcessError:
+            pass
         finally:
             os.close(self.fd)
+            self.fd = None
 
 
 def fixture(directory):

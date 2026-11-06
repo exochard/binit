@@ -333,6 +333,11 @@ fn publish(
         "runtime.bash".into(),
         include_bytes!("../runtime/core.bash").to_vec(),
     );
+    #[cfg(feature = "completion-menu")]
+    packages.insert(
+        "completion.so".into(),
+        include_bytes!(concat!(env!("OUT_DIR"), "/completion.so")).to_vec(),
+    );
     let lock = Lock {
         schema: 2,
         plugins: order.iter().map(|id| plugins[id].clone()).collect(),
@@ -535,7 +540,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] --state DIRECTORY\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  add PATH [--disabled]   Install a content-pinned local plugin\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit profile\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] --state DIRECTORY\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  add PATH [--disabled]   Install a content-pinned local plugin\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit profile, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }
@@ -561,6 +566,7 @@ fn run() -> Result<()> {
         ("plugins", 1) => manager::list(&state)?,
         ("inspect", 2) => manager::inspect(&state, &args[1])?,
         ("shell", 1) => manager::shell(&state)?,
+        ("apply", 1) => manager::apply(&state)?,
         ("prepare", 2) => {
             let _guard = manager::MutationGuard::acquire(&state)?;
             println!("Prepared {}", prepare(Path::new(&args[1]), &state)?);

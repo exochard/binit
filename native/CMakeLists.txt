@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.16)
+project(binit_completion C)
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+find_path(BASH_INCLUDE_DIR config.h PATHS /usr/include/bash /usr/local/include/bash REQUIRED)
+add_library(binit_complete MODULE completion.c menu.c)
+target_include_directories(binit_complete SYSTEM PRIVATE ${BASH_INCLUDE_DIR} ${BASH_INCLUDE_DIR}/include ${BASH_INCLUDE_DIR}/builtins)
+target_compile_options(binit_complete PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror -fvisibility=hidden -fstack-protector-strong)
+target_link_options(binit_complete PRIVATE -Wl,-z,relro,-z,now,-z,noexecstack)
+target_link_libraries(binit_complete PRIVATE ${CMAKE_DL_LIBS})
+set_target_properties(binit_complete PROPERTIES PREFIX "")
+
+enable_testing()
+add_executable(test_menu test_menu.c menu.c)
+target_compile_options(test_menu PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+add_test(NAME menu COMMAND test_menu)

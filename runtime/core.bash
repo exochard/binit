@@ -121,6 +121,17 @@ __binit_complete() {
     return 1
 }
 
+__binit_has_completion() {
+    [[ $(builtin type -a -t binit_complete 2>/dev/null) == *builtin* ]]
+}
+
+__binit_load_completion() {
+    if __binit_has_completion; then return 0; fi
+    [[ -f $__binit_generation_dir/completion.so ]] || return 1
+    bind -q complete >/dev/null 2>&1 || :
+    builtin enable -f "$__binit_generation_dir/completion.so" binit_complete
+}
+
 binit() {
     if [[ ${1-} == profile ]]; then
         local id
@@ -128,6 +139,22 @@ binit() {
         for id in "${__binit_ids[@]}"; do
             printf '%-20s %-12s %10s %10s %8s\n' "$id" "${__binit_state[$id]}" "${__binit_load_us[$id]}" "${__binit_hook_us[$id]}" "${__binit_hook_calls[$id]}"
         done
+    elif [[ ${1-} == completion ]]; then
+        if (( $# > 2 )) || [[ ! ${2-status} =~ ^(on|off|status)$ ]]; then
+            printf 'Usage: binit completion [on|off|status]\n' >&2
+            return 2
+        fi
+        if [[ ${2-status} == on ]]; then __binit_load_completion || return 1; fi
+        if __binit_has_completion; then
+            if builtin binit_complete "${2-status}"; then
+                if [[ ${2-status} != status ]]; then builtin binit_complete status; fi
+            else
+                return "$?"
+            fi
+        else
+            printf 'Completion menu: unavailable in this shell\n' >&2
+            return 1
+        fi
     elif [[ ${1-} == run ]]; then
         command "$__binit_manager" "$@"
     else
@@ -162,4 +189,9 @@ __binit_activate() {
     # Expand segment data through a variable, never as executable prompt source.
     if shopt -q promptvars; then PS1='${BINIT_PROMPT_TEXT}'"${PS1-\\s-\\v\\$ }"; fi
     __binit_active=1
+    if [[ ${BINIT_COMPLETION_MENU-1} == 1 && -f $__binit_generation_dir/completion.so ]]; then
+        if __binit_load_completion >/dev/null 2>&1; then
+            builtin binit_complete on >/dev/null 2>&1 || :
+        fi
+    fi
 }

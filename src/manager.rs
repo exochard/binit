@@ -246,6 +246,12 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
 
 pub(super) fn shell(state: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
+    if std::env::var_os("BINIT_SAFE").is_some_and(|value| value == "1") {
+        return Err(std::process::Command::new("bash")
+            .args(["--noprofile", "--norc", "-i"])
+            .exec()
+            .into());
+    }
     let id = pointer(state, "current")?;
     verify_generation(state, &id)?;
     let init = fs::canonicalize(state.join("generations").join(id).join("init.bash"))?;
@@ -256,4 +262,12 @@ pub(super) fn shell(state: &Path) -> Result<()> {
         .arg("-i")
         .exec();
     Err(error.into())
+}
+
+pub(super) fn apply(state: &Path) -> Result<()> {
+    let _guard = MutationGuard::acquire(state)?;
+    let plan = current(state)?;
+    let generation = publish(plan.catalog, plan.packages, state)?;
+    println!("Applied {generation}; start a new shell to use it");
+    Ok(())
 }

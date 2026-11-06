@@ -23,9 +23,12 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck
+          sudo apt-get install -y shellcheck cmake gcc bash-builtins libreadline-dev python3-venv
           rustup toolchain install stable --profile minimal --component clippy --component rustfmt
           rustup default stable
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Verify

@@ -6,6 +6,10 @@ publish = false
 license = "MIT"
 description = "Bash plugin manager and runtime"
 
+[features]
+default = ["completion-menu"]
+completion-menu = []
+
 [[bin]]
 name = "binit"
 path = "src/main.rs"

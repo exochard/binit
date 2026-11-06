@@ -1,14 +1,20 @@
 # Binit
 
-Install custom Bash plugins and control when they load. Binit keeps reviewed plugin snapshots and lets you roll back a change. Its Bash runtime shares hooks and loads Git's full Bash completion definitions on the first request.
+Manage Bash plugins and complete commands in a navigable menu. Binit keeps reviewed plugin snapshots and lets you roll back a change. Its Bash runtime shares hooks and loads Git's full Bash completion definitions on the first request.
+
+The 0.1 release is in development. Current functionality and the remaining
+gates are described separately in the [release requirements](docs/release-0.1.md).
 
 ## Try it
 
-Requires Linux, Rust and Cargo, Bash 5.2+, Python 3.12+, ShellCheck, Git, and GNU `timeout`. Verification currently runs on Bash 5.3.20. The Make targets also use a systemd user manager; direct commands for other environments are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Source builds require Linux, Rust and Cargo, a C compiler, and Bash/Readline
+development headers. The runtime targets Bash 5.2+; local verification uses
+Bash 5.3.20. Bundled Git features use Git and GNU `timeout`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the test environment and direct
+commands for containers. The Make targets use a systemd user manager.
 
 ```bash
 make build
-make verify
 make demo
 ```
 
@@ -26,6 +32,26 @@ exit
 ```
 
 `exit` returns to the parent shell. The demo does not install into shell startup files.
+
+## Completion
+
+Press Tab to open the menu when several candidates match. Tab and Shift-Tab
+move through candidates; arrows and hjkl move within the grid. Press `/` to
+filter, Enter to insert, or Esc to cancel. Enter accepts a completion without
+executing the command. The menu redraws in place and reuses Bash's completion
+providers and quoting.
+
+```bash
+binit completion
+binit completion off
+binit completion on
+```
+
+These commands affect the current shell. Custom macros and unrelated Tab
+functions remain installed.
+Resizing closes the menu while preserving input. Unsupported terminals and
+very large result sets use normal Readline completion.
+`BINIT_COMPLETION_MENU=0 make demo` starts with the native module disabled.
 
 ## Manage plugins
 
@@ -48,6 +74,9 @@ binit remove workspace
 ```
 
 Changes apply to a new shell opened with `binit shell`. Running shells keep their current plugins. Updates read the recorded local source only when requested; enable and disable use the pinned snapshot. Removing a plugin preserves its original source and older generations. Dependency-breaking changes leave the current plan intact.
+
+`binit apply` refreshes the runtime while retaining pinned plugins. Demo
+startup applies a new build automatically for its next shell.
 
 `binit add PATH --disabled` installs a plugin for later activation. `binit prepare CONFIG` replaces the complete catalog from a configuration file; ordinary demo startup preserves the catalog. Use `BINIT_DEMO_STATE=/absolute/path make demo` for a separate demo configuration.
 
@@ -89,6 +118,6 @@ executable for that invocation. Script arguments and exit status pass through;
 plugin state is not required. The experimental builds have not met the release
 performance gate.
 
-The current prototype loads local plugin directories. The [0.1 release plan](docs/release-0.1.md) includes pinned Git sources, broader loading policies, and qualification of an optional Flyline provider with Readline fallback. Its first gate is a measured improvement in Bash execution; the prototype has no demonstrated interpreter speedup yet.
+The current prototype loads local plugin directories. The [0.1 release plan](docs/release-0.1.md) includes pinned Git sources, broader loading policies, and further native interactive features. The experimental interpreter has not met the 25% execution target.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and [the benchmark procedure](docs/benchmarks.md) for engine experiments. Original Binit code is under [MIT](LICENSE). Third-party components retain their own licenses.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and [the benchmark procedure](docs/benchmarks.md) for engine experiments. Original Binit code is under [MIT](LICENSE); [GNU-linked artifacts have additional distribution requirements](docs/licensing.md).

@@ -88,15 +88,25 @@ def source():
     return destination, lock
 
 
-def build(kind):
+def build(kind, name=None, optimization=None):
+    if kind not in ("reference", "profile", "lto", "pgo"):
+        raise ValueError("unknown build kind")
+    name = kind if name is None else name
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name):
+        raise ValueError("invalid build name")
+    if optimization is not None and kind in ("reference", "profile"):
+        raise ValueError("reference and profile builds use fixed compiler flags")
+    if optimization not in (None, "O2", "O3"):
+        raise ValueError("optimization must be O2 or O3")
+    optimized_flags = OPT_FLAGS if optimization is None else f"-{optimization} -g -flto=2"
+    directory = CACHE / name
+    if directory.exists() or directory.is_symlink():
+        raise ValueError(f"build directory already exists: {directory}; select a fresh build name")
     source_dir, lock = source()
-    directory = CACHE / kind
-    directory.mkdir(exist_ok=True)
+    directory.mkdir()
     binary = directory / "bash"
     metadata = directory / "build.json"
-    if metadata.exists():
-        raise ValueError(f"build already exists: {directory}; select a fresh build name")
-    flags = BASE_FLAGS if kind in ("reference", "profile") else OPT_FLAGS
+    flags = BASE_FLAGS if kind in ("reference", "profile") else optimized_flags
     if kind == "profile":
         flags += " -pg"
     profile = directory / "profile"
@@ -110,7 +120,7 @@ def build(kind):
     run(["make", "-j2"], directory, env=env)
     if kind == "pgo":
         run(["bash", ROOT / "engines/bash/train.bash", binary], ROOT, env=env)
-        flags = OPT_FLAGS + f" -fprofile-use={profile} -fprofile-correction"
+        flags = optimized_flags + f" -fprofile-use={profile} -fprofile-correction"
         # Recompile in the same directory so GCC resolves the generated profiles.
         # Removing only generated objects avoids rerunning configure or the parser generator.
         for obj in directory.rglob("*.o"):
@@ -132,6 +142,8 @@ def build(kind):
 
 
 def test(kind):
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", kind):
+        raise ValueError("invalid build name")
     directory = CACHE / kind
     if not (directory / "build.json").exists():
         raise ValueError("build the interpreter first")
@@ -186,13 +198,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["source", "build", "test"])
     parser.add_argument("kind", nargs="?", choices=["reference", "lto", "pgo", "profile"], default="reference")
+    parser.add_argument("--name", help="separate cache directory for a build variant")
+    parser.add_argument("--optimization", choices=["O2", "O3"], help="compiler level for LTO/PGO variants")
     args = parser.parse_args()
     if args.command == "source":
+        if args.name is not None or args.optimization is not None:
+            parser.error("variant options are not valid for source")
         print(source()[0])
     elif args.command == "build":
-        build(args.kind)
+        build(args.kind, args.name, args.optimization)
     else:
-        test(args.kind)
+        if args.optimization is not None:
+            parser.error("--optimization is only valid for build")
+        test(args.kind if args.name is None else args.name)
 
 
 if __name__ == "__main__":

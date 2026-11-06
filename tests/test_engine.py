@@ -41,6 +41,38 @@ class EngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cached source tree differs"):
             engine.source()
 
+    def test_invalid_variant_options_do_not_create_builds(self):
+        for name in ("../outside", "/absolute", "reference/child", ".hidden", ""):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "invalid build name"):
+                engine.build("pgo", name=name)
+            with self.subTest(test_name=name), self.assertRaisesRegex(ValueError, "invalid build name"):
+                engine.test(name)
+        for kind in ("reference", "profile"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "fixed compiler flags"):
+                engine.build(kind, name="altered", optimization="O3")
+        with self.assertRaisesRegex(ValueError, "optimization must"):
+            engine.build("pgo", name="altered", optimization="Ofast")
+        self.assertEqual(list(self.cache.iterdir()), [self.source])
+
+    def test_existing_partial_builds_and_directory_symlinks_are_preserved(self):
+        partial = self.cache / "partial"
+        partial.mkdir()
+        sentinel = partial / "unfinished.o"
+        sentinel.write_bytes(b"previous build")
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.cache / "linked").symlink_to(outside, target_is_directory=True)
+        for name in ("partial", "linked"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "fresh build name"):
+                engine.build("pgo", name=name, optimization="O2")
+        self.assertEqual(sentinel.read_bytes(), b"previous build")
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_cli_rejects_an_explicitly_empty_test_variant(self):
+        with patch("sys.argv", ["engine.py", "test", "--name", ""]):
+            with self.assertRaisesRegex(ValueError, "invalid build name"):
+                engine.main()
+
     def test_upstream_zero_exit_with_diff_is_failure(self):
         directory = self.cache / "reference"
         directory.mkdir()

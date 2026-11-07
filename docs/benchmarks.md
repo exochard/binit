@@ -220,3 +220,17 @@ rules and focused behavior checks. The
 [receipt](../benchmarks/results/parser-context-trials-x86_64.json) preserves
 raw timings and authenticated patch/build provenance. These diagnostic
 failures leave the retained decimal treatment and release gate unchanged.
+
+## Coordinated execution batch
+
+The [larger execution experiment](execution-batch-experiment.md) built twelve
+isolated O2 variants. The three-path batch reached 0.981339 against decimal
+O2. Locale-bound lexical plans reached 1.026382 alone and 1.019662 combined;
+direct arithmetic dispatch reached 1.002797 alone and 0.992025 combined.
+All missed the fixed 0.98 screen. Four earlier cache versions were rejected
+on concrete locale-switch semantic differences before timing.
+
+No confirmation or PGO training followed. The
+[receipt](../benchmarks/results/execution-batch-trials-x86_64.json) preserves
+raw paired measurements and rejected-version provenance. The retained
+decimal treatment, calibrated counts and full release gate remain unchanged.

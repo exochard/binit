@@ -206,3 +206,17 @@ runs retain the same three baseline difference groups, so compatibility
 also remains open. The [receipt](../benchmarks/results/arithmetic-trials-x86_64.json)
 contains paired samples, build provenance and semantic checks. The default
 PGO recipe and full release procedure remain unchanged.
+
+## Context and snapshot follow-up
+
+A fresh profile of the retained decimal PGO engine motivated two independent
+allocation experiments. A single inactive arithmetic context reached an
+incremental O2 ratio of 1.003747 against decimal O2; reallocation of the
+simple-command snapshot reached 1.015039. Both missed the 0.98 three-pair
+screen. Neither proceeds to confirmation or compiler training.
+
+The [experiment report](parser-context-experiment.md) describes the frozen
+rules and focused behavior checks. The
+[receipt](../benchmarks/results/parser-context-trials-x86_64.json) preserves
+raw timings and authenticated patch/build provenance. These diagnostic
+failures leave the retained decimal treatment and release gate unchanged.

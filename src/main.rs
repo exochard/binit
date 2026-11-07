@@ -49,6 +49,9 @@ struct Plugin {
     completions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     commands: Vec<String>,
+    /// `PATH:NAME` items: package files exposed as programs on PATH.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bin: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -58,6 +61,9 @@ struct Lock {
     plugins: Vec<Plugin>,
     #[serde(default)]
     catalog: Vec<manager::Installed>,
+    /// Program name to the plugin that provides it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    bin: BTreeMap<String, String>,
     files: BTreeMap<String, String>,
 }
 
@@ -131,15 +137,20 @@ fn private_dir(path: &Path) -> Result<()> {
 use std::os::unix::fs::DirBuilderExt;
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_mode(path, bytes, 0o600)
+}
+fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let parent = path.parent().ok_or("missing parent")?;
     private_dir(parent)?;
     let temp = parent.join(format!(".write-{}-{}", std::process::id(), unique()));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(mode)
         .open(&temp)?;
     file.write_all(bytes)?;
+    // The umask must not change the mode that verification expects.
+    file.set_permissions(fs::Permissions::from_mode(mode))?;
     file.sync_all()?;
     fs::rename(temp, path)?;
     Ok(())
@@ -165,6 +176,18 @@ fn valid_relative(path: &str) -> bool {
             .all(|c| matches!(c, Component::Normal(_)))
         && !path.contains(['\n', '\r', '\0'])
 }
+fn valid_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'))
+}
+fn split_bin(item: &str) -> Option<(&str, &str)> {
+    item.rsplit_once(':')
+        .filter(|(path, name)| package::valid_declared_file(path) && valid_command_name(name))
+}
 fn validate_plugin(plugin: &Plugin) -> Result<()> {
     if plugin.schema != 1
         || !valid_name(&plugin.id)
@@ -184,6 +207,7 @@ fn validate_plugin(plugin: &Plugin) -> Result<()> {
             .commands
             .iter()
             .any(|s| s == "binit" || s.starts_with("__binit_"))
+        || plugin.bin.iter().any(|s| split_bin(s).is_none())
     {
         return Err(format!("invalid plugin manifest: {}", plugin.id).into());
     }
@@ -320,6 +344,25 @@ fn publish(
     for id in plugins.keys() {
         visit(id, &plugins, &mut pending, &mut done, &mut order)?;
     }
+    // Programs of enabled plugins are copied to bin/NAME in the generation.
+    let mut bin = BTreeMap::new();
+    for item in catalog.iter().filter(|item| item.enabled) {
+        let id = &item.plugin.id;
+        for entry in &item.plugin.bin {
+            let (path, name) = split_bin(entry).ok_or("invalid bin entry")?;
+            let bytes = packages
+                .get(&format!("plugins/{id}/{path}"))
+                .ok_or_else(|| format!("plugin {id}: bin file is missing: {path}"))?
+                .clone();
+            if let Some(other) = bin.insert(name.to_owned(), id.clone()) {
+                return Err(format!(
+                    "duplicate command {name}: provided by plugins {other} and {id}"
+                )
+                .into());
+            }
+            packages.insert(format!("bin/{name}"), bytes);
+        }
+    }
     private_dir(state)?;
     let state = fs::canonicalize(state)?;
     let executable = std::env::current_exe()?;
@@ -328,6 +371,19 @@ fn publish(
         quote(state.to_str().ok_or("state path must be UTF-8")?),
         quote(executable.to_str().ok_or("binary path must be UTF-8")?)
     );
+    if !bin.is_empty() {
+        let directory = state.join("generations");
+        if directory
+            .to_str()
+            .ok_or("state path must be UTF-8")?
+            .contains(':')
+        {
+            return Err("the state path must not contain ':' when plugins provide commands".into());
+        }
+        init.push_str(
+            "case :$PATH: in *:\"$__binit_generation_dir/bin\":*) ;; *) PATH=$__binit_generation_dir/bin${PATH:+:$PATH} ;; esac\n__binit_has_bin=1\n",
+        );
+    }
     let mut activate = Vec::new();
     for id in &order {
         let p = &plugins[id];
@@ -377,6 +433,7 @@ fn publish(
         schema: 2,
         plugins: order.iter().map(|id| plugins[id].clone()).collect(),
         catalog,
+        bin,
         files: packages
             .iter()
             .map(|(name, bytes)| (name.clone(), hash(bytes)))
@@ -393,7 +450,12 @@ fn publish(
                 .join(format!(".staging-{}-{}", std::process::id(), unique()));
         private_dir(&staging)?;
         for (name, bytes) in packages {
-            atomic_write(&staging.join(name), &bytes)?;
+            let mode = if name.starts_with("bin/") {
+                0o700
+            } else {
+                0o600
+            };
+            atomic_write_mode(&staging.join(name), &bytes, mode)?;
         }
         atomic_write(&staging.join("lock.toml"), &lock_bytes)?;
         fs::rename(staging, &destination)?;
@@ -452,9 +514,53 @@ fn verify_generation(state: &Path, id: &str) -> Result<Lock> {
                 return Err("symlink in generation".into());
             }
         }
+        let meta = fs::symlink_metadata(&path)?;
+        let program = file.strip_prefix("bin/");
+        let mode = meta.permissions().mode() & 0o7777;
+        let mode_ok = if program.is_some() {
+            mode == 0o700
+        } else {
+            mode & 0o177 == 0
+        };
+        if meta.uid() != unsafe { libc::geteuid() } || !mode_ok {
+            return Err(format!("unexpected owner or mode: {file}").into());
+        }
         if hash(&read_regular(&path)?) != *expected {
             return Err(format!("content changed: {file}").into());
         }
+        if let Some(name) = program {
+            let owner = lock.bin.get(name).ok_or("program is not in the lock")?;
+            if !valid_command_name(name) || !lock.plugins.iter().any(|plugin| plugin.id == *owner) {
+                return Err(format!("invalid locked program: {name}").into());
+            }
+        }
+    }
+    let programs = lock
+        .files
+        .keys()
+        .filter(|file| file.starts_with("bin/"))
+        .count();
+    if programs != lock.bin.len() {
+        return Err("locked programs do not match the lock".into());
+    }
+    // bin/ holds exactly the locked programs and nothing else.
+    match fs::symlink_metadata(root.join("bin")) {
+        Ok(_) => {
+            private_dir(&root.join("bin"))?;
+            for entry in fs::read_dir(root.join("bin"))? {
+                let name = entry?.file_name();
+                let locked = name
+                    .to_str()
+                    .is_some_and(|name| lock.files.contains_key(&format!("bin/{name}")));
+                if !locked {
+                    return Err(
+                        format!("unexpected file in bin: {}", name.to_string_lossy()).into(),
+                    );
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && programs == 0 => {}
+        Err(error) => return Err(error.into()),
     }
     Ok(lock)
 }

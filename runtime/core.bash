@@ -404,7 +404,7 @@ __binit_plugin_line() {
     fi
     for __binit_plugin_arg in "${@:2}"; do
         case ${__binit_plugin_arg%%=*} in
-            id|files|load|commands|completions|requires|depends|ver) ;;
+            id|files|bin|load|commands|completions|requires|depends|ver) ;;
             *)
                 if [[ $__binit_plugin_arg == *=* ]]; then
                     printf 'binit: plugin %s: unknown key: %s\n' "$1" "${__binit_plugin_arg%%=*}" >&2
@@ -466,6 +466,9 @@ __binit_first_prompt_work() {
     (( __binit_first_changed > 0 )) || return 0
     printf 'binit: %d plugin line%s changed since the last sync; run binit sync\n' \
         "$__binit_first_changed" "$( ((__binit_first_changed == 1)) || printf s )" >&2
+    if [[ ${__binit_has_bin-0} == 1 ]] && (( __binit_first_missing > 0 )); then
+        printf 'binit: commands of a removed line stay on PATH until binit sync\n' >&2
+    fi
     # An empty list could come from a shell that never reads the startup file.
     if (( __binit_lines_total > 0 )); then __binit_write_declared || :; fi
 }

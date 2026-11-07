@@ -6,6 +6,7 @@ struct Declaration {
     schema: u32,
     id: String,
     path: PathBuf,
+    #[serde(default)]
     files: Vec<String>,
     load: String,
     #[serde(default)]
@@ -16,6 +17,23 @@ struct Declaration {
     completions: Vec<String>,
     #[serde(default)]
     commands: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bin: Vec<String>,
+}
+
+/// Splits one `bin=` item into its package-relative path and command name.
+fn bin_item(item: &str) -> Result<(String, String)> {
+    let (path, name) = match item.rsplit_once(':') {
+        Some(parts) => parts,
+        None => (item, item.rsplit('/').next().unwrap_or(item)),
+    };
+    if !valid_declared_file(path) {
+        return Err(format!("invalid bin path: {path}").into());
+    }
+    if !valid_command_name(name) {
+        return Err(format!("invalid command name {name:?} for bin {path}; use PATH:NAME").into());
+    }
+    Ok((path.to_owned(), name.to_owned()))
 }
 
 fn limits(files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
@@ -31,12 +49,33 @@ fn declaration(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     build(declaration, path.parent().unwrap(), bytes)
 }
 
-fn valid_declared_file(name: &str) -> bool {
+pub(super) fn valid_declared_file(name: &str) -> bool {
     valid_relative(name)
         && !name
             .split('/')
             .any(|part| part.is_empty() || part == "." || part == "..")
         && Path::new(name).components().count() <= 16
+}
+
+/// Copies one declared file into the package as `files/NAME` unless it is
+/// already there, refusing symlinks and special files.
+fn copy_declared(root: &Path, name: &str, files: &mut BTreeMap<String, Vec<u8>>) -> Result<String> {
+    if !valid_declared_file(name) {
+        return Err(format!("invalid declared file: {name}").into());
+    }
+    let mut file = root.to_owned();
+    for part in Path::new(name).components() {
+        file.push(part);
+        if fs::symlink_metadata(&file)?.file_type().is_symlink() {
+            return Err(format!("symlink in declared file: {name}").into());
+        }
+    }
+    let selected = format!("files/{name}");
+    if !files.contains_key(&selected) {
+        files.insert(selected.clone(), read_regular(&file)?);
+        limits(files)?;
+    }
+    Ok(selected)
 }
 
 // Both declaration files and plugin lines are validated and copied here.
@@ -45,6 +84,11 @@ fn build(
     base: &Path,
     bytes: Vec<u8>,
 ) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
+    let bin = declaration
+        .bin
+        .iter()
+        .map(|item| bin_item(item))
+        .collect::<Result<Vec<_>>>()?;
     let plugin = Plugin {
         schema: declaration.schema,
         id: declaration.id,
@@ -54,9 +98,15 @@ fn build(
         depends: declaration.depends,
         completions: declaration.completions,
         commands: declaration.commands,
+        bin: bin
+            .iter()
+            .map(|(path, name)| format!("files/{path}:{name}"))
+            .collect(),
     };
     validate_plugin(&plugin)?;
-    if declaration.files.is_empty() || declaration.files.len() > MAX_FILES - 3 {
+    if (declaration.files.is_empty() && bin.is_empty())
+        || declaration.files.len() + bin.len() > MAX_FILES - 3
+    {
         return Err("a declaration must select between 1 and 125 files".into());
     }
     let root = base.join(declaration.path);
@@ -66,29 +116,19 @@ fn build(
     let root = fs::canonicalize(root)?;
     let mut files = BTreeMap::new();
     let mut entry = "# Generated from the pinned source declaration.\n".to_owned();
+    let mut sourced = BTreeSet::new();
     for name in declaration.files {
-        if !valid_declared_file(&name) {
-            return Err(format!("invalid declared file: {name}").into());
-        }
-        let mut file = root.clone();
-        for part in Path::new(&name).components() {
-            file.push(part);
-            if fs::symlink_metadata(&file)?.file_type().is_symlink() {
-                return Err(format!("symlink in declared file: {name}").into());
-            }
-        }
-        let selected = format!("files/{name}");
-        if files
-            .insert(selected.clone(), read_regular(&file)?)
-            .is_some()
-        {
+        if !sourced.insert(name.clone()) {
             return Err(format!("duplicate declared file: {name}").into());
         }
-        limits(&files)?;
+        let selected = copy_declared(&root, &name, &mut files)?;
         entry.push_str(&format!(
             "source \"${{BASH_SOURCE[0]%/*}}\"/{} || return $?\n",
             quote(&selected)
         ));
+    }
+    for (path, _) in &bin {
+        copy_declared(&root, path, &mut files)?;
     }
     files.insert("entry.bash".into(), entry.into_bytes());
     files.insert(
@@ -117,12 +157,19 @@ pub(super) fn read(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     if !files.contains_key(&plugin.entry) {
         return Err(format!("missing entry for {}", plugin.id).into());
     }
+    for item in &plugin.bin {
+        let path = item.rsplit_once(':').map_or("", |parts| parts.0);
+        if !files.contains_key(path) {
+            return Err(format!("bin file is missing from {}: {path}", plugin.id).into());
+        }
+    }
     Ok((plugin, files))
 }
 
-const LINE_KEYS: [&str; 8] = [
+const LINE_KEYS: [&str; 9] = [
     "id",
     "files",
+    "bin",
     "load",
     "commands",
     "completions",
@@ -206,14 +253,22 @@ pub(super) fn check_keys(argv: &[String]) -> Result<()> {
         depends: value("depends"),
         completions: value("completions"),
         commands: value("commands"),
+        bin: Vec::new(),
     };
     validate_plugin(&plugin)?;
     let files = value("files");
-    if keys.contains_key("files") && (files.is_empty() || files.len() > MAX_FILES - 3) {
+    let bin = value("bin");
+    if (keys.contains_key("files") && files.is_empty())
+        || (keys.contains_key("bin") && bin.is_empty())
+        || files.len() + bin.len() > MAX_FILES - 3
+    {
         return Err("a declaration must select between 1 and 125 files".into());
     }
     if let Some(name) = files.iter().find(|name| !valid_declared_file(name)) {
         return Err(format!("invalid declared file: {name}").into());
+    }
+    for item in &bin {
+        bin_item(item)?;
     }
     Ok(())
 }
@@ -231,10 +286,18 @@ pub(super) fn git_paths(
         return Ok(None);
     }
     let id = line_id(&keys, name, &argv[0])?;
-    Ok(Some(match keys.get("files") {
-        Some(files) => list(files),
-        None => vec![default_file(&id, &argv[0], has)?],
-    }))
+    let mut paths = match (keys.get("files"), keys.get("bin")) {
+        (Some(files), _) => list(files),
+        (None, Some(_)) => Vec::new(),
+        (None, None) => vec![default_file(&id, &argv[0], has)?],
+    };
+    for item in list(keys.get("bin").copied().unwrap_or("")) {
+        let path = bin_item(&item)?.0;
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    Ok(Some(paths))
 }
 
 /// Builds a package from a Git line using the files copied from the tree
@@ -300,9 +363,10 @@ fn line_in(
     source: &str,
 ) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     let id = line_id(keys, name, source)?;
-    let files = match keys.get("files") {
-        Some(files) => list(files),
-        None => vec![default_file(&id, source, &|name| {
+    let files = match (keys.get("files"), keys.get("bin")) {
+        (Some(files), _) => list(files),
+        (None, Some(_)) => Vec::new(),
+        (None, None) => vec![default_file(&id, source, &|name| {
             fs::symlink_metadata(root.join(name)).is_ok()
         })?],
     };
@@ -317,6 +381,7 @@ fn line_in(
         depends: value("depends"),
         completions: value("completions"),
         commands: value("commands"),
+        bin: value("bin"),
     };
     let bytes = toml::to_string_pretty(&declaration)?.into_bytes();
     build(declaration, root, bytes)

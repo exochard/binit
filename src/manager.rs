@@ -462,6 +462,20 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
             (None, None) => "legacy snapshot".into(),
         }
     );
+    if !entry.plugin.bin.is_empty() {
+        let programs = entry
+            .plugin
+            .bin
+            .iter()
+            .filter_map(|item| item.rsplit_once(':'))
+            .map(|(path, name)| format!("{name} ({})", path.strip_prefix("files/").unwrap_or(path)))
+            .collect::<Vec<_>>();
+        println!(
+            "Programs: {}{}",
+            programs.join(", "),
+            if entry.enabled { "" } else { " (disabled)" }
+        );
+    }
     if let Some(origin) = &entry.origin {
         println!(
             "Ver: {}\nCommit: {}",

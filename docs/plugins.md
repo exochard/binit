@@ -27,6 +27,17 @@ A synced plugin with no matching line is `undeclared` and never loads, including
 
 When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync; run binit sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.
 
+## Commands on PATH
+
+`bin=PATH[:NAME],...` exposes package files as commands, Zinit's `as"program"`. Paths follow the rules of `files=` (relative, no symlinks, no traversal, regular files, counted in the package limits); `NAME` defaults to the file's basename and must match `^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`. A catalog `plugin.toml` or declaration takes the same `bin` list. A line may use `bin=` without `files=`: nothing is sourced and the default-file search is skipped.
+
+```bash
+binit plugin user/repo bin=git-foo files=foo.bash
+binit plugin user/scripts bin=tool.sh:tool
+```
+
+Publishing copies each command of every enabled plugin to `bin/NAME` in the generation with mode 0700, the only executable files, and records the owning plugin in `lock.toml` (`[bin]`, name to plugin ID). Two enabled plugins with the same NAME fail the sync or publish naming both. Startup verification checks that `bin/` holds exactly the locked files, regular, owned by you and mode 0700. `init.bash` prepends `bin/` to `PATH` once (a re-sourced startup file does nothing; `BINIT_SAFE=1` skips init). Commands are generation-wide: a line removed from `.bashrc` keeps its command until the next `binit sync`, and the first-prompt notice says so. A command runs from its copy, so it cannot rely on sibling files. `binit inspect ID` lists them under `Programs:`.
+
 ## Git sources
 
 A source is one of `user/repo` (expands to `https://github.com/user/repo.git`), `https://...`, `ssh://...`, `file://...` or `user@host:path`. A source that starts with `-`, contains `::`, whitespace or control characters, or uses another scheme (`http`, `git`, `ext`, `fd`) is rejected. `id` defaults to the repository name without `.git`; add `id=NAME` when that is not a valid ID. A URL with a password or token (`https://user:TOKEN@host/...`) is rejected; use a Git credential helper or an SSH key.

@@ -2668,3 +2668,195 @@ fn wait_lines_load_by_the_first_prompt_without_the_native_module() {
         stderr(&bad)
     );
 }
+
+fn program_source(h: &Home) -> String {
+    let script = "#!/bin/sh\nprintf 'ran:%s\\n' \"$*\"\nexit 3\n";
+    h.src("tools", "bin/mytool", script);
+    h.src("tools", "other.sh", script)
+}
+
+fn generation_dir(h: &Home) -> PathBuf {
+    h.f.state().join("generations").join(h.current())
+}
+
+#[test]
+fn bin_lines_expose_commands_with_arguments_status_and_rename() {
+    let h = Home::new();
+    let tools = program_source(&h);
+    let lines = format!("binit plugin {tools} bin=bin/mytool,other.sh:renamed\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let generation = generation_dir(&h);
+    for name in ["mytool", "renamed"] {
+        let mode = fs::metadata(generation.join("bin").join(name))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o700, "{name}");
+    }
+    assert_eq!(
+        fs::metadata(generation.join("plugins/tools/files/other.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o600
+    );
+    // A bin-only line sources nothing.
+    let entry = fs::read_to_string(generation.join("plugins/tools/entry.bash")).unwrap();
+    assert!(!entry.contains("source \""), "{entry}");
+    let output = h.shell(
+        &lines,
+        "mytool a 'b c'; echo \"status:$?\"\nrenamed x; echo \"status:$?\"\ncommand -v mytool\ncommand -v other.sh || echo no-other\n",
+    );
+    let text = stdout(&output);
+    assert!(text.contains("ran:a b c\n"), "{text}{}", stderr(&output));
+    assert!(text.contains("ran:x\n"), "{text}");
+    assert_eq!(text.matches("status:3").count(), 2, "{text}");
+    assert!(
+        text.contains(&format!("{}/bin/mytool", generation.display())),
+        "{text}"
+    );
+    assert!(text.contains("no-other"), "{text}");
+    let inspect = success(h.binit(&["inspect", "tools"]));
+    assert!(
+        inspect.contains("Programs: mytool (bin/mytool), renamed (other.sh)"),
+        "{inspect}"
+    );
+}
+
+#[test]
+fn a_git_line_can_source_files_and_expose_a_command() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "foo", "foo.bash", "BINIT_FOO=sourced\n");
+    repo.commit("git-foo", "#!/bin/sh\necho foo-ran \"$1\"\n", "command");
+    let lines = format!("binit plugin {} bin=git-foo files=foo.bash\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(&lines, "echo \"foo:$BINIT_FOO\"\ngit-foo arg\n");
+    let text = stdout(&output);
+    assert!(text.contains("foo:sourced"), "{text}{}", stderr(&output));
+    assert!(text.contains("foo-ran arg"), "{text}");
+}
+
+#[test]
+fn duplicate_command_names_are_rejected_naming_both_plugins() {
+    let h = Home::new();
+    let one = h.src("one", "tool.sh", "#!/bin/sh\n");
+    let two = h.src("two", "run.sh", "#!/bin/sh\n");
+    let good = format!("binit plugin {one} bin=tool.sh:same\n");
+    success(h.shell(&good, "binit sync\n"));
+    let previous = h.current();
+    let lines = format!("{good}binit plugin {two} bin=run.sh:same\n");
+    let output = h.shell(&lines, "binit sync\n");
+    let text = stderr(&output);
+    assert!(
+        text.contains("duplicate command same") && text.contains(" one ") && text.contains(" two"),
+        "{text}"
+    );
+    assert_eq!(h.current(), previous);
+}
+
+#[test]
+fn symlinked_traversing_and_invalid_bin_paths_are_rejected() {
+    let h = Home::new();
+    let tools = program_source(&h);
+    std::os::unix::fs::symlink("other.sh", PathBuf::from(&tools).join("link.sh")).unwrap();
+    let good = h.src("good", "init.sh", "BINIT_GOOD=1\n");
+    let base = format!("binit plugin {good}\n");
+    success(h.shell(&base, "binit sync\n"));
+    let previous = h.current();
+    for bad in [
+        "bin=link.sh",
+        "bin=../outside",
+        "bin=/etc/passwd",
+        "bin=other.sh:",
+        "bin=other.sh:-bad",
+        "bin=other.sh:a/b",
+        "bin=",
+        "bin=missing.sh",
+    ] {
+        let output = h.shell(
+            &format!("{base}binit plugin {tools} {bad}\n"),
+            "binit sync\necho \"status:$?\"\n",
+        );
+        assert!(
+            stdout(&output).contains("status:1"),
+            "{bad}: {}{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        assert_eq!(h.current(), previous, "{bad}");
+    }
+}
+
+#[test]
+fn a_tampered_bin_directory_fails_verification_at_startup() {
+    let h = Home::new();
+    let tools = program_source(&h);
+    let lines = format!("binit plugin {tools} bin=bin/mytool\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let program = generation_dir(&h).join("bin/mytool");
+    let original = fs::read(&program).unwrap();
+    let check = |message: &str| {
+        failure(h.binit(&["init"]), message);
+        let output = h.shell(&lines, "command -v mytool || echo no-command\n");
+        assert!(stderr(&output).contains(message), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains("no-command"),
+            "{}",
+            stdout(&output)
+        );
+    };
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    check("unexpected owner or mode: bin/mytool");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(&program, b"#!/bin/sh\necho evil\n").unwrap();
+    check("content changed: bin/mytool");
+    fs::write(&program, &original).unwrap();
+    success(h.binit(&["init"]));
+    let extra = generation_dir(&h).join("bin/extra");
+    fs::write(&extra, b"#!/bin/sh\n").unwrap();
+    fs::set_permissions(&extra, fs::Permissions::from_mode(0o700)).unwrap();
+    check("unexpected file in bin: extra");
+}
+
+#[test]
+fn disabling_a_catalog_plugin_removes_its_command() {
+    let h = Home::new();
+    let dir = h.src(
+        "cat",
+        "plugin.toml",
+        "schema=1\nid='cat'\nentry='plugin.bash'\nload='startup'\nbin=['tool.sh:ctool']\n",
+    );
+    h.src("cat", "plugin.bash", ":\n");
+    h.src("cat", "tool.sh", "#!/bin/sh\necho ctool-ran\n");
+    success(h.binit(&["add", &dir]));
+    let run = "ctool || echo no-ctool\n";
+    assert!(stdout(&h.shell("", run)).contains("ctool-ran"));
+    let inspect = success(h.binit(&["inspect", "cat"]));
+    assert!(inspect.contains("Programs: ctool (tool.sh)"), "{inspect}");
+    success(h.binit(&["disable", "cat"]));
+    assert!(!generation_dir(&h).join("bin").exists());
+    assert!(stdout(&h.shell("", run)).contains("no-ctool"));
+    success(h.binit(&["enable", "cat"]));
+    assert!(stdout(&h.shell("", run)).contains("ctool-ran"));
+}
+
+#[test]
+fn the_bin_directory_joins_path_once_across_resourcing() {
+    let h = Home::new();
+    let tools = program_source(&h);
+    let lines = format!("binit plugin {tools} bin=bin/mytool\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(
+        &lines,
+        "source \"$BINIT_TEST_RC\"\nsource \"$BINIT_TEST_RC\"\necho \"path:$PATH\"\n",
+    );
+    let text = stdout(&output);
+    let bin = format!("{}/bin", generation_dir(&h).display());
+    let path = text.lines().find_map(|l| l.strip_prefix("path:")).unwrap();
+    assert_eq!(path.split(':').filter(|p| *p == bin).count(), 1, "{path}");
+    assert!(path.starts_with(&bin), "{path}");
+    // Recovery mode skips init, so PATH stays untouched.
+    let safe = h.shell_env(&lines, "echo \"path:$PATH\"\n", &[("BINIT_SAFE", "1")]);
+    assert!(!stdout(&safe).contains(&bin), "{}", stdout(&safe));
+}

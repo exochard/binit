@@ -28,6 +28,18 @@ the last sync prints one notice at its first prompt. `load=wait` is Zinit's
 read (at the first prompt when the native module is off). A source is an absolute
 local directory or a Git repository.
 
+### Commands on PATH
+
+```bash
+binit plugin user/scripts bin=tool.sh:tool       # optional :NAME renames
+binit plugin user/repo bin=git-foo files=foo.bash # sourced files and a command
+```
+
+`bin=` is Zinit's `as"program"`: each listed file is copied into the
+generation as an executable (mode 0700) and `bin/` of the generation joins
+`PATH` once at startup. Without `files=`, nothing is sourced. A removed line
+keeps its command until the next `binit sync`; disabled plugins expose none.
+
 ### Git sources
 
 ```bash

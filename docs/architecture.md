@@ -36,6 +36,32 @@ Callback code stays mapped for
 the shell's lifetime because Readline can retain user-created bindings after
 the builtin is removed.
 
+## Deferred plugin loading
+
+`load=wait` plugins load after the first prompt is drawn. When the runtime
+finds wait plugins pending at the first prompt hook, it asks the module to
+install an `rl_pre_input_hook` (`binit_complete wait`). Bash 5.3 leaves that
+hook unset; it only uses `rl_startup_hook` for push-line. Readline calls it
+after drawing the prompt and before reading input, so typed keys stay in the
+terminal buffer and appear afterwards.
+
+The hook chains any earlier hook and does nothing unless
+`__binit_wait_pending` is nonzero, `interactive_shell` is set, and
+`executing_builtin`, `running_trap` and `parse_and_execute_level` are all
+zero. A running builtin covers `read -e`; evaluation inside `bind -x`, a
+nested parse or `eval` raises the parse level; a trap sets `running_trap`.
+Only the top-level command reader passes. It then runs `__binit_wait_dispatch`
+as `bind -x` runs its commands: an unwind frame, saved and restored parser
+state, `SEVAL_NOHIST`, Readline signals cleared and set again. The previous
+exit status and `$_` are restored, and `rl_forced_update_display` redraws the
+prompt and typed input. The dispatch clears the pending flag first, so it runs
+at most once.
+
+Disabling or unloading the module restores the previous hook if Binit's is
+still current. If the module is absent, or the hook did not run for a prompt,
+the next prompt hook loads the pending plugins, so they load at the first
+prompt at the latest.
+
 ## Alternatives considered
 
 The test budgets below cover a feasibility experiment, not the complete

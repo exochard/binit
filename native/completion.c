@@ -12,6 +12,9 @@
 #include <time.h>
 #include <unistd.h>
 #include "builtins.h"
+#include "variables.h"
+#include "execute_cmd.h"
+#include "common.h"
 #include "shell.h"
 #include "unwind_prot.h"
 #include "xmalloc.h"
@@ -59,6 +62,10 @@ static bool enabled;
 static int terminal_support;
 extern struct builtin binit_complete_struct;
 static int native_complete(int, int);
+static int wait_hook(void);
+extern int running_trap;
+static rl_hook_func_t *previous_pre_input;
+static bool wait_installed;
 
 static int option(const char *name)
 {
@@ -535,9 +542,72 @@ restart:;
     return 0;
 }
 
+static void restore_readline_signals(void *ignored)
+{
+    (void)ignored;
+    rl_set_signals();
+}
+
+/*
+ * Readline calls the pre-input hook after the prompt is drawn and before it
+ * reads a key. The dispatch runs only for the top-level command reader: `read
+ * -e` has a builtin running, `bind -x` and nested evaluation raise the parse
+ * level, and a trap sets running_trap. Bash itself does not use this hook.
+ */
+static void run_wait_dispatch(void)
+{
+    sh_parser_state_t state;
+    int status = last_command_exit_value;
+    char *last = get_string_value("_");
+    char *saved = last ? strdup(last) : NULL;
+    begin_unwind_frame("binit-wait");
+    save_parser_state(&state);
+    rl_clear_signals();
+    add_unwind_protect(uw_restore_parser_state, &state);
+    add_unwind_protect(restore_readline_signals, NULL);
+    parse_and_execute(savestring("__binit_wait_dispatch"), "binit_wait", SEVAL_NOTIFY | SEVAL_NOHIST);
+    rl_set_signals();
+    restore_parser_state(&state);
+    discard_unwind_frame("binit-wait");
+    if (saved) bind_lastarg(saved);
+    free(saved);
+    last_command_exit_value = status;
+    /* Output may have moved the cursor; forced redisplay assumes a fresh line. */
+    rl_clear_visible_line();
+    rl_forced_update_display();
+}
+
+static int wait_hook(void)
+{
+    if (previous_pre_input && previous_pre_input != wait_hook) previous_pre_input();
+    if (!wait_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level) return 0;
+    SHELL_VAR *pending = find_variable("__binit_wait_pending");
+    if (!pending || !value_cell(pending) || atoi(value_cell(pending)) == 0) return 0;
+    run_wait_dispatch();
+    return 0;
+}
+
+static int enable_wait(void)
+{
+    if (!wait_installed) {
+        previous_pre_input = rl_pre_input_hook;
+        rl_pre_input_hook = wait_hook;
+        wait_installed = true;
+    }
+    return EXECUTION_SUCCESS;
+}
+
+static void remove_wait_hook(void)
+{
+    if (wait_installed && rl_pre_input_hook == wait_hook) rl_pre_input_hook = previous_pre_input;
+    wait_installed = false;
+    previous_pre_input = NULL;
+}
+
 static void disable_menu(void)
 {
     enabled = false;
+    remove_wait_hook();
     for (size_t i = 0; i < 2; ++i) {
         struct binding *binding = &bindings[i];
         if (binding->owned && binding->map['\t'].type == ISFUNC && binding->map['\t'].function == native_complete) {
@@ -589,6 +659,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
     const char *action = arguments ? arguments->word->word : "status";
     if (arguments && arguments->next) return EX_USAGE;
     if (strcmp(action, "on") == 0) return enable_menu();
+    if (strcmp(action, "wait") == 0) return enable_wait();
     if (strcmp(action, "off") == 0) {disable_menu(); return EXECUTION_SUCCESS;}
     if (strcmp(action, "status") != 0) return EX_USAGE;
     printf("Completion menu: %s\n", enabled ? terminal_support < 0 ? "unavailable in this terminal" : "on" : "off");
@@ -619,5 +690,5 @@ static char *documentation[] = {
 };
 EXPORT struct builtin binit_complete_struct = {
     "binit_complete", binit_complete_builtin, BUILTIN_ENABLED,
-    documentation, "binit_complete [on|off|status]", NULL
+    documentation, "binit_complete [on|off|wait|status]", NULL
 };

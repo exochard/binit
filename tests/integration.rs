@@ -982,6 +982,7 @@ fn source_and_hook_scopes_do_not_shadow_ordinary_plugin_variables() {
     for (load, options, trigger) in [
         ("startup", "", ":"),
         ("prompt", "", "__binit_prompt_dispatch"),
+        ("wait", "", "__binit_wait_dispatch"),
         (
             "completion",
             "completions=['scope_tool']",
@@ -2612,4 +2613,58 @@ fn rejected_sources_with_credentials_are_never_echoed() {
         assert!(stderr(&output).contains(fixed), "{source}: {all}");
         assert!(!h.f.state().join("sources").exists());
     }
+}
+
+#[test]
+fn wait_plugins_from_a_manifest_stay_pending_until_dispatched() {
+    let f = Fixture::new();
+    f.plugin("slow", "load='wait'", "BINIT_SLOW=loaded\n");
+    success(f.prepare(&["slow"]));
+    let text = success(f.bash(
+        r#"
+source "$BINIT_TEST_INIT"
+[[ ${__binit_state[slow]} == pending && -z ${BINIT_SLOW-} && $__binit_wait_pending == 1 ]] || exit 2
+binit profile | awk '$1 == "slow" {print "before:" $2}'
+false
+__binit_wait_dispatch
+[[ $? == 0 ]] || exit 3
+[[ ${__binit_state[slow]} == loaded && $BINIT_SLOW == loaded && $__binit_wait_pending == 0 ]] || exit 4
+binit profile | awk '$1 == "slow" {print "after:" $2}'
+"#,
+    ));
+    assert!(text.contains("before:pending"), "{text}");
+    assert!(text.contains("after:loaded"), "{text}");
+}
+
+#[test]
+fn wait_lines_load_by_the_first_prompt_without_the_native_module() {
+    let h = Home::new();
+    let one = h.src("one", "init.sh", "BINIT_ORDER+=one\n");
+    let two = h.src("two", "init.sh", "BINIT_ORDER+=two\n");
+    let lines = format!(
+        "BINIT_ORDER=\nbinit plugin {two} id=two load=wait\nbinit plugin {one} id=one load=wait\n"
+    );
+    let sync = h.shell(&lines, "binit sync\n");
+    assert!(
+        stdout(&sync).contains("Synced 2 plugin lines"),
+        "{}{}",
+        stdout(&sync),
+        stderr(&sync)
+    );
+    let output = h.shell(&lines, "echo \"order:$BINIT_ORDER\"\nbinit profile\n");
+    let text = stdout(&output);
+    assert!(text.contains("order:twoone"), "{text}{}", stderr(&output));
+    for id in ["one", "two"] {
+        assert!(
+            text.lines()
+                .any(|l| l.split_whitespace().take(2).eq([id, "loaded"])),
+            "{id}: {text}"
+        );
+    }
+    let bad = h.shell("binit plugin /x load=later\n", "");
+    assert!(
+        stderr(&bad).contains("load must be startup, prompt, wait, command or completion"),
+        "{}",
+        stderr(&bad)
+    );
 }

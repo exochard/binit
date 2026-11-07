@@ -18,6 +18,8 @@ declare -gA __binit_completions=() __binit_line_key=() __binit_line_seen=()
 declare -ga __binit_line_counts=() __binit_line_args=()
 declare -g __binit_loading='' __binit_last_directory='' BINIT_LAST_STATUS=0 BINIT_PROMPT_TEXT=''
 declare -g __binit_line_text='' __binit_first_prompt=0 __binit_lines_total=0 __binit_lines_matched=0
+declare -gi __binit_wait_pending=0 __binit_wait_armed=0
+declare -ga __binit_wait_queue=()
 
 __binit_register() {
     local id=$1 entry=$2 kind=$3 requires=$4 depends=$5 completions=$6 commands=${7-} command
@@ -169,6 +171,17 @@ __binit_call() {
 __binit_prompt_dispatch() {
     local __binit_prompt_dispatch_status=$? __binit_prompt_dispatch_id __binit_prompt_dispatch_callback __binit_prompt_dispatch_value
     BINIT_LAST_STATUS=$__binit_prompt_dispatch_status
+    # No load runs while the prompt is prepared, so a load still marked here
+    # was interrupted (for example by Ctrl-C) and may have partial effects.
+    if [[ -n $__binit_loading ]]; then
+        for __binit_prompt_dispatch_id in "${__binit_ids[@]}"; do
+            if [[ ${__binit_state[$__binit_prompt_dispatch_id]} == loading ]]; then
+                __binit_state[$__binit_prompt_dispatch_id]=failed
+                __binit_reason[$__binit_prompt_dispatch_id]='load interrupted'
+            fi
+        done
+        __binit_loading=''
+    fi
     if (( __binit_first_prompt )); then
         __binit_first_prompt=0
         __binit_first_prompt_work
@@ -178,6 +191,7 @@ __binit_prompt_dispatch() {
             if __binit_load "$__binit_prompt_dispatch_id"; then :; fi
         fi
     done
+    __binit_wait_arm
     if [[ $__binit_last_directory != "$PWD" ]]; then
         __binit_last_directory=$PWD
         for __binit_prompt_dispatch_callback in "${__binit_directory_hooks[@]}"; do __binit_call "$__binit_prompt_dispatch_callback"; done
@@ -189,6 +203,33 @@ __binit_prompt_dispatch() {
         if [[ -n $__binit_prompt_dispatch_value ]]; then BINIT_PROMPT_TEXT+="[$__binit_prompt_dispatch_value] "; fi
     done
     return "$__binit_prompt_dispatch_status"
+}
+
+# Loads every pending wait plugin in line order. The Readline hook of the
+# native module runs it once after the prompt is drawn.
+__binit_wait_dispatch() {
+    local __binit_wait_id
+    local -a __binit_wait_run=("${__binit_wait_queue[@]}")
+    __binit_wait_pending=0
+    __binit_wait_queue=()
+    for __binit_wait_id in "${__binit_wait_run[@]}"; do
+        if [[ ${__binit_state[$__binit_wait_id]} == pending ]]; then
+            if __binit_load "$__binit_wait_id"; then :; fi
+        fi
+    done
+}
+
+# Leaves pending wait plugins to the hook for one prompt. If the hook is
+# unavailable, or did not run for the previous prompt, they load now.
+__binit_wait_arm() {
+    if (( ! __binit_wait_pending )); then
+        __binit_wait_armed=0
+    elif (( __binit_wait_armed )) || ! __binit_has_completion || ! builtin binit_complete wait 2>/dev/null; then
+        __binit_wait_armed=0
+        __binit_wait_dispatch
+    else
+        __binit_wait_armed=1
+    fi
 }
 
 __binit_complete() {
@@ -349,7 +390,7 @@ __binit_plugin_line() {
     local __binit_plugin_arg __binit_plugin_key __binit_plugin_id
     local -A __binit_plugin_keys=()
     if (( $# == 0 )); then
-        printf 'Usage: binit plugin SOURCE [id=ID] [files=A,B] [load=startup|prompt|command|completion]\n' >&2
+        printf 'Usage: binit plugin SOURCE [id=ID] [files=A,B] [load=startup|prompt|wait|command|completion]\n' >&2
         printf '                          [commands=A,B] [completions=A,B] [requires=A,B] [depends=A,B]\n                          [ver=TAG|BRANCH|COMMIT]  (Git sources)\n' >&2
         return 2
     fi
@@ -388,9 +429,9 @@ __binit_plugin_line() {
         return 2
     fi
     case ${__binit_plugin_keys[load]-startup} in
-        startup|prompt|command|completion) ;;
+        startup|prompt|wait|command|completion) ;;
         *)
-            printf 'binit: plugin %s: load must be startup, prompt, command or completion\n' "$1" >&2
+            printf 'binit: plugin %s: load must be startup, prompt, wait, command or completion\n' "$1" >&2
             return 2
             ;;
     esac
@@ -456,6 +497,10 @@ __binit_activate_plugins() {
         fi
     done
     for __binit_activate_id in "$@"; do
+        if [[ ${__binit_load_kind[$__binit_activate_id]} == wait && ${__binit_state[$__binit_activate_id]} == pending ]]; then
+            __binit_wait_pending=1
+            __binit_wait_queue+=("$__binit_activate_id")
+        fi
         IFS=' ' read -r -a __binit_activate_names <<< "${__binit_completions[$__binit_activate_id]}"
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if [[ ${__binit_state[$__binit_activate_id]} == pending ]]; then complete -F __binit_complete -- "$__binit_activate_command"; fi

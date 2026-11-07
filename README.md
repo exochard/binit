@@ -17,12 +17,15 @@ eval "$(binit init)"
 binit plugin ~/src/my-plugin                      # directory with plugin.toml
 binit plugin ~/src/tool files=init.sh,comp.bash load=command commands=tool
 binit plugin ~/src/thing id=thing requires=git load=prompt
+binit plugin ~/src/nvm id=nvm load=wait           # after the first prompt
 ```
 
 Run `binit sync` in that shell, then open a new one with `exec bash`. Sync
 pins the declared sources into a verified generation; shell startup reads only
 that generation and never touches the network. A shell whose lines differ from
-the last sync prints one notice at its first prompt. A source is an absolute
+the last sync prints one notice at its first prompt. `load=wait` is Zinit's
+`wait`: the prompt appears first and the plugin loads before the next key is
+read (at the first prompt when the native module is off). A source is an absolute
 local directory or a Git repository.
 
 ### Git sources

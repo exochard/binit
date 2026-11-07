@@ -13,7 +13,7 @@ binit plugin ~/src/thing id=thing requires=git load=prompt
 
 Then run `binit sync` and open a new shell with `exec bash`. The first `binit init` creates an empty generation in the state directory (`--state`, else `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else `~/.local/share/binit`; each must be absolute).
 
-Grammar: `binit plugin SOURCE [KEY=VALUE...]`. `SOURCE` is an absolute directory after tilde expansion or a Git source (below); anything else fails with status 2 and the shell continues. Keys are `id`, `files`, `load`, `commands`, `completions`, `requires`, `depends` and, for Git sources, `ver`; list values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `command` or `completion`.
+Grammar: `binit plugin SOURCE [KEY=VALUE...]`. `SOURCE` is an absolute directory after tilde expansion or a Git source (below); anything else fails with status 2 and the shell continues. Keys are `id`, `files`, `load`, `commands`, `completions`, `requires`, `depends` and, for Git sources, `ver`; list values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `wait`, `command` or `completion`.
 
 - A directory with `plugin.toml` and no keys uses that manifest.
 - Otherwise `id` defaults to the directory name, and `files` to the first existing of `ID.plugin.bash`, `ID.bash`, `init.bash`, `ID.sh`, `init.sh`. Sync fails and lists these names when none exists.
@@ -21,7 +21,9 @@ Grammar: `binit plugin SOURCE [KEY=VALUE...]`. `SOURCE` is an absolute directory
 
 `binit sync` stores the lines of the current shell (a NUL-delimited `declared` file in the state directory: each record is an argument count followed by the arguments), then rebuilds every line-managed plugin from them and publishes a generation. A failed sync leaves the current generation in place. Catalog plugins stay; an `id` shared with one is an error. Line-managed plugins reject `enable`, `disable` and `remove`; edit the line and sync. `binit update ID` re-snapshots a local line plugin.
 
-At startup, a line whose exact arguments match a synced plugin activates it at once: `startup` plugins load in line order, `command` and `completion` plugins install their first-use stubs, `prompt` plugins load at the first prompt. Existing functions, aliases, builtins and completion specifications still win. A synced plugin with no matching line is `undeclared` and never loads, including as a dependency; its dependants become unavailable. Declare a dependency before the plugin that needs it.
+At startup, a line whose exact arguments match a synced plugin activates it at once: `startup` plugins load in line order, `command` and `completion` plugins install their first-use stubs, `prompt` plugins load at the first prompt, `wait` plugins right after it is drawn. Existing functions, aliases, builtins and completion specifications still win. `load=wait` is Zinit's `wait` (turbo mode): the first prompt appears at once and the plugin loads before the next key is read, in line order with other `wait` plugins. Keys typed meanwhile are kept. `binit profile` shows `pending` until then. Without the native module (`BINIT_COMPLETION_MENU=0`, no `completion.so`) wait plugins load at the first prompt instead, like `prompt`. Output printed during a wait load lands on the prompt line; a plugin that changes `PS1` or key bindings takes effect from the next prompt or line.
+
+A synced plugin with no matching line is `undeclared` and never loads, including as a dependency; its dependants become unavailable. Declare a dependency before the plugin that needs it.
 
 When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync; run binit sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.
 
@@ -61,7 +63,7 @@ requires = ["git"]
 depends = []
 ```
 
-`load` accepts `startup`, `prompt`, `completion`, or `command`. Completion plugins declare `completions = ["command"]`; first-use plugins declare `commands = ["tool"]`. Dependencies must be enabled and form an acyclic graph. An explicit dependency can load a plugin earlier than its usual trigger.
+`load` accepts `startup`, `prompt`, `wait`, `completion`, or `command`. Completion plugins declare `completions = ["command"]`; first-use plugins declare `commands = ["tool"]`. Dependencies must be enabled and form an acyclic graph. An explicit dependency can load a plugin earlier than its usual trigger.
 
 An existing completion specification blocks the corresponding completion plugin, including when another plugin depends on it. Dependants become unavailable. Plugins must use unique function names and respect the runtime's `__binit_` namespace.
 

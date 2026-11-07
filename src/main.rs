@@ -7,6 +7,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 mod engine;
+mod git;
 mod manager;
 mod package;
 
@@ -290,10 +291,14 @@ fn publish(
         return Err("at most 64 plugins are supported".into());
     }
     let mut plugins = BTreeMap::new();
+    let mut ids = BTreeSet::new();
     let mut completions = BTreeSet::new();
     let mut commands = BTreeSet::new();
     for item in &catalog {
         validate_plugin(&item.plugin)?;
+        if !ids.insert(item.plugin.id.as_str()) {
+            return Err(format!("duplicate plugin id: {}", item.plugin.id).into());
+        }
         if !item.enabled {
             continue;
         }
@@ -432,6 +437,9 @@ fn verify_generation(state: &Path, id: &str) -> Result<Lock> {
     let lock: Lock = toml::from_str(std::str::from_utf8(&bytes)?)?;
     if ![1, 2].contains(&lock.schema) {
         return Err("unsupported lock schema".into());
+    }
+    for origin in lock.catalog.iter().filter_map(|item| item.origin.as_ref()) {
+        git::validate_origin(&origin.url, origin.ver.as_deref(), &origin.commit)?;
     }
     for (file, expected) in &lock.files {
         if !valid_relative(file) {
@@ -590,7 +598,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  sync             Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...], binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  sync             Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [ID...]  Move Git plugins to the commit their ver now names\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...], binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }
@@ -608,13 +616,17 @@ fn run() -> Result<()> {
     if args.iter().any(|s| s == "--state") {
         return Err("--state may only be specified once".into());
     }
-    let command = args.first().ok_or("missing command")?.as_str();
+    let command = args.first().ok_or("missing command")?.clone();
+    let command = command.as_str();
+    let check = command == "update" && args.iter().any(|s| s == "--check");
+    if check {
+        args.retain(|s| s != "--check");
+    }
     match (command, args.len()) {
         ("add", 2) => manager::add(&state, Path::new(&args[1]), true)?,
         ("add", 3) if args[2] == "--disabled" => manager::add(&state, Path::new(&args[1]), false)?,
         ("enable" | "disable" | "remove", 2) => manager::change(&state, &args[1], command)?,
-        ("update", 2) => manager::update(&state, &args[1], None)?,
-        ("update", 3) => manager::update(&state, &args[1], Some(Path::new(&args[2])))?,
+        ("update", _) => manager::update_command(&state, &args[1..], check)?,
         ("plugins", 1) => manager::list(&state)?,
         ("inspect", 2) => manager::inspect(&state, &args[1])?,
         ("shell", 1) => manager::shell(&state)?,

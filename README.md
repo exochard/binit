@@ -22,8 +22,29 @@ binit plugin ~/src/thing id=thing requires=git load=prompt
 Run `binit sync` in that shell, then open a new one with `exec bash`. Sync
 pins the declared sources into a verified generation; shell startup reads only
 that generation and never touches the network. A shell whose lines differ from
-the last sync prints one notice at its first prompt. Sources are absolute local
-directories; Git sources are not supported yet.
+the last sync prints one notice at its first prompt. A source is an absolute
+local directory or a Git repository.
+
+### Git sources
+
+```bash
+binit plugin user/repo                         # https://github.com/user/repo.git
+binit plugin user/repo ver=v1.2.0 files=init.bash
+binit plugin https://gitlab.com/a/b.git id=b ver=main
+binit plugin git@github.com:user/repo.git
+```
+
+`ver` is a tag, a branch or a full 40-character commit; without it the remote
+default branch is used (a remote without one needs `ver`). `https://` URLs
+cannot carry a user name or token; use a Git credential helper. `binit sync` clones what is missing and pins each line
+to the full commit its `ver` resolves to. A line keeps its pinned commit
+while its id, source and ver stay the same; other keys can change freely. A new
+id, a different ver or a different source resolves the current commit. Only
+`binit update` moves an existing pin. `binit update [ID...]` fetches and moves
+the pins; a full-commit `ver` never moves. `binit update --check [ID...]`
+prints `ID  OLD -> NEW  (N commits)` with the new commit subjects and changes
+nothing. `binit inspect ID` shows the URL, `ver` and pinned commit. Mirrors
+live in `$state/sources`.
 
 State lives in `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else
 `~/.local/share/binit`. `--state DIRECTORY` overrides all three. The

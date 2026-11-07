@@ -13,17 +13,30 @@ binit plugin ~/src/thing id=thing requires=git load=prompt
 
 Then run `binit sync` and open a new shell with `exec bash`. The first `binit init` creates an empty generation in the state directory (`--state`, else `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else `~/.local/share/binit`; each must be absolute).
 
-Grammar: `binit plugin SOURCE [KEY=VALUE...]`. `SOURCE` is an absolute directory after tilde expansion; relative paths and `user/repo` shapes fail with status 2 and the shell continues. Keys are `id`, `files`, `load`, `commands`, `completions`, `requires` and `depends`; list values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `command` or `completion`.
+Grammar: `binit plugin SOURCE [KEY=VALUE...]`. `SOURCE` is an absolute directory after tilde expansion or a Git source (below); anything else fails with status 2 and the shell continues. Keys are `id`, `files`, `load`, `commands`, `completions`, `requires`, `depends` and, for Git sources, `ver`; list values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `command` or `completion`.
 
 - A directory with `plugin.toml` and no keys uses that manifest.
 - Otherwise `id` defaults to the directory name, and `files` to the first existing of `ID.plugin.bash`, `ID.bash`, `init.bash`, `ID.sh`, `init.sh`. Sync fails and lists these names when none exists.
 - The same line twice, as when the startup file is sourced again, does nothing.
 
-`binit sync` stores the lines of the current shell (a NUL-delimited `declared` file in the state directory: each record is an argument count followed by the arguments), then rebuilds every line-managed plugin from them and publishes a generation. A failed sync leaves the current generation in place. Catalog plugins stay; an `id` shared with one is an error. Line-managed plugins reject `enable`, `disable`, `remove` and `update`; edit the line and sync.
+`binit sync` stores the lines of the current shell (a NUL-delimited `declared` file in the state directory: each record is an argument count followed by the arguments), then rebuilds every line-managed plugin from them and publishes a generation. A failed sync leaves the current generation in place. Catalog plugins stay; an `id` shared with one is an error. Line-managed plugins reject `enable`, `disable` and `remove`; edit the line and sync. `binit update ID` re-snapshots a local line plugin.
 
 At startup, a line whose exact arguments match a synced plugin activates it at once: `startup` plugins load in line order, `command` and `completion` plugins install their first-use stubs, `prompt` plugins load at the first prompt. Existing functions, aliases, builtins and completion specifications still win. A synced plugin with no matching line is `undeclared` and never loads, including as a dependency; its dependants become unavailable. Declare a dependency before the plugin that needs it.
 
 When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync; run binit sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.
+
+## Git sources
+
+A source is one of `user/repo` (expands to `https://github.com/user/repo.git`), `https://...`, `ssh://...`, `file://...` or `user@host:path`. A source that starts with `-`, contains `::`, whitespace or control characters, or uses another scheme (`http`, `git`, `ext`, `fd`) is rejected. `id` defaults to the repository name without `.git`; add `id=NAME` when that is not a valid ID. A URL with a password or token (`https://user:TOKEN@host/...`) is rejected; use a Git credential helper or an SSH key.
+
+`ver` is a tag, a branch or a full 40-character commit. Without it, the remote default branch is used; a remote whose HEAD points at a missing branch fails only for lines without `ver`, with "the remote has no default branch; set ver=". Sources are printable ASCII. An `https://` URL may not carry a user name, password or token (use a Git credential helper); `ssh://` and `user@host:path` keep their user, which must match `[a-z_][a-z0-9_-]{0,31}`. A rejected source that carries credentials is never echoed; the error is a fixed message.
+
+- `binit sync` clones sources it has not seen and pins each new line to the full commit its `ver` (or the default branch) resolves to. A line keeps its pinned commit while its id, source and ver stay the same; other keys can change freely, and sync does not contact the remote for them. A new id, a different ver (including removing `ver=`) or a different source resolves the current commit. Only `binit update` moves an existing pin. Spellings of one URL (`user/repo`, `https://github.com/user/repo`, a trailing `.git` or `/`, and the case of an https or ssh host) count as the same source. A full-commit `ver` must be reachable from a branch or tag of the remote.
+- `binit update [ID...]` fetches, resolves each `ver` again and publishes a generation with the new pins. Without IDs it covers every Git line plugin. A full-commit `ver` never moves, needs no fetch and is reported as `ID  pinned to commit; to track a branch again, remove ver= or set ver=BRANCH, then run binit sync`. An update that would change a plugin's ID is refused. All plugins are resolved before anything is published, so one failure leaves the current generation unchanged.
+- `binit update --check [ID...]` fetches and prints `ID  OLD12 -> NEW12  (N commits)` followed by up to 20 `git log --oneline` lines, or `ID  up to date`. It publishes nothing and changes no pin.
+- `binit inspect ID` shows the URL, `ver` and pinned commit.
+
+Mirrors are bare clones in `$state/sources/<hash of URL>-<repo>`; a private ref `refs/binit/HEAD` follows the remote default branch when the remote has one. The files a line needs are read from the pinned commit as raw blobs (no attributes, filters or hooks apply) into a temporary directory under `$state/tmp` and built like a local directory, so the same limits apply: no symlinks in selected files, 128 files, 2 MiB. Git runs without a shell or prompts, with hooks and submodules off and a 120 second limit per command. Git stays in the terminal's foreground process group, so Ctrl-C stops it; sync and update remove leftover `sources/.staging-*` and `tmp/checkout-*` directories. Shell startup runs no Git and uses no network.
 
 ## Lifecycle
 

@@ -289,26 +289,81 @@ __binit_line_text_of() {
     for __binit_text_arg in "$@"; do __binit_line_text+="${#__binit_text_arg}:$__binit_text_arg"; done
 }
 
-# binit plugin SOURCE [KEY=VALUE...]: declare a local plugin directory.
+# True for an absolute path or a Git source. The rules match parse_source in
+# src/git.rs; the manager repeats the check at sync.
+__binit_source_ok() {
+    local LC_ALL=C
+    local source=$1 scheme rest authority host userinfo left path user owner repo
+    local word_re='^[A-Za-z0-9_.-]+$' user_re='^[a-z_][a-z0-9_-]{0,31}$'
+    [[ $source == /* ]] && return 0
+    [[ $source != -* && $source != *::* && $source != *[!'!'-'~']* ]] || return 1
+    if [[ $source == *://* ]]; then
+        scheme=${source%%://*}
+        rest=${source#*://}
+        authority=${rest%%/*}
+        case $scheme in
+            file) [[ -z $authority && ${#rest} -gt 1 ]] && return 0 ;;
+            https|ssh)
+                host=${authority##*@}
+                if [[ $authority == *@* ]]; then
+                    userinfo=${authority%@*}
+                    [[ $userinfo != *:* && $scheme == ssh && $userinfo =~ $user_re ]] || return 1
+                fi
+                [[ -n $host && $host != -* && ${#rest} -gt $((${#authority} + 1)) ]] && return 0
+                ;;
+        esac
+        return 1
+    fi
+    if [[ $source == *:* ]]; then
+        left=${source%%:*}
+        path=${source#*:}
+        if [[ $left == *@* ]]; then
+            user=${left%%@*}
+            host=${left#*@}
+            [[ $user =~ $user_re && $host =~ $word_re && $host != [.-]* && -n $path ]] && return 0
+        fi
+    fi
+    if [[ $source == */* ]]; then
+        owner=${source%%/*}
+        repo=${source#*/}
+        [[ $owner =~ $word_re && $owner != [.-]* && $repo =~ $word_re && $repo != . && $repo != .. ]] && return 0
+    fi
+    return 1
+}
+
+# True for a rejected source that may hold a secret: an @ before its first /
+# (anywhere without a /), also after a scheme: and slashes. Matches src/git.rs.
+__binit_source_secret() {
+    local LC_ALL=C source=$1 rest
+    [[ ${source%%/*} == *@* ]] && return 0
+    if [[ $source =~ ^[A-Za-z][A-Za-z0-9+.-]*: ]]; then
+        rest=${source#*:}
+        while [[ $rest == /* ]]; do rest=${rest#/}; done
+        [[ ${rest%%/*} == *@* ]] && return 0
+    fi
+    return 1
+}
+
+# binit plugin SOURCE [KEY=VALUE...]: declare a local directory or Git plugin.
 __binit_plugin_line() {
     local __binit_plugin_arg __binit_plugin_key __binit_plugin_id
     local -A __binit_plugin_keys=()
     if (( $# == 0 )); then
         printf 'Usage: binit plugin SOURCE [id=ID] [files=A,B] [load=startup|prompt|command|completion]\n' >&2
-        printf '                          [commands=A,B] [completions=A,B] [requires=A,B] [depends=A,B]\n' >&2
+        printf '                          [commands=A,B] [completions=A,B] [requires=A,B] [depends=A,B]\n                          [ver=TAG|BRANCH|COMMIT]  (Git sources)\n' >&2
         return 2
     fi
-    if [[ $1 != /* ]]; then
-        if [[ $1 =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$ || $1 == *://* || $1 == git@* ]]; then
-            printf 'binit: plugin %s: Git sources are not supported yet\n' "$1" >&2
-        else
-            printf 'binit: plugin %s: the source must be an absolute path\n' "$1" >&2
+    if ! __binit_source_ok "$1"; then
+        if __binit_source_secret "$1"; then
+            printf 'binit: plugin line rejected: a source with credentials is not allowed; use a Git credential helper or an SSH key\n' >&2
+            return 2
         fi
+        printf 'binit: plugin %s: the source must be an absolute path, user/repo, https://, ssh://, file:// or user@host:path\n' "$1" >&2
         return 2
     fi
     for __binit_plugin_arg in "${@:2}"; do
         case ${__binit_plugin_arg%%=*} in
-            id|files|load|commands|completions|requires|depends) ;;
+            id|files|load|commands|completions|requires|depends|ver) ;;
             *)
                 if [[ $__binit_plugin_arg == *=* ]]; then
                     printf 'binit: plugin %s: unknown key: %s\n' "$1" "${__binit_plugin_arg%%=*}" >&2
@@ -328,6 +383,10 @@ __binit_plugin_line() {
         fi
         __binit_plugin_keys[${__binit_plugin_arg%%=*}]=${__binit_plugin_arg#*=}
     done
+    if [[ $1 == /* && -n ${__binit_plugin_keys[ver]+set} ]]; then
+        printf 'binit: plugin %s: ver applies to Git sources only\n' "$1" >&2
+        return 2
+    fi
     case ${__binit_plugin_keys[load]-startup} in
         startup|prompt|command|completion) ;;
         *)

@@ -10,6 +10,18 @@ pub(super) struct Installed {
     /// The arguments of the `binit plugin` line that produced this entry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) declaration: Vec<String>,
+    /// The Git source and the commit it is pinned to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) origin: Option<Origin>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Origin {
+    pub(super) url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ver: Option<String>,
+    pub(super) commit: String,
 }
 
 pub(super) struct MutationGuard(fs::File);
@@ -60,6 +72,7 @@ fn catalog(lock: &Lock) -> Vec<Installed> {
                 enabled: true,
                 source: None,
                 declaration: Vec::new(),
+                origin: None,
             })
             .collect()
     } else {
@@ -94,17 +107,24 @@ pub(super) fn package(
     enabled: bool,
 ) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
     let (plugin, files) = package::read(path)?;
-    installed(plugin, files, path, enabled, Vec::new())
+    installed(
+        plugin,
+        files,
+        Some(fs::canonicalize(path)?),
+        enabled,
+        Vec::new(),
+        None,
+    )
 }
 
 fn installed(
     plugin: Plugin,
     files: BTreeMap<String, Vec<u8>>,
-    path: &Path,
+    source: Option<PathBuf>,
     enabled: bool,
     declaration: Vec<String>,
+    origin: Option<Origin>,
 ) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
-    let source = fs::canonicalize(path)?;
     let files = files
         .into_iter()
         .map(|(name, bytes)| (format!("plugins/{}/{name}", plugin.id), bytes))
@@ -113,8 +133,9 @@ fn installed(
         Installed {
             plugin,
             enabled,
-            source: Some(source),
+            source,
             declaration,
+            origin,
         },
         files,
     ))
@@ -122,7 +143,29 @@ fn installed(
 
 fn line_package(argv: &[String]) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
     let (plugin, files) = package::line(argv)?;
-    installed(plugin, files, Path::new(&argv[0]), true, argv.to_vec())
+    let source = Some(fs::canonicalize(&argv[0])?);
+    installed(plugin, files, source, true, argv.to_vec(), None)
+}
+
+/// Pins a Git line to `commit` and builds its package from a checkout.
+fn git_package(
+    state: &Path,
+    argv: &[String],
+    remote: &git::Remote,
+    mirror: &Path,
+    commit: &str,
+) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
+    let ver = git::line_ver(argv)?;
+    let listing = git::list(mirror, commit)?;
+    let paths = package::git_paths(argv, &remote.name, &|path| listing.has(path))?;
+    let checkout = git::Checkout::create(state, mirror, &listing, paths.as_deref())?;
+    let (plugin, files) = package::git_line(argv, checkout.root(), &remote.name)?;
+    let origin = Origin {
+        url: remote.url.clone(),
+        ver,
+        commit: commit.to_owned(),
+    };
+    installed(plugin, files, None, true, argv.to_vec(), Some(origin))
 }
 
 fn require_catalog(entry: &Installed) -> Result<()> {
@@ -194,6 +237,161 @@ pub(super) fn change(state: &Path, id: &str, action: &str) -> Result<()> {
     Ok(())
 }
 
+/// `binit update [--check] [ID...]`. The old `update ID [PATH]` form applies
+/// to a catalog plugin, and a second argument is a PATH only when it is not
+/// an installed plugin.
+pub(super) fn update_command(state: &Path, args: &[String], check: bool) -> Result<()> {
+    if !check && (1..=2).contains(&args.len()) {
+        let plan = current(state)?;
+        let catalog = plan
+            .catalog
+            .iter()
+            .any(|entry| entry.plugin.id == args[0] && entry.declaration.is_empty());
+        let installed = |id: &String| plan.catalog.iter().any(|entry| entry.plugin.id == *id);
+        if catalog && (args.len() == 1 || !installed(&args[1])) {
+            return update(state, &args[0], args.get(1).map(Path::new));
+        }
+    }
+    update_lines(state, args, check)
+}
+
+fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
+    let _guard = MutationGuard::acquire(state)?;
+    git::clean_leftovers(state);
+    let mut plan = current(state)?;
+    let mut targets = Vec::new();
+    if ids.is_empty() {
+        for (position, entry) in plan.catalog.iter().enumerate() {
+            if entry.origin.is_some() {
+                targets.push(position);
+            }
+        }
+        if targets.is_empty() {
+            println!("No Git plugins to update");
+            return Ok(());
+        }
+    }
+    for id in ids {
+        let position = plan
+            .catalog
+            .iter()
+            .position(|entry| entry.plugin.id == *id)
+            .ok_or_else(|| format!("plugin not installed: {id}"))?;
+        let entry = &plan.catalog[position];
+        if entry.declaration.is_empty() {
+            return Err(format!("{id} is a catalog plugin; use binit update {id} [PATH]").into());
+        }
+        if check && entry.origin.is_none() {
+            return Err(format!("{id} is a local directory, not a Git plugin").into());
+        }
+        if !targets.contains(&position) {
+            targets.push(position);
+        }
+    }
+    let mut fetched = BTreeSet::new();
+    let mut changes = Vec::new();
+    // Results print after the generation is published, so a failure shows no
+    // moves.
+    let mut report = Vec::new();
+    let mut say = |line: String| {
+        if check {
+            println!("{line}");
+        } else {
+            report.push(line);
+        }
+    };
+    for position in targets {
+        let entry = plan.catalog[position].clone();
+        let id = entry.plugin.id.clone();
+        let wrap = |error: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
+            git::line_error(&entry.declaration[0], error)
+        };
+        let unchanged_id = |item: &Installed| -> Result<()> {
+            if item.plugin.id == id {
+                return Ok(());
+            }
+            Err(wrap(
+                format!(
+                    "the plugin id would change from {id} to {}; edit the line (for example add id={id} and files=) and run binit sync",
+                    item.plugin.id
+                )
+                .into(),
+            ))
+        };
+        let Some(origin) = &entry.origin else {
+            let (item, files) = line_package(&entry.declaration).map_err(wrap)?;
+            unchanged_id(&item)?;
+            say(format!("{id}  re-snapshotted"));
+            changes.push((position, item, files));
+            continue;
+        };
+        if origin.ver.as_deref().is_some_and(git::valid_commit) {
+            say(format!(
+                "{id}  pinned to commit; to track a branch again, remove ver= or set ver=BRANCH, then run binit sync"
+            ));
+            continue;
+        }
+        package::check_keys(&entry.declaration).map_err(wrap)?;
+        let remote = git::parse_source(&entry.declaration[0])
+            .map_err(wrap)?
+            .ok_or("Git origin on a local line")?;
+        let (mirror, created) = git::ensure(state, &remote).map_err(wrap)?;
+        if created {
+            fetched.insert(remote.url.clone());
+        } else if fetched.insert(remote.url.clone()) {
+            git::refresh(&mirror, &remote.url).map_err(wrap)?;
+        }
+        let commit = git::pin(&mirror, &remote.url, origin.ver.as_deref(), true).map_err(wrap)?;
+        if commit == origin.commit {
+            say(format!("{id}  up to date"));
+            continue;
+        }
+        let moved = format!("{id}  {} -> {}", &origin.commit[..12], &commit[..12]);
+        if check {
+            let (count, log) = git::changes(&mirror, &origin.commit, &commit);
+            match count {
+                Some(1) => println!("{moved}  (1 commit)"),
+                Some(count) => println!("{moved}  ({count} commits)"),
+                None => println!("{moved}"),
+            }
+            for line in log {
+                println!("{line}");
+            }
+        } else {
+            let (item, files) =
+                git_package(state, &entry.declaration, &remote, &mirror, &commit).map_err(wrap)?;
+            unchanged_id(&item)?;
+            say(moved);
+            changes.push((position, item, files));
+        }
+    }
+    if check {
+        return Ok(());
+    }
+    if changes.is_empty() {
+        for line in report {
+            println!("{line}");
+        }
+        return Ok(());
+    }
+    for (position, item, files) in changes {
+        // Remove by the installed ID, which the new package has too.
+        let prefix = format!("plugins/{}/", plan.catalog[position].plugin.id);
+        plan.packages.retain(|name, _| !name.starts_with(&prefix));
+        plan.packages.extend(files);
+        plan.catalog[position] = item;
+    }
+    let generation = publish(plan.catalog, plan.packages, state)?;
+    for line in report {
+        println!("{line}");
+    }
+    println!(
+        "Generation: {}\nOpen a new shell to use it",
+        &generation[..12]
+    );
+    Ok(())
+}
+
 pub(super) fn update(state: &Path, id: &str, path: Option<&Path>) -> Result<()> {
     let _guard = MutationGuard::acquire(state)?;
     let mut plan = current(state)?;
@@ -258,12 +456,19 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
         entry.plugin.commands.join(", "),
         entry.plugin.requires.join(", "),
         entry.plugin.depends.join(", "),
-        entry
-            .source
-            .as_deref()
-            .map(|path| path.to_string_lossy())
-            .unwrap_or_else(|| "legacy snapshot".into())
+        match (&entry.origin, entry.source.as_deref()) {
+            (Some(origin), _) => origin.url.clone().into(),
+            (None, Some(path)) => path.to_string_lossy(),
+            (None, None) => "legacy snapshot".into(),
+        }
     );
+    if let Some(origin) = &entry.origin {
+        println!(
+            "Ver: {}\nCommit: {}",
+            origin.ver.as_deref().unwrap_or("default branch"),
+            origin.commit
+        );
+    }
     Ok(())
 }
 
@@ -380,21 +585,83 @@ pub(super) fn declare(state: &Path) -> Result<()> {
 
 pub(super) fn sync(state: &Path) -> Result<()> {
     let _guard = MutationGuard::acquire(state)?;
+    git::clean_leftovers(state);
     let lines = read_declared(state)?;
     let mut plan = current(state)?;
-    for entry in plan.catalog.iter().filter(|e| !e.declaration.is_empty()) {
+    let previous = plan.packages.clone();
+    let old: Vec<Installed> = plan
+        .catalog
+        .iter()
+        .filter(|e| !e.declaration.is_empty())
+        .cloned()
+        .collect();
+    for entry in &old {
         let prefix = format!("plugins/{}/", entry.plugin.id);
         plan.packages.retain(|name, _| !name.starts_with(&prefix));
     }
     plan.catalog.retain(|entry| entry.declaration.is_empty());
+    let mut fetched = BTreeSet::new();
     for argv in &lines {
-        let (item, files) =
-            line_package(argv).map_err(|error| format!("plugin line {}: {error}", argv[0]))?;
+        let wrap = |error: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
+            git::line_error(&argv[0], error)
+        };
+        let (item, files) = match git::parse_source(&argv[0]).map_err(wrap)? {
+            None => line_package(argv).map_err(wrap)?,
+            // A line that is already synced keeps its pin and its snapshot.
+            Some(remote) => match old
+                .iter()
+                .find(|entry| entry.origin.is_some() && entry.declaration == *argv)
+            {
+                Some(entry) => {
+                    let prefix = format!("plugins/{}/", entry.plugin.id);
+                    let files = previous
+                        .iter()
+                        .filter(|(name, _)| name.starts_with(&prefix))
+                        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+                        .collect();
+                    (entry.clone(), files)
+                }
+                None => {
+                    package::check_keys(argv).map_err(wrap)?;
+                    let ver = git::line_ver(argv).map_err(wrap)?;
+                    // A line keeps its commit while its id, source and ver stay
+                    // the same. Any other change is a new choice and resolves
+                    // the current commit.
+                    let wanted = argv[1..]
+                        .iter()
+                        .find_map(|a| a.strip_prefix("id="))
+                        .unwrap_or(&remote.name);
+                    let kept = old.iter().find_map(|entry| {
+                        let origin = entry.origin.as_ref()?;
+                        (entry.plugin.id == wanted
+                            && git::normalize(&origin.url) == git::normalize(&remote.url)
+                            && origin.ver == ver)
+                            .then(|| origin.commit.clone())
+                    });
+                    let (mirror, created) = git::ensure(state, &remote).map_err(wrap)?;
+                    let commit = match kept {
+                        Some(commit) => commit,
+                        None => {
+                            if created {
+                                fetched.insert(remote.url.clone());
+                            } else if !ver.as_deref().is_some_and(git::valid_commit)
+                                && fetched.insert(remote.url.clone())
+                            {
+                                git::refresh(&mirror, &remote.url).map_err(wrap)?;
+                            }
+                            let fresh = fetched.contains(&remote.url);
+                            git::pin(&mirror, &remote.url, ver.as_deref(), fresh).map_err(wrap)?
+                        }
+                    };
+                    git_package(state, argv, &remote, &mirror, &commit).map_err(wrap)?
+                }
+            },
+        };
         let id = &item.plugin.id;
         if plan.catalog.iter().any(|entry| entry.plugin.id == *id) {
             return Err(format!(
                 "plugin line {}: id {id} is already in use; add id=NAME",
-                argv[0]
+                git::redact(&argv[0])
             )
             .into());
         }

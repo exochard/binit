@@ -1215,6 +1215,9 @@ impl Home {
     // Runs an interactive shell that reads input as it would at a prompt.
     // A pipe keeps forked children from moving the shell's input offset.
     fn shell(&self, lines: &str, input: &str) -> Output {
+        self.shell_env(lines, input, &[])
+    }
+    fn shell_env(&self, lines: &str, input: &str, envs: &[(&str, &str)]) -> Output {
         use std::io::Write;
         use std::process::Stdio;
         let rc = self.f.write("rc", &self.rc(lines));
@@ -1229,6 +1232,7 @@ impl Home {
                     .stderr(Stdio::piped()),
             )
             .env("BINIT_TEST_RC", &rc)
+            .envs(envs.iter().copied())
             .spawn()
             .unwrap();
         child
@@ -1578,11 +1582,11 @@ fn invalid_lines_are_rejected_and_the_shell_continues() {
     let h = Home::new();
     let dir = h.src("ok", "init.sh", ":\n");
     let lines = format!(
-        "binit plugin relative/dir; echo \"s1:$?\"\nbinit plugin user/repo; echo \"s2:$?\"\nbinit plugin https://example.invalid/a/b; echo \"s3:$?\"\nbinit plugin {dir} bogus=1; echo \"s4:$?\"\nbinit plugin {dir} load=weird; echo \"s5:$?\"\nbinit plugin; echo \"s6:$?\"\nbinit plugin {dir} id=a id=b; echo \"s7:$?\"\nbinit plugin {dir} loose; echo \"s8:$?\"\nbinit plugin '~/x'; echo \"s9:$?\"\n"
+        "binit plugin ./relative/dir; echo \"s1:$?\"\nbinit plugin 'ext::sh -c id'; echo \"s2:$?\"\nbinit plugin http://example.invalid/a/b; echo \"s3:$?\"\nbinit plugin {dir} bogus=1; echo \"s4:$?\"\nbinit plugin {dir} load=weird; echo \"s5:$?\"\nbinit plugin; echo \"s6:$?\"\nbinit plugin {dir} id=a id=b; echo \"s7:$?\"\nbinit plugin {dir} loose; echo \"s8:$?\"\nbinit plugin '~/x'; echo \"s9:$?\"\nbinit plugin -evil/repo; echo \"s10:$?\"\nbinit plugin {dir} ver=v1; echo \"s11:$?\"\n"
     );
     let output = h.shell(&lines, "echo alive\n");
     let text = stdout(&output);
-    for n in 1..=9 {
+    for n in 1..=11 {
         assert!(
             text.contains(&format!("s{n}:2")),
             "{text}{}",
@@ -1592,10 +1596,16 @@ fn invalid_lines_are_rejected_and_the_shell_continues() {
     assert!(text.contains("alive"));
     let message = stderr(&output);
     assert!(
-        message.matches("Git sources are not supported yet").count() == 3,
+        message
+            .matches("the source must be an absolute path")
+            .count()
+            == 5,
         "{message}"
     );
-    assert!(message.contains("must be an absolute path"), "{message}");
+    assert!(
+        message.contains("ver applies to Git sources only"),
+        "{message}"
+    );
     assert!(message.contains("unknown key: bogus"), "{message}");
     assert!(!message.contains("changed since"), "{message}");
     assert!(!h.declared().exists());
@@ -1760,4 +1770,846 @@ fn sync_refuses_unsafe_or_malformed_declared_files() {
     symlink(&target, h.declared()).unwrap();
     assert!(!h.binit(&["sync"]).status.success());
     assert_eq!(h.current(), before);
+}
+
+// Git sources. Every repository is a local directory reached by a file:// URL.
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+struct Repo {
+    dir: PathBuf,
+}
+impl Repo {
+    fn new(h: &Home, name: &str, file: &str, body: &str) -> Self {
+        let dir = h.f.root().join("remotes").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        git_in(&dir, &["init", "-q", "-b", "main"]);
+        let repo = Self { dir };
+        repo.commit(file, body, "first");
+        repo
+    }
+    fn commit(&self, file: &str, body: &str, subject: &str) -> String {
+        let path = self.dir.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+        git_in(&self.dir, &["add", "-A"]);
+        git_in(&self.dir, &["commit", "-q", "-m", subject]);
+        self.head()
+    }
+    fn head(&self) -> String {
+        git_in(&self.dir, &["rev-parse", "HEAD"])
+    }
+    fn url(&self) -> String {
+        format!("file://{}", self.dir.display())
+    }
+}
+
+#[test]
+fn first_sync_pins_the_default_branch_and_the_shell_loads_the_snapshot() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let first = repo.head();
+    let lines = format!("binit plugin {}\n", repo.url());
+    let output = h.shell(&lines, "binit sync\n");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("Synced 1 plugin line"),
+        "{}",
+        stderr(&output)
+    );
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Source: {}", repo.url())), "{info}");
+    assert!(info.contains("Ver: default branch"), "{info}");
+    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    let mirrors: Vec<_> = fs::read_dir(h.f.state().join("sources"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        mirrors.len() == 1 && mirrors[0].ends_with("-plug"),
+        "{mirrors:?}"
+    );
+    // The upstream repository is gone; the snapshot still loads.
+    fs::remove_dir_all(&repo.dir).unwrap();
+    let output = h.shell(&lines, "echo \"v:$BINIT_GIT_V\"\n");
+    assert!(stdout(&output).contains("v:1"), "{}", stderr(&output));
+    let checkouts = fs::read_dir(h.f.state().join("tmp")).map(|d| d.count());
+    assert!(matches!(checkouts, Ok(0)), "{checkouts:?}");
+}
+
+#[test]
+fn sync_keeps_pins_while_update_check_previews_and_update_applies() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let first = repo.head();
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let pinned = h.current();
+    let second = repo.commit("init.bash", "BINIT_GIT_V=2\n", "second change");
+    repo.commit("init.bash", "BINIT_GIT_V=3\n", "third change");
+    let third = repo.head();
+    success(h.shell(&lines, "binit sync\n"));
+    assert_eq!(h.current(), pinned);
+    let preview = success(h.binit(&["update", "--check"]));
+    assert!(
+        preview.contains(&format!(
+            "plug  {} -> {}  (2 commits)",
+            &first[..12],
+            &third[..12]
+        )),
+        "{preview}"
+    );
+    assert!(
+        preview.contains("second change") && preview.contains("third change"),
+        "{preview}"
+    );
+    assert!(preview.contains(&second[..7]), "{preview}");
+    assert_eq!(h.current(), pinned);
+    let output = h.shell(&lines, "echo \"v:$BINIT_GIT_V\"\n");
+    assert!(stdout(&output).contains("v:1"));
+    let applied = success(h.binit(&["update", "plug"]));
+    assert!(applied.contains("plug  "), "{applied}");
+    assert_ne!(h.current(), pinned);
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {third}")), "{info}");
+    let output = h.shell(&lines, "echo \"v:$BINIT_GIT_V\"\n");
+    assert!(stdout(&output).contains("v:3"), "{}", stderr(&output));
+    let again = success(h.binit(&["update", "--check", "plug"]));
+    assert!(again.contains("plug  up to date"), "{again}");
+    let current = h.current();
+    success(h.binit(&["update"]));
+    assert_eq!(h.current(), current);
+}
+
+#[test]
+fn ver_selects_a_tag_and_a_full_commit_never_moves() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let first = repo.head();
+    git_in(&repo.dir, &["tag", "v1"]);
+    repo.commit("init.bash", "BINIT_GIT_V=2\n", "later");
+    let lines = format!(
+        "binit plugin {url} ver=v1\nbinit plugin {url} id=exact ver={first}\n",
+        url = repo.url()
+    );
+    let lines = lines.replacen("ver=v1", "id=tagged ver=v1", 1);
+    success(h.shell(&lines, "binit sync\n"));
+    for id in ["tagged", "exact"] {
+        let info = success(h.binit(&["inspect", id]));
+        assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    }
+    assert!(success(h.binit(&["inspect", "tagged"])).contains("Ver: v1"));
+    // A pinned commit needs no remote.
+    git_in(&repo.dir, &["tag", "-f", "v1"]);
+    let moved = repo.commit("init.bash", "BINIT_GIT_V=3\n", "third");
+    git_in(&repo.dir, &["tag", "-f", "v1", &moved]);
+    let hidden = h.f.root().join("remotes/hidden");
+    fs::rename(&repo.dir, &hidden).unwrap();
+    let output = h.binit(&["update", "--check", "exact"]);
+    assert!(
+        stdout(&output).contains("exact  pinned to commit"),
+        "{}",
+        stderr(&output)
+    );
+    fs::rename(&hidden, &repo.dir).unwrap();
+    let output = success(h.binit(&["update"]));
+    assert!(output.contains("exact  pinned to commit"), "{output}");
+    assert!(output.contains("tagged  "), "{output}");
+    let info = success(h.binit(&["inspect", "tagged"]));
+    assert!(info.contains(&format!("Commit: {moved}")), "{info}");
+    let info = success(h.binit(&["inspect", "exact"]));
+    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+}
+
+#[test]
+fn default_files_are_chosen_inside_a_git_checkout() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_OTHER=1\n");
+    repo.commit("plug.plugin.bash", "BINIT_GIT_PICK=1\n", "named entry");
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(
+        &lines,
+        "echo \"p:${BINIT_GIT_PICK-}:${BINIT_GIT_OTHER-}\"\n",
+    );
+    assert!(stdout(&output).contains("p:1:"), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("p:1:1"));
+}
+
+#[test]
+fn a_failing_fetch_leaves_the_generation_usable_with_a_clear_error() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let current = h.current();
+    fs::remove_dir_all(&repo.dir).unwrap();
+    let output = h.binit(&["update"]);
+    assert!(!output.status.success());
+    let message = stderr(&output);
+    assert!(
+        message.contains("plugin line file://") && message.contains("git fetch failed"),
+        "{message}"
+    );
+    assert_eq!(h.current(), current);
+    let output = h.shell(&lines, "echo \"v:$BINIT_GIT_V\"\n");
+    assert!(stdout(&output).contains("v:1"));
+    let output = h.binit(&["update", "--check"]);
+    assert!(!output.status.success());
+    assert_eq!(h.current(), current);
+}
+
+#[test]
+fn a_symlinked_selected_file_in_a_repository_is_rejected() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "real.bash", "BINIT_GIT_V=1\n");
+    symlink("real.bash", repo.dir.join("init.bash")).unwrap();
+    git_in(&repo.dir, &["add", "-A"]);
+    git_in(&repo.dir, &["commit", "-q", "-m", "link"]);
+    let lines = format!("binit plugin {}\n", repo.url());
+    let output = h.shell(&lines, "binit sync\necho \"status:$?\"\n");
+    assert!(stdout(&output).contains("status:1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("symlink in repository: init.bash"),
+        "{}",
+        stderr(&output)
+    );
+    failure(h.binit(&["inspect", "plug"]), "plugin not installed");
+    let leftovers = fs::read_dir(h.f.state().join("tmp")).map_or(0, |d| d.count());
+    assert_eq!(leftovers, 0);
+}
+
+#[test]
+fn startup_runs_no_git_and_loads_synced_git_plugins() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let marker = h.f.root().join("git-was-called");
+    let fake = h.f.write(
+        "fakebin/git",
+        &format!("#!/bin/sh\n: > '{}'\nexit 1\n", marker.display()),
+    );
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        fake.parent().unwrap().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let output = h.shell_env(&lines, "echo \"v:$BINIT_GIT_V\"\n", &[("PATH", &path)]);
+    assert!(stdout(&output).contains("v:1"), "{}", stderr(&output));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn update_resnapshots_a_local_line_plugin() {
+    let h = Home::new();
+    let dir = h.src("loc", "init.sh", "BINIT_LOCAL=1\n");
+    let lines = format!("binit plugin {dir}\n");
+    success(h.shell(&lines, "binit sync\n"));
+    fs::write(format!("{dir}/init.sh"), "BINIT_LOCAL=2\n").unwrap();
+    let output = h.shell(&lines, "echo \"l:$BINIT_LOCAL\"\n");
+    assert!(stdout(&output).contains("l:1"));
+    let output = success(h.binit(&["update", "loc"]));
+    assert!(output.contains("loc  re-snapshotted"), "{output}");
+    let output = h.shell(&lines, "echo \"l:$BINIT_LOCAL\"\n");
+    assert!(stdout(&output).contains("l:2"), "{}", stderr(&output));
+    failure(h.binit(&["update", "--check", "loc"]), "not a Git plugin");
+}
+
+// Findings from review of the Git sources.
+fn plugin_package(repo: &Repo, id: &str, body: &str) {
+    repo.commit(
+        "plugin.toml",
+        &format!("schema=1\nid='{id}'\nentry='plugin.bash'\nload='startup'\n"),
+        "manifest",
+    );
+    repo.commit("plugin.bash", body, "entry");
+}
+
+// Sends records to `binit declare` the way a shell does.
+fn declare_lines(h: &Home, lines: &[&[&str]]) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut bytes = Vec::new();
+    for line in lines {
+        bytes.extend(format!("{}\0", line.len()).bytes());
+        for argument in *line {
+            bytes.extend(argument.bytes());
+            bytes.push(0);
+        }
+    }
+    let mut command = Command::new(env!("CARGO_BIN_EXE_binit"));
+    command.arg("declare").stdin(Stdio::piped());
+    let mut child = h.isolate(&mut command).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(&bytes).unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn update_refuses_an_upstream_id_that_takes_over_another_plugin() {
+    let h = Home::new();
+    let alpha = Repo::new(&h, "alpha", "README", "a\n");
+    plugin_package(&alpha, "alpha", "BINIT_ALPHA=1\n");
+    let beta = Repo::new(&h, "beta", "README", "b\n");
+    plugin_package(&beta, "beta", "BINIT_BETA=1\n");
+    let lines = format!(
+        "binit plugin {}\nbinit plugin {}\n",
+        alpha.url(),
+        beta.url()
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let before = h.current();
+    alpha.commit(
+        "plugin.toml",
+        "schema=1\nid='beta'\nentry='plugin.bash'\nload='startup'\n",
+        "take over",
+    );
+    let output = h.binit(&["update"]);
+    assert!(!output.status.success());
+    let message = stderr(&output);
+    assert!(
+        message.contains("plugin id would change from alpha to beta"),
+        "{message}"
+    );
+    assert!(!stdout(&output).contains("->"), "{}", stdout(&output));
+    assert_eq!(h.current(), before);
+    let output = h.shell(&lines, "echo \"b:$BINIT_BETA\"\n");
+    assert!(stdout(&output).contains("b:1"), "{}", stderr(&output));
+}
+
+#[test]
+fn repository_attributes_and_user_filters_never_touch_snapshot_bytes() {
+    let h = Home::new();
+    let body = "BINIT_GIT_V=1 # $Id$\n";
+    let repo = Repo::new(&h, "plug", "init.bash", body);
+    repo.commit(
+        ".gitattributes",
+        "* filter=evil\n*.bash ident\n",
+        "attributes",
+    );
+    let marker = h.f.root().join("filter-ran");
+    let config = h.f.write(
+        "gitconfig",
+        &format!(
+            "[filter \"evil\"]\n\tsmudge = \"echo ran >> {m}; cat\"\n\tclean = cat\n\trequired = true\n",
+            m = marker.display()
+        ),
+    );
+    // The configuration really runs the filter for a normal checkout.
+    let probe = h.f.root().join("probe");
+    let output = Command::new("git")
+        .args(["clone", "-q", "--", &repo.url(), probe.to_str().unwrap()])
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(marker.exists());
+    assert_ne!(fs::read(probe.join("init.bash")).unwrap(), body.as_bytes());
+    fs::remove_file(&marker).unwrap();
+    let lines = format!("binit plugin {}\n", repo.url());
+    let output = h.shell_env(
+        &lines,
+        "binit sync\n",
+        &[
+            ("GIT_CONFIG_GLOBAL", config.to_str().unwrap()),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ],
+    );
+    assert!(stdout(&output).contains("Synced 1"), "{}", stderr(&output));
+    assert!(!marker.exists());
+    let stored = fs::read(
+        h.f.state()
+            .join("generations")
+            .join(h.current())
+            .join("plugins/plug/files/init.bash"),
+    )
+    .unwrap();
+    assert_eq!(stored, body.as_bytes());
+}
+
+#[test]
+fn leftover_staging_and_checkout_directories_are_removed_by_the_next_sync() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let state = h.f.state();
+    let stale = [
+        state.join("sources/.staging-12-345"),
+        state.join("tmp/checkout-12-345"),
+    ];
+    for dir in &stale {
+        fs::create_dir_all(dir.join("inner")).unwrap();
+    }
+    let keep = [
+        state.join("sources/.staging-keep"),
+        state.join("tmp/checkout-12-345-6"),
+        state.join("tmp/other"),
+    ];
+    for dir in &keep {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let elsewhere = h.f.root().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    symlink(&elsewhere, state.join("sources/.staging-7-8")).unwrap();
+    success(h.shell(&lines, "binit sync\n"));
+    for dir in &stale {
+        assert!(!dir.exists(), "{}", dir.display());
+    }
+    for dir in &keep {
+        assert!(dir.exists(), "{}", dir.display());
+    }
+    assert!(elsewhere.exists());
+    assert!(fs::symlink_metadata(state.join("sources/.staging-7-8")).is_ok());
+    success(h.binit(&["update", "--check"]));
+}
+
+#[test]
+fn editing_other_keys_of_a_synced_line_keeps_its_commit() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let first = repo.head();
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    repo.commit("init.bash", "BINIT_GIT_V=2\n", "newer");
+    let edited = format!("binit plugin {} load=prompt\n", repo.url());
+    success(h.shell(&edited, "binit sync\n"));
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains("Load: prompt"), "{info}");
+    // The mirror may even be gone; the pin is kept and re-snapshotted.
+    for entry in fs::read_dir(h.f.state().join("sources")).unwrap() {
+        fs::remove_dir_all(entry.unwrap().path()).unwrap();
+    }
+    let again = format!("binit plugin {} load=startup\n", repo.url());
+    success(h.shell(&again, "binit sync\n"));
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+}
+
+#[test]
+fn urls_with_a_password_or_token_are_rejected_by_the_shell_and_the_manager() {
+    let h = Home::new();
+    let token = "https://user:hunter2@example.invalid/a/b";
+    let output = h.shell(
+        &format!("binit plugin {token}; echo \"s:$?\"\n"),
+        "echo alive\n",
+    );
+    assert!(stdout(&output).contains("s:2"), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("hunter2"), "{}", stderr(&output));
+    assert!(stderr(&output).contains("credential helper"));
+    assert!(!h.declared().exists());
+    declare_lines(&h, &[&[token]]);
+    let output = h.binit(&["sync"]);
+    assert!(!output.status.success());
+    assert!(!stderr(&output).contains("hunter2"), "{}", stderr(&output));
+    assert!(stderr(&output).contains("credential helper"));
+    assert!(!h.f.state().join("sources").exists());
+}
+
+#[test]
+fn a_full_commit_line_updates_without_the_remote() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let first = repo.head();
+    let lines = format!("binit plugin {} ver={first}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let before = h.current();
+    fs::remove_dir_all(&repo.dir).unwrap();
+    for args in [&["update"][..], &["update", "plug"], &["update", "--check"]] {
+        let output = success(h.binit(args));
+        assert!(output.contains("plug  pinned to commit"), "{output}");
+    }
+    assert_eq!(h.current(), before);
+}
+
+#[test]
+fn a_commit_that_is_on_no_branch_or_tag_is_rejected() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let tree = git_in(&repo.dir, &["rev-parse", "HEAD^{tree}"]);
+    let hidden = git_in(
+        &repo.dir,
+        &["commit-tree", &tree, "-p", "HEAD", "-m", "hidden"],
+    );
+    git_in(&repo.dir, &["update-ref", "refs/hidden/x", &hidden]);
+    let lines = format!("binit plugin {} ver={hidden}\n", repo.url());
+    let output = h.shell(&lines, "binit sync\necho \"status:$?\"\n");
+    assert!(stdout(&output).contains("status:1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("commit is not on any branch or tag of the remote"),
+        "{}",
+        stderr(&output)
+    );
+    failure(h.binit(&["inspect", "plug"]), "plugin not installed");
+    // The same commit is fine once a branch contains it.
+    git_in(&repo.dir, &["branch", "kept", &hidden]);
+    let output = h.shell(&lines, "binit sync\n");
+    assert!(stdout(&output).contains("Synced 1"), "{}", stderr(&output));
+}
+
+#[test]
+fn bad_keys_fail_before_any_clone() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let lines = format!("binit plugin {} files=../x\n", repo.url());
+    let output = h.shell(&lines, "binit sync\necho \"status:$?\"\n");
+    assert!(stdout(&output).contains("status:1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("invalid declared file"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!h.f.state().join("sources").exists());
+}
+
+#[test]
+fn a_failing_plugin_prints_no_moves() {
+    let h = Home::new();
+    let good = Repo::new(&h, "good", "init.bash", "BINIT_GOOD=1\n");
+    let bad = Repo::new(&h, "bad", "init.bash", "BINIT_BAD=1\n");
+    let lines = format!("binit plugin {}\nbinit plugin {}\n", good.url(), bad.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let before = h.current();
+    good.commit("init.bash", "BINIT_GOOD=2\n", "good moves");
+    fs::remove_file(bad.dir.join("init.bash")).unwrap();
+    symlink("/etc/hostname", bad.dir.join("init.bash")).unwrap();
+    git_in(&bad.dir, &["add", "-A"]);
+    git_in(&bad.dir, &["commit", "-q", "-m", "link"]);
+    let output = h.binit(&["update"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("symlink in repository"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("->"), "{}", stdout(&output));
+    assert_eq!(h.current(), before);
+}
+
+#[test]
+fn package_mode_rejects_a_symlink_anywhere_in_the_repository() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "README", "r\n");
+    plugin_package(&repo, "plug", "BINIT_GIT_V=1\n");
+    symlink("README", repo.dir.join("docs-link")).unwrap();
+    git_in(&repo.dir, &["add", "-A"]);
+    git_in(&repo.dir, &["commit", "-q", "-m", "link"]);
+    let lines = format!("binit plugin {}\n", repo.url());
+    let output = h.shell(&lines, "binit sync\necho \"status:$?\"\n");
+    assert!(stdout(&output).contains("status:1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("symlink in repository: docs-link"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn update_with_two_arguments_is_a_path_only_when_the_second_is_not_installed() {
+    let h = Home::new();
+    h.f.plugin("cat", "load='startup'", "X=1\n");
+    let dir = h.f.root().join("cat");
+    success(h.binit(&["add", dir.to_str().unwrap()]));
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let before = h.current();
+    failure(h.binit(&["update", "cat", "plug"]), "catalog plugin");
+    assert_eq!(h.current(), before);
+    h.f.write("cat/plugin.bash", "X=2\n");
+    success(h.binit(&["update", "cat", dir.to_str().unwrap()]));
+    assert_ne!(h.current(), before);
+}
+
+// Keep one source table for both checks: the Rust unit test reads it too.
+#[test]
+fn the_shell_and_the_manager_accept_the_same_sources() {
+    let table =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/git.rs")).unwrap();
+    let body = table
+        .split("// SOURCE-TABLE-BEGIN")
+        .nth(1)
+        .and_then(|rest| rest.split("// SOURCE-TABLE-END").next())
+        .unwrap();
+    let mut cases = Vec::new();
+    for line in body.lines().map(str::trim) {
+        let Some(entry) = line.strip_prefix("(\"").and_then(|l| l.strip_suffix("),")) else {
+            continue;
+        };
+        let (source, accepted) = entry.rsplit_once("\", ").unwrap();
+        cases.push((source.to_owned(), accepted == "true"));
+    }
+    assert!(cases.len() > 40, "{}", cases.len());
+    let h = Home::new();
+    let mut script = String::new();
+    for (index, (source, _)) in cases.iter().enumerate() {
+        script.push_str(&format!(
+            "binit plugin {} 2>/dev/null; echo \"r{index}:$?\"\n",
+            sh_quote(source)
+        ));
+    }
+    let output = h.shell(&script, "");
+    let text = stdout(&output);
+    for (index, (source, accepted)) in cases.iter().enumerate() {
+        let want = if *accepted { 0 } else { 2 };
+        assert!(
+            text.lines().any(|line| line == format!("r{index}:{want}")),
+            "{source:?} should be {} by the shell\n{text}",
+            if *accepted { "accepted" } else { "rejected" }
+        );
+    }
+}
+
+#[test]
+fn https_userinfo_is_rejected_without_echoing_it_and_ssh_users_stay() {
+    let h = Home::new();
+    let token = "https://ghp_abcdef@example.invalid/a/b";
+    let output = h.shell(
+        &format!("binit plugin {token}; echo \"s:$?\"\nbinit plugin http://alice:pw0rd@h/a/b; echo \"t:$?\"\n"),
+        "echo alive\n",
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("s:2") && text.contains("t:2"),
+        "{}",
+        stderr(&output)
+    );
+    let errors = stderr(&output);
+    assert!(errors.contains("credential helper"), "{errors}");
+    assert!(
+        !errors.contains("ghp_abcdef") && !errors.contains("pw0rd"),
+        "{errors}"
+    );
+    assert!(!h.declared().exists());
+    declare_lines(&h, &[&[token]]);
+    let output = h.binit(&["sync"]);
+    assert!(!output.status.success());
+    let errors = stderr(&output);
+    assert!(errors.contains("credential helper"), "{errors}");
+    assert!(!errors.contains("ghp_abcdef"), "{errors}");
+    assert!(!h.f.state().join("sources").exists());
+    declare_lines(&h, &[&["http://alice:pw0rd@h/a/b"]]);
+    let output = h.binit(&["sync"]);
+    assert!(!stderr(&output).contains("pw0rd"), "{}", stderr(&output));
+}
+
+#[test]
+fn non_ascii_whitespace_is_rejected_by_the_shell_and_the_manager() {
+    let h = Home::new();
+    let mut script = String::new();
+    let sources = [
+        "user/re\u{a0}po",
+        "u@host:pa\u{a0}th",
+        "https://h/a\u{2028}b",
+    ];
+    for (index, source) in sources.iter().enumerate() {
+        script.push_str(&format!(
+            "binit plugin {} 2>/dev/null; echo \"r{index}:$?\"\n",
+            sh_quote(source)
+        ));
+    }
+    let text = stdout(&h.shell(&script, ""));
+    for index in 0..sources.len() {
+        assert!(text.lines().any(|l| l == format!("r{index}:2")), "{text}");
+    }
+    for source in sources {
+        declare_lines(&h, &[&[source]]);
+        let output = h.binit(&["sync"]);
+        assert!(!output.status.success(), "{source:?}");
+        assert!(!h.f.state().join("sources").exists());
+    }
+}
+
+#[test]
+fn a_repository_name_that_is_not_an_id_fails_before_cloning() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "repo.js", "init.bash", "BINIT_GIT_V=1\n");
+    let lines = format!("binit plugin {} files=init.bash\n", repo.url());
+    let output = h.shell(&lines, "binit sync\necho \"status:$?\"\n");
+    assert!(stdout(&output).contains("status:1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("add id=NAME"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!h.f.state().join("sources").exists());
+}
+
+#[test]
+fn a_failed_publish_after_update_prints_no_moves() {
+    let h = Home::new();
+    let one = Repo::new(&h, "one", "README", "r\n");
+    plugin_package(&one, "one", "BINIT_ONE=1\n");
+    let other = Repo::new(&h, "other", "README", "r\n");
+    other.commit(
+        "plugin.toml",
+        "schema=1\nid='other'\nentry='plugin.bash'\nload='command'\ncommands=['dup']\n",
+        "manifest",
+    );
+    other.commit("plugin.bash", ":\n", "entry");
+    let lines = format!("binit plugin {}\nbinit plugin {}\n", one.url(), other.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let before = h.current();
+    one.commit(
+        "plugin.toml",
+        "schema=1\nid='one'\nentry='plugin.bash'\nload='command'\ncommands=['dup']\n",
+        "takes dup",
+    );
+    let output = h.binit(&["update"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("duplicate command trigger"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!stdout(&output).contains("->"), "{}", stdout(&output));
+    assert_eq!(h.current(), before);
+}
+
+#[test]
+fn a_dangling_remote_head_only_breaks_lines_without_ver() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    git_in(&repo.dir, &["tag", "v1"]);
+    git_in(&repo.dir, &["symbolic-ref", "HEAD", "refs/heads/gone"]);
+    let lines = format!("binit plugin {} ver=v1\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let first = git_in(&repo.dir, &["rev-parse", "v1^{commit}"]);
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    let next = git_in(
+        &repo.dir,
+        &["commit-tree", "main^{tree}", "-p", "main", "-m", "next"],
+    );
+    git_in(&repo.dir, &["update-ref", "refs/heads/main", &next]);
+    git_in(&repo.dir, &["tag", "-f", "v1", &next]);
+    success(h.binit(&["update", "plug"]));
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {next}")), "{info}");
+    let before = h.current();
+    declare_lines(&h, &[&[&repo.url()]]);
+    failure(
+        h.binit(&["sync"]),
+        "the remote has no default branch; set ver=",
+    );
+    assert_eq!(h.current(), before);
+}
+
+#[test]
+fn a_new_id_resolves_fresh_and_never_borrows_a_pin_from_the_same_repository() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let first = repo.head();
+    let line = |id: &str| {
+        format!(
+            "binit plugin {} id={id} files=init.bash ver=main\n",
+            repo.url()
+        )
+    };
+    success(h.shell(&(line("a") + &line("b")), "binit sync\n"));
+    let second = repo.commit("init.bash", "BINIT_GIT_V=2\n", "second");
+    success(h.binit(&["update", "a"]));
+    let third = repo.commit("init.bash", "BINIT_GIT_V=3\n", "third");
+    success(h.shell(&(line("c") + &line("b")), "binit sync\n"));
+    let c = success(h.binit(&["inspect", "c"]));
+    let b = success(h.binit(&["inspect", "b"]));
+    assert!(c.contains(&format!("Commit: {third}")), "{c}");
+    assert!(b.contains(&format!("Commit: {first}")), "{b}");
+    assert_ne!(second, third);
+}
+
+#[test]
+fn only_a_different_ver_or_id_resolves_again_while_other_keys_keep_the_pin() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let first = repo.head();
+    let line = |extra: &str| format!("binit plugin {} files=init.bash{extra}\n", repo.url());
+    success(h.shell(&line(&format!(" ver={first}")), "binit sync\n"));
+    let second = repo.commit("init.bash", "BINIT_GIT_V=2\n", "second");
+    // Other keys change freely and keep the pin.
+    success(h.shell(&line(&format!(" ver={first} load=prompt")), "binit sync\n"));
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains("Load: prompt"), "{info}");
+    // Removing ver= is a different ver: the current commit is resolved.
+    success(h.shell(&line(""), "binit sync\n"));
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {second}")), "{info}");
+    // A branch pin stays while an unrelated key changes.
+    let third = repo.commit("init.bash", "BINIT_GIT_V=3\n", "third");
+    success(h.shell(&line(" load=startup"), "binit sync\n"));
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {second}")), "{info}");
+    success(h.binit(&["update", "plug"]));
+    let info = success(h.binit(&["inspect", "plug"]));
+    assert!(info.contains(&format!("Commit: {third}")), "{info}");
+}
+
+#[test]
+fn spelling_the_same_source_differently_keeps_the_pin_without_the_remote() {
+    for suffix in ["/", ".git", ".git/"] {
+        let h = Home::new();
+        let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+        let first = repo.head();
+        let line = |url: &str| format!("binit plugin {url} files=init.bash\n");
+        success(h.shell(&line(&repo.url()), "binit sync\n"));
+        repo.commit("init.bash", "BINIT_GIT_V=2\n", "second");
+        let respelled = format!("{}{suffix}", repo.url());
+        success(h.shell(&line(&respelled), "binit sync\n"));
+        let info = success(h.binit(&["inspect", "plug"]));
+        assert!(
+            info.contains(&format!("Commit: {first}")),
+            "{suffix} {info}"
+        );
+    }
+}
+
+#[test]
+fn rejected_sources_with_credentials_are_never_echoed() {
+    let sources = [
+        "oauth2:glpat-SECRET@gitlab.com:o/r.git",
+        "x:SECRET@host:path",
+        "https:/u:SECRET@h/x",
+        "https://u:SECRET@h/x",
+        "ssh://ghp_SECRET@h/x",
+        "ghp_SECRET@github.com:o/r",
+    ];
+    let fixed = "binit: plugin line rejected: a source with credentials is not allowed; use a Git credential helper or an SSH key";
+    for source in sources {
+        let h = Home::new();
+        let output = h.shell(
+            &format!("binit plugin {}\n", sh_quote(source)),
+            "echo alive\n",
+        );
+        let all = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(!all.contains("SECRET"), "{source}: {all}");
+        assert!(stderr(&output).contains(fixed), "{source}: {all}");
+        declare_lines(&h, &[&[source]]);
+        let output = h.binit(&["sync"]);
+        assert!(!output.status.success(), "{source}");
+        let all = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(!all.contains("SECRET"), "{source}: {all}");
+        assert!(stderr(&output).contains(fixed), "{source}: {all}");
+        assert!(!h.f.state().join("sources").exists());
+    }
 }

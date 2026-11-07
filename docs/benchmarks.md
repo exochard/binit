@@ -187,3 +187,22 @@ patches and plans in `engines/bash/experiments/`. It checks the authenticated
 base and the complete patched tree, then marks the result as an experiment.
 These builds cannot qualify for release. The default source lock, compiler
 training and validation counts remain unchanged.
+
+## Arithmetic parser follow-up
+
+The [arithmetic experiments](arithmetic-scan-experiment.md) tested two
+independent changes. A byte scan missed the 0.98 screen. Recognizing
+in-range decimal arithmetic leaves before parser-context allocation passed
+O2 screening and confirmation, then separate O3 PGO screening and confirmation.
+The PGO incremental ratios were 0.9654 and 0.9634 in two seven-pair runs
+against unmodified PGO. Both runs improved six families without a repeatable
+regression above 5%.
+
+These measurements describe the fixed suite on a shared host with a
+background inference process. They do not establish an idle-host result or
+a gain for arbitrary scripts. The combined build remained about 15% below
+the O2 reference's elapsed time and missed the 25% target. Both full upstream
+runs retain the same three baseline difference groups, so compatibility
+also remains open. The [receipt](../benchmarks/results/arithmetic-trials-x86_64.json)
+contains paired samples, build provenance and semantic checks. The default
+PGO recipe and full release procedure remain unchanged.

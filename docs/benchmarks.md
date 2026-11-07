@@ -31,6 +31,11 @@ source version and configure options, including `--without-bash-malloc`.
 Neither is installed. Profiles come from `engines/bash/train.bash`, which
 does not run validation scripts.
 
+The [frozen local recipe](stability.md) rebuilds and verifies the retained
+patched engine. Its builds remain experimental; build verification grants
+no release qualification. The measurement and scoring procedure below is
+unchanged, including its provenance requirements.
+
 Use a separate name to compare compiler variants without replacing an
 existing build:
 

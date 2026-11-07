@@ -5,6 +5,9 @@ Manage Bash plugins and complete commands in a navigable menu. Binit keeps revie
 The 0.1 release is in development. Current functionality and the remaining
 gates are described separately in the [release requirements](docs/release-0.1.md).
 
+The [local checkpoint](docs/stability.md) records the frozen optional Bash
+engine recipe, verification commands and compatibility disposition.
+
 ## Try it
 
 Source builds require Linux, Rust and Cargo, a C compiler, and Bash/Readline

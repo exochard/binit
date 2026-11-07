@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "name": "retained",
+  "state": "local-checkpoint",
+  "release_qualified": false,
+  "experiment": "arithmetic-borrow",
+  "compiler_kind": "pgo",
+  "compiler_flags": "-O3 -g -flto=2",
+  "configure": [
+    "--without-bash-malloc"
+  ],
+  "source_lock_sha256": "510cac4e2b77ce720f69119c01621062b68d131bfa405f9234d33bc7c8da008e",
+  "base_source_tree_sha256": "84b7cec5bc059e07494de3aaebcf648824116aba8a9fedf73d0e94fbb8f5d8b1",
+  "source_tree_sha256": "af1f38e27783c49a557cf2fd495c6d255a689332a856c2471e6cb7d42c139bc2",
+  "plan_sha256": "4b1cf53c05e3c5c8ac971b0ab4e19640ef9d23c363d2ee55e6bf1215d72c6843",
+  "patch_sha256": "f091162608afadd2f19fbc7b6fccc93c84aaa30e54259f7032ccbf4ac8521f6c",
+  "builder_sha256": "bdd6216ef22168a8cc7999f60006a266b73622a60eb45e1f42a08992747865f4",
+  "training_sha256": "0f2b6fe14e5174f95a0fcffb1fa235b352ea1f017d42c033c6326fe1db75c874",
+  "linked_libraries": {},
+  "engine_builder_sha256": "192aa79eea2a7c9c18a791845a7cb037d4dcd5435cb56c8ce092aa730f134661",
+  "recipe_driver_sha256": "a1c3385dd46c1e59095cd9e4cf707bf90ffaab7f9a640b1470bcb9a4e5497311"
+}

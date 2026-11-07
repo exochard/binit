@@ -1166,3 +1166,598 @@ tool
         "base:dependent"
     );
 }
+
+// Plugin lines in a startup file. Every command here runs with HOME,
+// XDG_DATA_HOME and BINIT_STATE inside the fixture.
+struct Home {
+    f: Fixture,
+}
+fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+impl Home {
+    fn new() -> Self {
+        let home = Self { f: Fixture::new() };
+        fs::create_dir_all(home.f.root().join("home")).unwrap();
+        fs::create_dir_all(home.f.root().join("xdg")).unwrap();
+        home
+    }
+    fn isolate<'a>(&self, command: &'a mut Command) -> &'a mut Command {
+        command
+            .env("HOME", self.f.root().join("home"))
+            .env("XDG_DATA_HOME", self.f.root().join("xdg"))
+            .env("BINIT_STATE", self.f.state())
+            .env("TERM", "dumb")
+            .env_remove("BASH_ENV")
+            .env_remove("ENV")
+            .current_dir(self.f.root())
+    }
+    fn binit(&self, args: &[&str]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_binit"));
+        command.args(args);
+        self.isolate(&mut command).output().unwrap()
+    }
+    fn src(&self, name: &str, file: &str, body: &str) -> String {
+        self.f
+            .write(&format!("src/{name}/{file}"), body)
+            .parent()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+    fn rc(&self, lines: &str) -> String {
+        format!(
+            "eval \"$({} init)\"\n{lines}",
+            sh_quote(env!("CARGO_BIN_EXE_binit"))
+        )
+    }
+    // Runs an interactive shell that reads input as it would at a prompt.
+    // A pipe keeps forked children from moving the shell's input offset.
+    fn shell(&self, lines: &str, input: &str) -> Output {
+        use std::io::Write;
+        use std::process::Stdio;
+        let rc = self.f.write("rc", &self.rc(lines));
+        let mut child = self
+            .isolate(
+                Command::new("bash")
+                    .args(["--noprofile", "--rcfile"])
+                    .arg(&rc)
+                    .arg("-i")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped()),
+            )
+            .env("BINIT_TEST_RC", &rc)
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+    fn declared(&self) -> PathBuf {
+        self.f.state().join("declared")
+    }
+    fn current(&self) -> String {
+        fs::read_to_string(self.f.state().join("current")).unwrap()
+    }
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+const NOTICE: &str = "changed since the last sync; run binit sync";
+
+#[test]
+fn default_state_follows_binit_state_then_xdg_then_home() {
+    let h = Home::new();
+    let root = h.f.root();
+    let run = |envs: &[(&str, Option<&str>)], args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_binit"));
+        command
+            .args(args)
+            .env("HOME", root.join("home"))
+            .env("XDG_DATA_HOME", root.join("xdg"))
+            .env_remove("BINIT_STATE");
+        for (name, value) in envs {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        command.output().unwrap()
+    };
+    let explicit = root.join("explicit");
+    success(run(&[("BINIT_STATE", explicit.to_str())], &["init"]));
+    assert!(explicit.join("current").is_file());
+    success(run(&[], &["init"]));
+    assert!(root.join("xdg/binit/current").is_file());
+    success(run(&[("XDG_DATA_HOME", None)], &["init"]));
+    assert!(root.join("home/.local/share/binit/current").is_file());
+    // A relative XDG_DATA_HOME is ignored.
+    let other = root.join("other");
+    success(run(
+        &[
+            ("XDG_DATA_HOME", Some("relative")),
+            ("HOME", other.to_str()),
+        ],
+        &["init"],
+    ));
+    assert!(other.join(".local/share/binit/current").is_file());
+    assert!(!root.join("relative").exists());
+    // --state wins over the environment.
+    let flag = root.join("flag");
+    success(run(
+        &[("BINIT_STATE", explicit.to_str())],
+        &["plugins", "--state", flag.to_str().unwrap()],
+    ));
+    failure(
+        run(&[("BINIT_STATE", Some("relative"))], &["plugins"]),
+        "BINIT_STATE must be an absolute path",
+    );
+    failure(
+        run(
+            &[("XDG_DATA_HOME", None), ("HOME", Some("relative"))],
+            &["plugins"],
+        ),
+        "HOME must be an absolute path",
+    );
+    assert!(!Path::new("relative").exists());
+}
+
+#[test]
+fn init_publishes_an_empty_generation_only_when_none_exists() {
+    let h = Home::new();
+    let first = success(h.binit(&["init"]));
+    assert!(first.starts_with("source '"), "{first}");
+    let generation = h.current();
+    assert!(fs::metadata(h.f.state()).unwrap().permissions().mode() & 0o077 == 0);
+    assert_eq!(success(h.binit(&["plugins"])), "No plugins installed\n");
+    assert_eq!(success(h.binit(&["init"])), first);
+    assert_eq!(h.current(), generation);
+    assert!(!h.f.state().join("previous").exists());
+    // The printed line sources into a working shell.
+    let output = h.shell("", "declare -F binit >/dev/null && echo ready\n");
+    assert!(stdout(&output).contains("ready"), "{}", stderr(&output));
+    assert!(!stderr(&output).contains("binit:"), "{}", stderr(&output));
+}
+
+#[test]
+fn lines_wait_for_sync_then_load_in_the_next_shell() {
+    let h = Home::new();
+    let hello = h.src("hello", "hello.plugin.bash", "BINIT_HELLO=loaded\n");
+    let tool = h.src(
+        "tool",
+        "tool.sh",
+        "tool() { printf 'tool-ran:%s\\n' \"$*\"; }\n",
+    );
+    h.src("tool", "comp.bash", ":\n");
+    let thing = h.src("thing", "init.sh", "BINIT_THING=at-prompt\n");
+    let lines = format!(
+        "binit plugin {hello}\nbinit plugin {tool} files=tool.sh,comp.bash load=command commands=tool\nbinit plugin {thing} id=thing requires=bash load=prompt\nprintf 'rc:%s\\n' \"${{BINIT_THING-unset}}\"\n"
+    );
+    let probe = "printf 'hello:%s thing:%s\\n' \"${BINIT_HELLO-unset}\" \"${BINIT_THING-unset}\"\n";
+    let before = h.shell(&lines, probe);
+    assert!(
+        stdout(&before).contains("hello:unset thing:unset"),
+        "{}",
+        stderr(&before)
+    );
+    assert!(
+        stderr(&before).contains(&format!("binit: 3 plugin lines {NOTICE}")),
+        "{}",
+        stderr(&before)
+    );
+    let mut expected = Vec::new();
+    for argv in [
+        vec![hello.as_str()],
+        vec![
+            tool.as_str(),
+            "files=tool.sh,comp.bash",
+            "load=command",
+            "commands=tool",
+        ],
+        vec![thing.as_str(), "id=thing", "requires=bash", "load=prompt"],
+    ] {
+        expected.extend_from_slice(format!("{}\0", argv.len()).as_bytes());
+        for argument in argv {
+            expected.extend_from_slice(format!("{argument}\0").as_bytes());
+        }
+    }
+    assert_eq!(fs::read(h.declared()).unwrap(), expected);
+    assert_eq!(
+        fs::metadata(h.declared()).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let synced = h.shell(&lines, "binit sync\n");
+    let text = stdout(&synced);
+    assert!(
+        text.contains("Synced 3 plugin lines"),
+        "{text}{}",
+        stderr(&synced)
+    );
+    assert!(text.contains("Open a new shell to use it"), "{text}");
+    // The file was just written from this shell, so it need not be rewritten.
+    fs::remove_file(h.declared()).unwrap();
+
+    let after = h.shell(
+        &lines,
+        &format!("{probe}tool a b\nprintf 'again:%s\\n' \"$BINIT_HELLO\"\nbinit profile\n"),
+    );
+    let text = stdout(&after);
+    assert!(text.contains("rc:unset"), "{text}");
+    assert!(
+        text.contains("hello:loaded thing:at-prompt"),
+        "{text}{}",
+        stderr(&after)
+    );
+    assert!(text.contains("tool-ran:a b"), "{text}");
+    for (id, state) in [("hello", "loaded"), ("thing", "loaded"), ("tool", "loaded")] {
+        assert!(
+            text.lines()
+                .any(|l| l.split_whitespace().take(2).eq([id, state])),
+            "{id}: {text}"
+        );
+    }
+    assert!(!stderr(&after).contains(NOTICE), "{}", stderr(&after));
+    assert!(!h.declared().exists());
+}
+
+#[test]
+fn command_and_completion_lines_install_stubs_without_loading() {
+    let h = Home::new();
+    let tool = h.src(
+        "tool",
+        "init.sh",
+        "BINIT_TOOL_LOADED=1\ntool() { echo real; }\n",
+    );
+    let comp = h.src(
+        "comp",
+        "comp.bash",
+        "BINIT_COMP_LOADED=1\n_comp() { COMPREPLY=(done); }\ncomplete -F _comp comp\n",
+    );
+    let lines = format!(
+        "binit plugin {tool} load=command commands=tool\nbinit plugin {comp} load=completion completions=comp\n"
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(
+        &lines,
+        "declare -F tool >/dev/null && echo stub\ncomplete -p comp\necho \"loaded:${BINIT_TOOL_LOADED-no}${BINIT_COMP_LOADED-no}\"\ntool\necho \"after:${BINIT_TOOL_LOADED-no}\"\n",
+    );
+    let text = stdout(&output);
+    assert!(text.contains("stub"), "{text}{}", stderr(&output));
+    assert!(text.contains("complete -F __binit_complete comp"), "{text}");
+    assert!(text.contains("loaded:nono"), "{text}");
+    assert!(text.contains("real") && text.contains("after:1"), "{text}");
+}
+
+#[test]
+fn existing_definitions_still_win_over_plugin_lines() {
+    let h = Home::new();
+    let tool = h.src("tool", "init.sh", "BINIT_TOOL_LOADED=1\n");
+    let lines = format!("binit plugin {tool} load=command commands=tool\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(
+        &format!("tool() {{ echo mine; }}\n{lines}"),
+        "tool\nbinit profile\n",
+    );
+    let text = stdout(&output);
+    assert!(text.contains("mine"), "{text}");
+    assert!(text.contains("command already defined: tool"), "{text}");
+}
+
+#[test]
+fn removed_lines_become_undeclared_and_dependants_unavailable() {
+    let h = Home::new();
+    let base = h.src("base", "init.sh", "BINIT_BASE=1\n");
+    let child = h.src("child", "init.sh", "BINIT_CHILD=1\n");
+    let both = format!("binit plugin {base}\nbinit plugin {child} depends=base\n");
+    success(h.shell(&both, "binit sync\n"));
+    let output = h.shell(
+        &format!("binit plugin {child} depends=base\n"),
+        "echo \"vars:${BINIT_BASE-unset}${BINIT_CHILD-unset}\"\nbinit profile\n",
+    );
+    let text = stdout(&output);
+    assert!(text.contains("vars:unsetunset"), "{text}");
+    assert!(
+        stderr(&output).contains(&format!("binit: 1 plugin line {NOTICE}")),
+        "{}",
+        stderr(&output)
+    );
+    let row = |id: &str| text.lines().find(|l| l.starts_with(id)).unwrap().to_owned();
+    assert!(row("base").contains("undeclared"), "{text}");
+    assert!(
+        row("child").contains("unavailable")
+            && row("child").contains("dependency unavailable: base"),
+        "{text}"
+    );
+    // The shell's own list replaced the stored one.
+    assert_eq!(
+        fs::read(h.declared()).unwrap(),
+        format!("2\0{child}\0depends=base\0").into_bytes()
+    );
+}
+
+#[test]
+fn a_dependency_must_be_declared_before_its_dependant() {
+    let h = Home::new();
+    let base = h.src("base", "init.sh", "BINIT_BASE=1\n");
+    let child = h.src("child", "init.sh", "BINIT_CHILD=1\n");
+    let lines = format!("binit plugin {base}\nbinit plugin {child} depends=base\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(
+        &lines,
+        "echo \"vars:${BINIT_BASE-unset}${BINIT_CHILD-unset}\"\n",
+    );
+    assert!(stdout(&output).contains("vars:11"), "{}", stderr(&output));
+    let reversed = format!("binit plugin {child} depends=base\nbinit plugin {base}\n");
+    let output = h.shell(&reversed, "binit profile\n");
+    let text = stdout(&output);
+    let child_row = text.lines().find(|l| l.starts_with("child")).unwrap();
+    assert!(child_row.contains("unavailable"), "{text}");
+}
+
+#[test]
+fn changed_keys_are_reported_and_do_not_activate_the_old_plugin() {
+    let h = Home::new();
+    let one = h.src("one", "init.sh", "BINIT_ONE=1\n");
+    success(h.shell(&format!("binit plugin {one}\n"), "binit sync\n"));
+    let output = h.shell(
+        &format!("binit plugin {one} load=prompt\n"),
+        "echo \"one:${BINIT_ONE-unset}\"\n",
+    );
+    assert!(stdout(&output).contains("one:unset"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(&format!("binit: 1 plugin line {NOTICE}")),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn default_files_are_chosen_in_order_and_failure_names_the_candidates() {
+    let h = Home::new();
+    let pick = h.src("pick", "init.sh", "BINIT_PICK=init.sh\n");
+    h.src("pick", "pick.bash", "BINIT_PICK=pick.bash\n");
+    h.src("pick", "init.bash", "BINIT_PICK=init.bash\n");
+    let lines = format!("binit plugin {pick}\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(&lines, "echo \"pick:$BINIT_PICK\"\n");
+    assert!(
+        stdout(&output).contains("pick:pick.bash"),
+        "{}",
+        stderr(&output)
+    );
+    let previous = h.current();
+
+    let empty = h.src("empty", "README", "nothing\n");
+    let output = h.shell(&format!("{lines}binit plugin {empty}\n"), "binit sync\n");
+    let message = stderr(&output);
+    for candidate in [
+        "empty.plugin.bash",
+        "empty.bash",
+        "init.bash",
+        "empty.sh",
+        "init.sh",
+    ] {
+        assert!(message.contains(candidate), "{message}");
+    }
+    assert_eq!(h.current(), previous);
+}
+
+#[test]
+fn a_directory_with_plugin_toml_and_no_keys_uses_its_manifest() {
+    let h = Home::new();
+    let dir = h.src("manifest", "plugin.bash", "BINIT_MANIFEST=1\n");
+    h.f.write(
+        "src/manifest/plugin.toml",
+        "schema=1\nid='named'\nentry='plugin.bash'\nload='startup'\n",
+    );
+    let lines = format!("binit plugin {dir}\n");
+    let synced = h.shell(&lines, "binit sync\n");
+    assert!(
+        stdout(&synced).contains("Synced 1 plugin line"),
+        "{}",
+        stderr(&synced)
+    );
+    let output = h.shell(&lines, "echo \"m:$BINIT_MANIFEST\"\nbinit profile\n");
+    assert!(stdout(&output).contains("m:1"), "{}", stderr(&output));
+    assert!(stdout(&output).contains("named"));
+}
+
+#[test]
+fn invalid_lines_are_rejected_and_the_shell_continues() {
+    let h = Home::new();
+    let dir = h.src("ok", "init.sh", ":\n");
+    let lines = format!(
+        "binit plugin relative/dir; echo \"s1:$?\"\nbinit plugin user/repo; echo \"s2:$?\"\nbinit plugin https://example.invalid/a/b; echo \"s3:$?\"\nbinit plugin {dir} bogus=1; echo \"s4:$?\"\nbinit plugin {dir} load=weird; echo \"s5:$?\"\nbinit plugin; echo \"s6:$?\"\nbinit plugin {dir} id=a id=b; echo \"s7:$?\"\nbinit plugin {dir} loose; echo \"s8:$?\"\nbinit plugin '~/x'; echo \"s9:$?\"\n"
+    );
+    let output = h.shell(&lines, "echo alive\n");
+    let text = stdout(&output);
+    for n in 1..=9 {
+        assert!(
+            text.contains(&format!("s{n}:2")),
+            "{text}{}",
+            stderr(&output)
+        );
+    }
+    assert!(text.contains("alive"));
+    let message = stderr(&output);
+    assert!(
+        message.matches("Git sources are not supported yet").count() == 3,
+        "{message}"
+    );
+    assert!(message.contains("must be an absolute path"), "{message}");
+    assert!(message.contains("unknown key: bogus"), "{message}");
+    assert!(!message.contains("changed since"), "{message}");
+    assert!(!h.declared().exists());
+}
+
+#[test]
+fn a_failed_sync_leaves_the_current_generation_untouched() {
+    let h = Home::new();
+    let good = h.src("good", "init.sh", "BINIT_GOOD=1\n");
+    let lines = format!("binit plugin {good}\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let previous = h.current();
+    let missing = h.f.root().join("src/missing");
+    let output = h.shell(
+        &format!("{lines}binit plugin {}\n", missing.display()),
+        "binit sync\necho \"status:$?\"\n",
+    );
+    assert!(stdout(&output).contains("status:1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("plugin line"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(h.current(), previous);
+    success(h.binit(&["status"]));
+    let output = h.shell(&lines, "echo \"good:$BINIT_GOOD\"\n");
+    assert!(stdout(&output).contains("good:1"));
+}
+
+#[test]
+fn line_ids_cannot_collide_with_catalog_plugins_and_catalog_plugins_stay_active() {
+    let h = Home::new();
+    h.f.plugin("shared", "load='startup'", "BINIT_CATALOG=1\n");
+    let catalog = h.f.root().join("shared");
+    success(h.binit(&["add", catalog.to_str().unwrap()]));
+    let line = h.src("other", "init.sh", "BINIT_LINE=1\n");
+    let lines = format!("binit plugin {line} id=shared\n");
+    let output = h.shell(&lines, "binit sync\n");
+    assert!(
+        stderr(&output).contains("id shared is already in use"),
+        "{}",
+        stderr(&output)
+    );
+    // A catalog plugin loads without any line, and a line plugin beside it.
+    let fine = format!("binit plugin {line} id=other\n");
+    success(h.shell(&fine, "binit sync\n"));
+    let output = h.shell("", "echo \"vars:${BINIT_CATALOG-no}${BINIT_LINE-no}\"\n");
+    assert!(stdout(&output).contains("vars:1no"), "{}", stderr(&output));
+    // Plugin lines own their entries; catalog commands refuse to edit them.
+    failure(
+        h.binit(&["remove", "other"]),
+        "managed by a binit plugin line",
+    );
+    failure(h.binit(&["disable", "other"]), "binit sync");
+    success(h.binit(&["disable", "shared"]));
+    // Syncing keeps the catalog entry and drops the line.
+    success(h.shell("", "binit sync\n"));
+    assert!(success(h.binit(&["plugins"])).contains("shared"));
+    assert!(!success(h.binit(&["plugins"])).contains("other"));
+}
+
+#[test]
+fn paths_with_spaces_quotes_brackets_and_newlines_survive_sync() {
+    let h = Home::new();
+    let dir = h.src("sp ace]'\nq", "init.sh", "BINIT_WEIRD=1\n");
+    let lines = format!("binit plugin {} id=weird\n", sh_quote(&dir));
+    let output = h.shell(&lines, "binit sync\n");
+    assert!(
+        stdout(&output).contains("Synced 1 plugin line"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        fs::read(h.declared()).unwrap(),
+        format!("2\0{dir}\0id=weird\0").into_bytes()
+    );
+    let output = h.shell(&lines, "echo \"w:$BINIT_WEIRD\"\n");
+    assert!(stdout(&output).contains("w:1"), "{}", stderr(&output));
+    assert!(!stderr(&output).contains(NOTICE), "{}", stderr(&output));
+}
+
+#[test]
+fn sourcing_the_startup_file_again_changes_nothing() {
+    let h = Home::new();
+    let counter = h.src(
+        "counter",
+        "init.sh",
+        "BINIT_COUNT=$((${BINIT_COUNT-0} + 1))\n",
+    );
+    let lines = format!("binit plugin {counter}\n");
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(
+        &lines,
+        "source \"$BINIT_TEST_RC\"\nsource \"$BINIT_TEST_RC\"\necho \"count:$BINIT_COUNT lines:${#__binit_line_counts[@]} prompts:${#PROMPT_COMMAND[@]}\"\n",
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("count:1 lines:1 prompts:1"),
+        "{text}{}",
+        stderr(&output)
+    );
+    assert!(!stderr(&output).contains(NOTICE), "{}", stderr(&output));
+}
+
+#[test]
+fn a_prefixed_prompt_command_still_runs_the_dispatcher() {
+    let h = Home::new();
+    let prompt = h.src("later", "init.sh", "BINIT_LATER=ran\n");
+    let lines = format!(
+        "PROMPT_COMMAND=\"history -a; $PROMPT_COMMAND\"\nbinit plugin {prompt} id=later load=prompt\n"
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let output = h.shell(&lines, "echo \"later:${BINIT_LATER-unset}\"\n");
+    assert!(
+        stdout(&output).contains("later:ran"),
+        "{}{}",
+        stdout(&output),
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_later_ps1_assignment_keeps_the_prompt_prefix() {
+    let h = Home::new();
+    let output = h.shell(
+        "PS1='mine> '\n",
+        "printf 'ps1:%s\\n' \"$PS1\"\nfalse\nprintf 'status:%s\\n' \"$BINIT_LAST_STATUS\"\n",
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("ps1:${BINIT_PROMPT_TEXT}mine> "),
+        "{text}{}",
+        stderr(&output)
+    );
+    assert!(text.contains("status:1"), "{text}");
+}
+
+#[test]
+fn sync_refuses_unsafe_or_malformed_declared_files() {
+    let h = Home::new();
+    success(h.binit(&["init"]));
+    let before = h.current();
+    failure(h.binit(&["sync"]), "no declared plugin lines");
+    let write = |bytes: &[u8], mode: u32| {
+        let _ = fs::remove_file(h.declared());
+        fs::write(h.declared(), bytes).unwrap();
+        fs::set_permissions(h.declared(), fs::Permissions::from_mode(mode)).unwrap();
+    };
+    write(b"1\0/x\0", 0o644);
+    failure(h.binit(&["sync"]), "private regular file");
+    write(&vec![b'a'; 256 * 1024 + 1], 0o600);
+    failure(h.binit(&["sync"]), "256 KiB");
+    write(&b"1\0/x\0".repeat(65), 0o600);
+    failure(h.binit(&["sync"]), "64 lines");
+    write(b"1\0\xff\0", 0o600);
+    failure(h.binit(&["sync"]), "UTF-8");
+    write(b"2\0/x\0", 0o600);
+    failure(h.binit(&["sync"]), "truncated");
+    fs::remove_file(h.declared()).unwrap();
+    let target = h.f.write("elsewhere", "0");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+    symlink(&target, h.declared()).unwrap();
+    assert!(!h.binit(&["sync"]).status.success());
+    assert_eq!(h.current(), before);
+}

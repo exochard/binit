@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Declaration {
     schema: u32,
@@ -28,6 +28,15 @@ fn limits(files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
 fn declaration(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     let bytes = read_regular(path)?;
     let declaration: Declaration = toml::from_str(std::str::from_utf8(&bytes)?)?;
+    build(declaration, path.parent().unwrap(), bytes)
+}
+
+// Both declaration files and plugin lines are validated and copied here.
+fn build(
+    declaration: Declaration,
+    base: &Path,
+    bytes: Vec<u8>,
+) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     let plugin = Plugin {
         schema: declaration.schema,
         id: declaration.id,
@@ -42,7 +51,7 @@ fn declaration(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     if declaration.files.is_empty() || declaration.files.len() > MAX_FILES - 3 {
         return Err("a declaration must select between 1 and 125 files".into());
     }
-    let root = path.parent().unwrap().join(declaration.path);
+    let root = base.join(declaration.path);
     if !fs::symlink_metadata(&root)?.is_dir() {
         return Err("declared source must be a directory, not a symlink".into());
     }
@@ -106,4 +115,99 @@ pub(super) fn read(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
         return Err(format!("missing entry for {}", plugin.id).into());
     }
     Ok((plugin, files))
+}
+
+const LINE_KEYS: [&str; 7] = [
+    "id",
+    "files",
+    "load",
+    "commands",
+    "completions",
+    "requires",
+    "depends",
+];
+
+fn list(value: &str) -> Vec<String> {
+    if value.is_empty() {
+        Vec::new()
+    } else {
+        value.split(',').map(str::to_owned).collect()
+    }
+}
+
+/// Builds a package from the arguments of one `binit plugin` line.
+pub(super) fn line(argv: &[String]) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
+    let source = argv.first().ok_or("empty plugin line")?;
+    let path = Path::new(source);
+    if !path.is_absolute() {
+        return Err(format!("plugin source must be an absolute path: {source}").into());
+    }
+    let mut keys = BTreeMap::new();
+    for argument in &argv[1..] {
+        let (key, value) = argument
+            .split_once('=')
+            .ok_or_else(|| format!("expected key=value, found: {argument}"))?;
+        if !LINE_KEYS.contains(&key) {
+            return Err(format!("unknown plugin key: {key}").into());
+        }
+        if keys.insert(key, value).is_some() {
+            return Err(format!("duplicate plugin key: {key}").into());
+        }
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if keys.is_empty() && fs::symlink_metadata(path.join("plugin.toml")).is_ok() {
+        return read(path);
+    }
+    if !metadata.is_dir() {
+        return Err(format!("plugin source must be a directory, not a symlink: {source}").into());
+    }
+    let id = match keys.get("id") {
+        Some(id) => (*id).to_owned(),
+        None => {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if !valid_name(name) {
+                return Err(format!("cannot derive a plugin id from {source}; add id=NAME").into());
+            }
+            name.to_owned()
+        }
+    };
+    let files = match keys.get("files") {
+        Some(files) => list(files),
+        None => {
+            let candidates = [
+                format!("{id}.plugin.bash"),
+                format!("{id}.bash"),
+                "init.bash".to_owned(),
+                format!("{id}.sh"),
+                "init.sh".to_owned(),
+            ];
+            let found = candidates
+                .iter()
+                .find(|name| fs::symlink_metadata(path.join(name)).is_ok())
+                .ok_or_else(|| {
+                    format!(
+                        "no files= given and none of the default files exist in {source}: {}",
+                        candidates.join(", ")
+                    )
+                })?;
+            vec![found.clone()]
+        }
+    };
+    let value = |key: &str| list(keys.get(key).copied().unwrap_or(""));
+    let declaration = Declaration {
+        schema: 1,
+        id,
+        path: path.to_owned(),
+        files,
+        load: keys.get("load").copied().unwrap_or("startup").to_owned(),
+        requires: value("requires"),
+        depends: value("depends"),
+        completions: value("completions"),
+        commands: value("commands"),
+    };
+    let bytes = toml::to_string_pretty(&declaration)?.into_bytes();
+    build(declaration, path, bytes)
 }

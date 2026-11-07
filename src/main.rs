@@ -109,10 +109,11 @@ fn read_regular(path: &Path) -> Result<Vec<u8>> {
 }
 fn private_dir(path: &Path) -> Result<()> {
     if !path.exists() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(path)?;
+        // Only the state directory is private; its parents keep their usual mode.
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::DirBuilder::new().mode(0o700).create(path)?;
     }
     let meta = fs::symlink_metadata(path)?;
     // State contains executable startup files and must belong to this user.
@@ -272,6 +273,14 @@ fn prepare(config: &Path, state: &Path) -> Result<String> {
     publish(catalog, packages, state)
 }
 
+/// Byte-length-prefixed arguments; the runtime builds the same key from a line.
+fn line_key(declaration: &[String]) -> String {
+    declaration
+        .iter()
+        .map(|argument| format!("{}:{argument}", argument.len()))
+        .collect()
+}
+
 fn publish(
     catalog: Vec<manager::Installed>,
     mut packages: BTreeMap<String, Vec<u8>>,
@@ -314,6 +323,7 @@ fn publish(
         quote(state.to_str().ok_or("state path must be UTF-8")?),
         quote(executable.to_str().ok_or("binary path must be UTF-8")?)
     );
+    let mut activate = Vec::new();
     for id in &order {
         let p = &plugins[id];
         init.push_str(&format!(
@@ -326,8 +336,28 @@ fn publish(
             quote(&p.completions.join(" ")),
             quote(&p.commands.join(" "))
         ));
+        let declaration = catalog
+            .iter()
+            .find(|item| item.plugin.id == *id)
+            .map(|item| item.declaration.as_slice())
+            .unwrap_or_default();
+        if declaration.is_empty() {
+            activate.push(quote(id));
+        } else {
+            init.push_str(&format!(
+                "__binit_declare_line {} {}\n",
+                quote(&line_key(declaration)),
+                quote(id)
+            ));
+        }
     }
-    init.push_str("__binit_activate\n");
+    if !activate.is_empty() {
+        init.push_str(&format!(
+            "__binit_activate_plugins {}\n",
+            activate.join(" ")
+        ));
+    }
+    init.push_str("__binit_activate_shell\n");
     packages.insert("init.bash".into(), init.into_bytes());
     packages.insert(
         "runtime.bash".into(),
@@ -532,6 +562,26 @@ fn project(state: &Path, directory: &Path) -> Result<()> {
     Ok(())
 }
 
+fn default_state() -> Result<PathBuf> {
+    let variable = |name| std::env::var_os(name).filter(|value| !value.is_empty());
+    if let Some(state) = variable("BINIT_STATE") {
+        let state = PathBuf::from(state);
+        if !state.is_absolute() {
+            return Err("BINIT_STATE must be an absolute path".into());
+        }
+        return Ok(state);
+    }
+    if let Some(data) = variable("XDG_DATA_HOME").map(PathBuf::from)
+        && data.is_absolute()
+    {
+        return Ok(data.join("binit"));
+    }
+    match variable("HOME").map(PathBuf::from) {
+        Some(home) if home.is_absolute() => Ok(home.join(".local/share/binit")),
+        _ => Err("HOME must be an absolute path; set BINIT_STATE or pass --state".into()),
+    }
+}
+
 fn run() -> Result<()> {
     let raw_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if raw_args.first().is_some_and(|arg| arg == "run") {
@@ -540,19 +590,21 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] --state DIRECTORY\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  sync             Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...], binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }
-    let pos = args
-        .iter()
-        .position(|s| s == "--state")
-        .ok_or("--state DIRECTORY is required")?;
-    if pos + 1 >= args.len() {
-        return Err("--state needs a directory".into());
-    }
-    let state = PathBuf::from(args.remove(pos + 1));
-    args.remove(pos);
+    let state = match args.iter().position(|s| s == "--state") {
+        Some(pos) => {
+            if pos + 1 >= args.len() {
+                return Err("--state needs a directory".into());
+            }
+            let state = PathBuf::from(args.remove(pos + 1));
+            args.remove(pos);
+            state
+        }
+        None => default_state()?,
+    };
     if args.iter().any(|s| s == "--state") {
         return Err("--state may only be specified once".into());
     }
@@ -571,7 +623,19 @@ fn run() -> Result<()> {
             let _guard = manager::MutationGuard::acquire(&state)?;
             println!("Prepared {}", prepare(Path::new(&args[1]), &state)?);
         }
+        ("sync", 1) => manager::sync(&state)?,
+        ("declare", 1) => manager::declare(&state)?,
         ("init", 1) => {
+            if matches!(
+                fs::symlink_metadata(state.join("current")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            ) {
+                // First use: publish an empty plan so the source line exists.
+                let _guard = manager::MutationGuard::acquire(&state)?;
+                if !state.join("current").exists() {
+                    publish(Vec::new(), BTreeMap::new(), &state)?;
+                }
+            }
             let id = pointer(&state, "current")?;
             verify_generation(&state, &id)?;
             let path = fs::canonicalize(state.join("generations").join(id).join("init.bash"))?;

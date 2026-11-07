@@ -1,6 +1,29 @@
 # Plugin interface
 
-The manager snapshots local plugins through `add`, `update`, or a complete `prepare`. Opening a shell verifies and sources the resulting plan. Bash keeps its normal parsing and command execution.
+Plugins are declared as lines in `~/.bashrc` and pinned by `binit sync`. The catalog commands (`add`, `update`, `prepare`) are an alternative that snapshots local plugins without any startup-file lines. Opening a shell verifies and sources the resulting plan. Bash keeps its normal parsing and command execution.
+
+## Plugin lines
+
+```bash
+eval "$(binit init)"
+binit plugin ~/src/my-plugin
+binit plugin ~/src/tool files=init.sh,comp.bash load=command commands=tool
+binit plugin ~/src/thing id=thing requires=git load=prompt
+```
+
+Then run `binit sync` and open a new shell with `exec bash`. The first `binit init` creates an empty generation in the state directory (`--state`, else `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else `~/.local/share/binit`; each must be absolute).
+
+Grammar: `binit plugin SOURCE [KEY=VALUE...]`. `SOURCE` is an absolute directory after tilde expansion; relative paths and `user/repo` shapes fail with status 2 and the shell continues. Keys are `id`, `files`, `load`, `commands`, `completions`, `requires` and `depends`; list values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `command` or `completion`.
+
+- A directory with `plugin.toml` and no keys uses that manifest.
+- Otherwise `id` defaults to the directory name, and `files` to the first existing of `ID.plugin.bash`, `ID.bash`, `init.bash`, `ID.sh`, `init.sh`. Sync fails and lists these names when none exists.
+- The same line twice, as when the startup file is sourced again, does nothing.
+
+`binit sync` stores the lines of the current shell (a NUL-delimited `declared` file in the state directory: each record is an argument count followed by the arguments), then rebuilds every line-managed plugin from them and publishes a generation. A failed sync leaves the current generation in place. Catalog plugins stay; an `id` shared with one is an error. Line-managed plugins reject `enable`, `disable`, `remove` and `update`; edit the line and sync.
+
+At startup, a line whose exact arguments match a synced plugin activates it at once: `startup` plugins load in line order, `command` and `completion` plugins install their first-use stubs, `prompt` plugins load at the first prompt. Existing functions, aliases, builtins and completion specifications still win. A synced plugin with no matching line is `undeclared` and never loads, including as a dependency; its dependants become unavailable. Declare a dependency before the plugin that needs it.
+
+When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync; run binit sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.
 
 ## Lifecycle
 
@@ -100,7 +123,7 @@ binit_on prompt example_prompt
 
 `binit_segment NAME VALUE` adds a prompt segment. Control characters are removed and values are limited to 80 bytes under the C locale. Segment text is stored as data in a prompt variable. Shell expansion reads that variable when drawing the prompt. If `promptvars` is disabled, the runtime leaves `PS1` intact.
 
-The runtime prepends one dispatcher to the existing `PROMPT_COMMAND`. It returns the saved command status so the original first hook sees that status. It leaves `DEBUG` traps and shell options intact. Hook failures do not stop later callbacks.
+The runtime prepends one dispatcher to the existing `PROMPT_COMMAND`. It returns the saved command status so the original first hook sees that status. It leaves `DEBUG` traps and shell options intact. Hook failures do not stop later callbacks. The first dispatch also adds the segment prefix to `PS1`, so a `PS1` assigned later in the startup file keeps it. A later `PROMPT_COMMAND="history -a; $PROMPT_COMMAND"` keeps the dispatcher but runs it after `history -a`, so hooks then see that command's status; a plain `PROMPT_COMMAND=...` assignment drops the dispatcher.
 
 ## Project data
 

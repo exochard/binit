@@ -8,6 +8,27 @@ gates are described separately in the [release requirements](docs/release-0.1.md
 The [local checkpoint](docs/stability.md) records the frozen optional Bash
 engine recipe, verification commands and compatibility disposition.
 
+## Plugin lines
+
+Declare plugins in `~/.bashrc`, after Binit's init line:
+
+```bash
+eval "$(binit init)"
+binit plugin ~/src/my-plugin                      # directory with plugin.toml
+binit plugin ~/src/tool files=init.sh,comp.bash load=command commands=tool
+binit plugin ~/src/thing id=thing requires=git load=prompt
+```
+
+Run `binit sync` in that shell, then open a new one with `exec bash`. Sync
+pins the declared sources into a verified generation; shell startup reads only
+that generation and never touches the network. A shell whose lines differ from
+the last sync prints one notice at its first prompt. Sources are absolute local
+directories; Git sources are not supported yet.
+
+State lives in `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else
+`~/.local/share/binit`. `--state DIRECTORY` overrides all three. The
+[plugin interface](docs/plugins.md) lists the line keys and defaults.
+
 ## Try it
 
 Source builds require Linux, Rust and Cargo, a C compiler, and Bash/Readline
@@ -56,9 +77,11 @@ Resizing closes the menu while preserving input. Unsupported terminals and
 very large result sets use normal Readline completion.
 `BINIT_COMPLETION_MENU=0 make demo` starts with the native module disabled.
 
-## Manage plugins
+## Manage plugins with the catalog
 
-From the project root, inside the demo:
+The catalog commands below are the alternative to plugin lines. They install
+plugins that every shell opened from the generation loads. From the project
+root, inside the demo:
 
 ```bash
 binit plugins

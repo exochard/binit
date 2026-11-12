@@ -42,15 +42,55 @@ static uint8_t node_color(const char *type)
     return 0;
 }
 
+static int command_position(TSNode error, uint32_t index)
+{
+    if (!index) return 1;
+    const char *before = ts_node_type(ts_node_child(error, index - 1));
+    const char *starts[] = {"then", "do", "else", "elif", "if", "while", "until", ";", "|", "|&", "&&", "||", "&", "{", "(", "$("};
+    for (size_t i = 0; i < sizeof(starts) / sizeof(*starts); ++i)
+        if (!strcmp(before, starts[i])) return 1;
+    return 0;
+}
+
+/* A quote without a later partner in the same ERROR is unterminated: the string runs to the ERROR end.
+ * An unterminated single quote comes as a childless ERROR that starts with it. */
+static void paint_unterminated_quote(TSNode error, const char *line, uint8_t *colors, uint32_t length)
+{
+    uint32_t count = ts_node_child_count(error), end = ts_node_end_byte(error);
+    if (!count && end > ts_node_start_byte(error) && end <= length && line[ts_node_start_byte(error)] == '\'')
+        memset(colors + ts_node_start_byte(error), 2, end - ts_node_start_byte(error));
+    for (uint32_t i = 0; i < count; ++i) {
+        const char *type = ts_node_type(ts_node_child(error, i));
+        if (strcmp(type, "\"") && strcmp(type, "'")) continue;
+        uint32_t j = i + 1;
+        while (j < count && strcmp(ts_node_type(ts_node_child(error, j)), type)) ++j;
+        if (j < count) {i = j; continue;}
+        uint32_t start = ts_node_start_byte(ts_node_child(error, i));
+        if (start <= end && end <= length) memset(colors + start, 2, end - start);
+        return;
+    }
+}
+
 static void paint(TSNode node, const char *line, uint8_t *colors, uint32_t length, unsigned int depth)
 {
-    if (depth > 128 || ts_node_is_error(node) || ts_node_is_missing(node)) return;
-    uint8_t color = node_color(ts_node_type(node));
-    uint32_t start = ts_node_start_byte(node), end = ts_node_end_byte(node);
-    if (!strcmp(ts_node_type(node), "heredoc_body") && end > start && end <= length && line[end - 1] == '\n') --end;
-    if (color && start <= end && end <= length) memset(colors + start, color, end - start);
+    if (depth > 128 || ts_node_is_missing(node)) return;
+    int error = ts_node_is_error(node);
     uint32_t count = ts_node_child_count(node);
-    for (uint32_t i = 0; i < count; ++i) paint(ts_node_child(node, i), line, colors, length, depth + 1);
+    if (error) paint_unterminated_quote(node, line, colors, length);
+    else {
+        uint8_t color = node_color(ts_node_type(node));
+        uint32_t start = ts_node_start_byte(node), end = ts_node_end_byte(node);
+        if (!strcmp(ts_node_type(node), "heredoc_body") && end > start && end <= length && line[end - 1] == '\n') --end;
+        if (color && start <= end && end <= length) memset(colors + start, color, end - start);
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        TSNode child = ts_node_child(node, i);
+        if (error && !strcmp(ts_node_type(child), "word") && command_position(node, i)) {
+            uint32_t start = ts_node_start_byte(child), end = ts_node_end_byte(child);
+            if (start <= end && end <= length) memset(colors + start, 3, end - start);
+        }
+        paint(child, line, colors, length, depth + 1);
+    }
 }
 
 int binit_highlight(const char *line, size_t length, uint8_t *colors)

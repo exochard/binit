@@ -61,9 +61,9 @@ static void paint_unterminated_quote(TSNode error, const char *line, uint8_t *co
         memset(colors + ts_node_start_byte(error), 2, end - ts_node_start_byte(error));
     for (uint32_t i = 0; i < count; ++i) {
         const char *type = ts_node_type(ts_node_child(error, i));
-        if (strcmp(type, "\"") && strcmp(type, "'")) continue;
+        if (strcmp(type, "\"") != 0 && strcmp(type, "'") != 0) continue;
         uint32_t j = i + 1;
-        while (j < count && strcmp(ts_node_type(ts_node_child(error, j)), type)) ++j;
+        while (j < count && strcmp(ts_node_type(ts_node_child(error, j)), type) != 0) ++j;
         if (j < count) {i = j; continue;}
         uint32_t start = ts_node_start_byte(ts_node_child(error, i));
         if (start <= end && end <= length) memset(colors + start, 2, end - start);

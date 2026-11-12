@@ -272,11 +272,12 @@ static int accept_or_forward_char(int count, int key) {return accept_or(rl_forwa
 static int accept_or_end_of_line(int count, int key) {return accept_or(rl_end_of_line, count, key);}
 static int accept_or_self_insert(int count, int key) {return accept_or(rl_insert, count, key);}
 
-enum {EMACS_KEYMAP = 1, VI_KEYMAP = 2};
+#define EMACS_KEYMAP 1u
+#define VI_KEYMAP 2u
 static const struct {
     const char *sequence;
     rl_command_func_t *original, *wrapper;
-    int keymaps;
+    unsigned int keymaps;
 } accept_keys[] = {
     {"\006", rl_forward_char, accept_or_forward_char, EMACS_KEYMAP | VI_KEYMAP},
     {"\033[C", rl_forward_char, accept_or_forward_char, EMACS_KEYMAP | VI_KEYMAP},
@@ -331,7 +332,7 @@ static int enable_suggestions(void)
         Keymap map = rl_get_keymap_by_name(accept_keymaps[i]);
         if (!map) continue;
         for (size_t j = 0; j < sizeof accept_keys / sizeof *accept_keys; ++j) {
-            if (!(accept_keys[j].keymaps & (1 << i)) || bound_function(map, accept_keys[j].sequence) != accept_keys[j].original) continue;
+            if (!(accept_keys[j].keymaps & (1u << i)) || bound_function(map, accept_keys[j].sequence) != accept_keys[j].original) continue;
             rl_bind_keyseq_in_map(accept_keys[j].sequence, accept_keys[j].wrapper, map);
             accept_owned[i][j] = true;
         }

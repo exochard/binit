@@ -58,9 +58,9 @@ static void test_rejects(void)
     static char big[4100];
     memset(big, 'a', sizeof big - 1);
     assert(!binit_layout(0, 80, big, 4097, 0, &layout) && binit_layout(0, 80, big, 4096, 0, &layout));
-    assert(binit_layout(0, 40, big, 64 * 40 - 1, 0, &layout) && layout.rows == 64);
-    assert(!binit_layout(0, 40, big, 64 * 40, 0, &layout));
-    assert(binit_layout(0, 64, big, 64 * 64 - 1, 0, &layout) && layout.rows == 64);
+    assert(binit_layout(0, 40, big, (size_t)64 * 40 - 1, 0, &layout) && layout.rows == 64);
+    assert(!binit_layout(0, 40, big, (size_t)64 * 40, 0, &layout));
+    assert(binit_layout(0, 64, big, (size_t)64 * 64 - 1, 0, &layout) && layout.rows == 64);
 }
 
 static void test_prompt(void)
@@ -97,6 +97,8 @@ static void test_fit(void)
 
 int main(void)
 {
+    // The test sets its locale before running any code; it creates no threads.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     assert(setlocale(LC_ALL, "C.UTF-8"));
     test_wrap();
     test_wide();

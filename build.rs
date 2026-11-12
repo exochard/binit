@@ -7,6 +7,8 @@ fn main() {
         "native/completion.c",
         "native/menu.c",
         "native/menu.h",
+        "native/effects.c",
+        "native/effects.h",
         "native/highlight.c",
         "native/highlight.h",
         "scripts/fetch_syntax.py",
@@ -74,7 +76,7 @@ fn main() {
         .arg(format!("-I{}", readline.display()))
         .arg(format!("-I{}", headers.join("include").display()))
         .arg(format!("-I{}", headers.join("builtins").display()))
-        .args(["native/completion.c", "native/menu.c"]);
+        .args(["native/completion.c", "native/menu.c", "native/effects.c"]);
     if let Some(source) = env::var_os("BINIT_SYNTAX_SOURCE") {
         let source = PathBuf::from(source);
         let runtime = PathBuf::from(

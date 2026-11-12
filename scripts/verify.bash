@@ -49,7 +49,7 @@ import pathlib, unittest
 suite = unittest.TestSuite()
 loader = unittest.TestLoader()
 for path in sorted(pathlib.Path('tests').glob('test_*.py')):
-    if path.name not in ('test_completion.py', 'test_wait.py', 'test_editor.py'):
+    if path.name not in ('test_completion.py', 'test_wait.py', 'test_editor.py', 'test_live_history.py', 'test_effects.py'):
         suite.addTests(loader.discover('tests', pattern=path.name))
 raise SystemExit(not unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful())
 PY

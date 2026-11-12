@@ -55,6 +55,7 @@ __binit_capture_names() {
     local -n __binit_capture_result=$1
     local __binit_capture_kind=$2 __binit_capture_name
     __binit_capture_result=()
+    if builtin binit_complete effects names "$__binit_capture_kind" "$1" 2>/dev/null; then return 0; fi
     while IFS= read -r __binit_capture_name; do
         [[ $__binit_capture_name =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ && $__binit_capture_name != __binit_* && $__binit_capture_name != binit && $__binit_capture_name != binit_on && $__binit_capture_name != binit_segment ]] || continue
         __binit_capture_result[$__binit_capture_name]=1
@@ -89,7 +90,9 @@ __binit_record_effects() {
             [[ ${__binit_record_key#*:} != "$__binit_record_name" ]] || __binit_record_owned=1
         done
         (( __binit_record_owned )) && continue
-        __binit_record_def=$( { builtin declare -f -- "$__binit_record_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+        if ! builtin binit_complete effects function "$__binit_record_name" __binit_record_def 2>/dev/null; then
+            __binit_record_def=$( { builtin declare -f -- "$__binit_record_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+        fi
         [[ -n $__binit_record_def ]] && __binit_owned_functions["$__binit_record_id:$__binit_record_name"]=$__binit_record_def
     done
     for __binit_record_name in "${!__binit_record_aliases[@]}"; do

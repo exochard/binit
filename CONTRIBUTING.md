@@ -24,8 +24,13 @@ bash scripts/verify.bash
 bash scripts/demo.bash
 ```
 
-The demo opens a separate shell. `exit` returns to the parent. It writes its
-state under `.local-demo/`; it leaves startup files alone.
+The demo opens a separate vi-mode Bash with all seven independent plugins.
+Clone their repositories under `../binit-plugins`, or set `BINIT_PLUGIN_ROOT`.
+State and private history live under `.local-demo-interactive/`; `exit` returns
+to the parent shell. Existing startup files and Readline settings are preserved.
+The first editor dependency preparation requires tree-sitter CLI 0.26.9; builds
+then reuse the verified local source/runtime configuration. `BINIT_DEMO_STATE`
+opens a custom catalog through the existing fixture demo path.
 
 `make build`, `make verify` and `make bench` run their tools directly. The Make
 targets disable inherited Rust compiler wrappers by default. To select a working
@@ -84,6 +89,10 @@ options when changing shared hooks. Changes to generation or project trust
 handling need a failure case that proves the previous state remains usable.
 
 ## Performance work
+
+`make bench-interactive` compares bare Bash with empty and seven-plugin Binit
+configurations in a real PTY. See [interactive performance](docs/interactive-performance.md)
+for timing boundaries and same-run binary comparisons.
 
 Read [the benchmark procedure](docs/benchmarks.md) before changing an engine
 or validation script. It explains how to build the pinned GNU Bash sources

@@ -36,9 +36,9 @@
     {
       "id": "history-search",
       "repository": "history-search",
-      "commit": "b0e906b9931c6d6fc22ef725b02905c0cc627684",
-      "artifact": "history-search-b0e906b9931c.tar.gz",
-      "sha256": "c02a1068ee87da4315274333e908bc1f44f808d8566e9c16572dba4cbacb47cd",
+      "commit": "5f8680faf7c15ec56fc3fe8b76e30a0e3db92f27",
+      "artifact": "history-search-5f8680faf7c1.tar.gz",
+      "sha256": "a1741df77c5319bd31c1f9ccb8d73f8c02bd1976faa07601d7d256e689f27d45",
       "publication": "local-candidate"
     },
     {

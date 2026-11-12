@@ -11,7 +11,7 @@ tests. There is no preset or automatic plugin installation.
 | `git-completion` | First-use loading of installed Git completion definitions |
 | `project-context` | Explicitly trusted project variables and restoration |
 | `directory-jump` | Ranked navigation through visited directories |
-| `history-search` | History selection through fzf without executing a selection |
+| `history-search` | Live native history rows and modal search without executing a selection |
 | `syntax-highlighting` | Optional native advisory highlighting |
 | `autosuggestions` | Optional native history suggestions |
 
@@ -28,7 +28,7 @@ The public namespace and release URLs must be established before publication.
 
 The editor plugins require compatible native capabilities. Highlighting remains
 subject to the [editor qualification](editor.md); an activation package does not
-establish production readiness. History search requires fzf. Directory navigation
+establish production readiness. History search uses the native module. Directory navigation
 keeps a bounded session history rather than writing visited paths to disk.
 
 For an independent repository, run its compatibility tests against a selected

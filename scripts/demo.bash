@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "${BASH_SOURCE[0]%/*}/.."
+if [[ -z ${BINIT_DEMO_STATE-} && ${BINIT_SAFE-0} != 1 ]]; then
+    exec python3 scripts/interactive_demo.py
+fi
 prototype_root=$PWD
 prototype_binary=${BINIT_TEST_BINARY:-$prototype_root/target/release/binit}
 prototype_state=${BINIT_DEMO_STATE:-$prototype_root/.local-demo}

@@ -86,7 +86,19 @@ Builds use the local Cargo cache. Run `cargo fetch --locked` first on a machine
 without the dependencies. Make disables inherited Rust compiler wrappers;
 `make build RUSTC_WRAPPER=/path/to/sccache` selects a working cache explicitly.
 
-The demo opens a separate Bash with state under `.local-demo/`. It preserves installed plugins between runs. Try `git status --sho` followed by Tab; branch completion also works in repositories with branches. Inside the shell, run:
+`make demo` opens the seven-plugin development trial in Bash vi mode. It uses
+independent source repositories under `../binit-plugins` (override with
+`BINIT_PLUGIN_ROOT`) and keeps its state and history in `.local-demo-interactive/`.
+Your startup files and Readline configuration remain unchanged. The first demo
+prepares the pinned editor build dependencies; later builds reuse its local
+`build.mk`. Core installation still installs no plugins.
+
+History matches appear below the line while typing. Tab focuses NAVIGATE;
+j/k move, `/` enters SEARCH, and Enter inserts without executing. In SEARCH,
+j and k are ordinary query characters. Esc returns to navigation, then closes
+the panel. Ctrl-R opens SEARCH directly. After dismissing history, Tab can open
+normal command completion. See [history controls](docs/history.md) for binding
+precedence and terminal fallbacks. Inside the shell, run:
 
 ```bash
 binit profile
@@ -162,8 +174,9 @@ loading](docs/plugins.md#existing-bash-scripts) for examples and scope limits.
 
 First-party plugins are distributed as independent repositories and require
 explicit installation. Installing the manager installs none. See
-[plugin distribution](docs/first-party.md). The development demo uses fixtures
-of these original integrations:
+[plugin distribution](docs/first-party.md). The default demo selects all seven
+independent plugins. These original integrations also have retained fixtures
+for compatibility checks:
 
 | Plugin | Behavior |
 | --- | --- |

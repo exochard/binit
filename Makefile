@@ -1,4 +1,6 @@
-.PHONY: build verify demo bench
+.PHONY: build verify demo bench bench-interactive
+
+-include .local-demo-interactive/build.mk
 
 export RUSTC_WRAPPER :=
 
@@ -13,3 +15,6 @@ demo:
 
 bench:
 	@python3 scripts/terminal.py bench
+
+bench-interactive:
+	@python3 scripts/bench_interactive.py --plugin-root "$${BINIT_PLUGIN_ROOT:-../binit-plugins}" --output .cache/interactive-benchmark.json

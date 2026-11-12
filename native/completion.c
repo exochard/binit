@@ -27,6 +27,7 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include "menu.h"
+#include "effects.h"
 #ifdef BINIT_HIGHLIGHT
 #include "highlight.h"
 #endif
@@ -55,7 +56,7 @@ struct context {
     char sequence[32];
     size_t sequence_length;
     struct binit_menu menu;
-    bool filtering;
+    bool filtering, history;
 };
 
 struct binding {
@@ -75,6 +76,14 @@ static int wait_hook(void);
 extern int running_trap;
 static rl_hook_func_t *previous_pre_input;
 static bool wait_installed;
+static bool history_enabled, history_owns_suggestions, history_dismissed;
+static bool history_painted;
+static bool history_deprep_running, history_deprep_detached;
+static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
+static int history_row, history_rows, history_columns, history_height;
+static char history_line[4097];
+static struct binding history_tabs[2], history_searches[2];
+static size_t history_matches;
 static bool poll_installed;
 static bool poll_running;
 static long last_poll;
@@ -85,6 +94,11 @@ static bool suggestion_visible;
 static bool redisplay_running;
 static rl_voidfunc_t *previous_redisplay;
 static struct binding suggestion_bindings[2];
+static void history_draw(void);
+static void history_clear(void);
+static int history_tab(int, int);
+static int binit_history_search(int, int);
+static void completion_cleanup(void *);
 
 #ifdef BINIT_HIGHLIGHT
 static bool alias_context_unknown(const char *line)
@@ -109,6 +123,8 @@ static int display_width(const char *text, size_t size)
         wchar_t character;
         size_t used = mbrtowc(&character, text + offset, size - offset, &state); // NOLINT(concurrency-mt-unsafe): Readline runs on Bash's shell thread.
         if (used == (size_t)-1 || used == (size_t)-2 || used == 0) return -1;
+        if ((character >= 0x80 && character <= 0x9f) || (character >= 0x202a && character <= 0x202e) ||
+            (character >= 0x2066 && character <= 0x2069)) return -1;
         int cells = wcwidth(character);
         if (cells < 0) return -1;
         width += cells;
@@ -152,7 +168,7 @@ static int prompt_width(const char *prompt)
 
 static const char *history_suggestion(void)
 {
-    if (!suggestions_enabled || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
+    if (!suggestions_enabled || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1 ||
         rl_point != rl_end || rl_end <= 0 || rl_end > 4096 || !rl_line_buffer) return NULL;
     if (display_width(rl_line_buffer, (size_t)rl_end) < 0) return NULL;
     HIST_ENTRY **entries = history_list();
@@ -176,7 +192,7 @@ static void suggestion_redisplay(void)
     if (previous_redisplay && previous_redisplay != suggestion_redisplay) previous_redisplay();
     else rl_redisplay();
     redisplay_running = false;
-    if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level) return;
+    if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1) return;
 #ifdef BINIT_HIGHLIGHT
     if (highlighting_enabled && rl_outstream && rl_line_buffer && rl_end > 0 && rl_end <= 4096 && rl_point >= 0 && rl_point <= rl_end) {
         const char *prompt = rl_display_prompt ? rl_display_prompt : "";
@@ -204,6 +220,7 @@ static void suggestion_redisplay(void)
         }
     }
 #endif
+    if (history_enabled && !active) history_draw();
     if (!suggestions_enabled || !rl_outstream) return;
     if (rl_point != rl_end) {
         if (suggestion_visible && rl_line_buffer && rl_point >= 0 && rl_point < rl_end) {
@@ -245,7 +262,7 @@ static void disable_suggestions(void)
 {
     suggestions_enabled = false;
     suggestion_visible = false;
-    if (!highlighting_enabled) {
+    if (!highlighting_enabled && !history_enabled) {
         if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
         previous_redisplay = NULL;
     }
@@ -269,7 +286,7 @@ static int enable_suggestions(void)
         suggestion_bindings[i] = (struct binding){map, map[6].function, true};
         rl_bind_key_in_map(6, accept_suggestion, map);
     }
-    if (!highlighting_enabled) {
+    if (!highlighting_enabled && !history_enabled) {
         previous_redisplay = rl_redisplay_function;
         rl_redisplay_function = suggestion_redisplay;
     }
@@ -412,8 +429,8 @@ static void paint_menu(struct context *ctx)
     if (ctx->filtering) {
         char query[sizeof ctx->menu.query * 6];
         binit_text(query, sizeof query, ctx->menu.query, ctx->columns - 18);
-        snprintf(heading, sizeof heading, "/%s  %zu/%zu", query, selected, ctx->menu.count);
-    } else snprintf(heading, sizeof heading, "Completions %zu/%zu", selected, ctx->menu.count);
+        snprintf(heading, sizeof heading, "%s/%s  %zu/%zu", ctx->history ? "History SEARCH " : "", query, selected, ctx->menu.count);
+    } else snprintf(heading, sizeof heading, "%s %zu/%zu", ctx->history ? "History NAVIGATE" : "Completions", selected, ctx->menu.count);
     binit_text(text, sizeof text, heading, ctx->columns - 1);
     move_cursor(ctx->row + 1, 1);
     fprintf(rl_outstream, "\033[2K\033[2m%s\033[0m", text);
@@ -427,7 +444,7 @@ static void paint_menu(struct context *ctx)
             if (item >= ctx->menu.count) break;
             move_cursor(ctx->row + 2 + row, column * ctx->cell_width + 1);
             const char *value = ctx->menu.values[ctx->menu.visible[item]];
-            int width = binit_text(text, sizeof text, label(value), ctx->cell_width - 3);
+            int width = binit_text(text, sizeof text, ctx->history ? value : label(value), ctx->cell_width - 3);
             bool chosen = item == ctx->menu.selected;
             fprintf(rl_outstream, "%s%s%s", chosen ? "\033[7m" : "", chosen ? "> " : "  ", text);
             for (int i = width + 2; i < ctx->cell_width; ++i) fputc(' ', rl_outstream);
@@ -436,7 +453,12 @@ static void paint_menu(struct context *ctx)
     }
     const char *hint = ctx->filtering ? "Type to filter  Backspace erase  Enter insert  Esc cancel" :
                        "Tab next  arrows/hjkl move  / filter  Enter insert  Esc cancel";
+    if (ctx->history) hint = ctx->filtering ?
+        "Type to search  Backspace erase  Enter insert  Esc navigate" :
+        "j/k select  / search  Enter insert  Esc close";
     if (ctx->columns < 65) hint = "Tab move  / filter  Enter insert  Esc cancel";
+    if (ctx->history && ctx->columns < 65) hint = ctx->filtering ?
+        "Type search  Enter insert  Esc navigate" : "j/k select  / search  Enter insert  Esc close";
     if (ctx->columns < 44) hint = "Enter insert  Esc cancel";
     if (ctx->columns < 25) hint = "Enter insert  Esc";
     binit_text(text, sizeof text, hint, ctx->columns - 1);
@@ -465,7 +487,7 @@ static int input_key(struct context *ctx, bool timed)
         int key = read_timed(ctx);
         if (key != READERR || timed) return key;
         menu_event();
-        if (ctx->resized || !enabled) return 27;
+        if (ctx->resized || !(ctx->history ? history_enabled : enabled)) return 27;
     }
 }
 
@@ -528,17 +550,17 @@ static int picker(struct context *ctx)
     if (ctx->menu.total == 0 || ctx->rows < 4 || ctx->columns < 20 ||
         !cursor_position(ctx, &ctx->row, &ctx->column) ||
         ctx->row > ctx->rows || ctx->column > ctx->columns) {
-        terminal_support = -1;
+        if (!ctx->history) terminal_support = -1;
         return -1;
     }
-    terminal_support = 1;
+    if (!ctx->history) terminal_support = 1;
     char text[2048];
     int longest = 0;
     for (size_t i = 0; i < ctx->menu.total; ++i) {
         int width = binit_text(text, sizeof text, label(ctx->menu.values[i]), 32);
         if (width > longest) longest = width;
     }
-    int cell = longest + 3;
+    int cell = ctx->history ? ctx->columns - 2 : longest + 3;
     if (cell < 12) cell = 12;
     ctx->cells = (ctx->columns - 2) / cell;
     if (ctx->cells < 1) ctx->cells = 1;
@@ -547,7 +569,7 @@ static int picker(struct context *ctx)
     if (ctx->cells < 1) return -1;
     ctx->cell_width = (ctx->columns - 2) / ctx->cells;
     int rows = (int)((ctx->menu.total + (size_t)ctx->cells - 1) / (size_t)ctx->cells);
-    if (rows > 6) rows = 6;
+    if (rows > (ctx->history ? 5 : 6)) rows = ctx->history ? 5 : 6;
     if (rows > ctx->rows / 3) rows = ctx->rows / 3;
     if (rows < 1) rows = 1;
     ctx->height = rows + 2;
@@ -559,7 +581,7 @@ static int picker(struct context *ctx)
     }
     ctx->painted = true;
     int choice = 0;
-    while (enabled) {
+    while (ctx->history ? history_enabled : enabled) {
         paint_menu(ctx);
         int key = read_key(ctx);
         if (ctx->resized) break;
@@ -568,6 +590,7 @@ static int picker(struct context *ctx)
             if (choice) break;
             continue;
         }
+        if (key == 27 && ctx->history && ctx->filtering) {ctx->filtering = false; continue;}
         if (key == 27 || key == 7 || key == 4 || key < 0) break;
         if (key == 3) {raise(SIGINT); rl_check_signals(); if (rl_signal_event_hook) (*rl_signal_event_hook)(); break;}
         if (key == KEY_REPLAY) {replay_input(ctx, ctx->sequence, ctx->sequence_length); break;}
@@ -584,9 +607,11 @@ static int picker(struct context *ctx)
         else if (!ctx->filtering && key == '/') ctx->filtering = true;
         else if (ctx->filtering && (key == 127 || key == 8)) binit_menu_backspace(&ctx->menu);
         else if (ctx->filtering && key == 21) binit_menu_clear(&ctx->menu);
-        else if (key >= 32 && key <= 255 && key != 127) {
+        else if (key >= 32 && key <= 255 && key != 127 && (ctx->filtering || !ctx->history)) {
             ctx->filtering = true;
             binit_menu_append(&ctx->menu, (unsigned char)key);
+        } else if (ctx->history && key >= 32 && key <= 255 && key != 127) {
+            continue;
         } else {
             char byte = (char)key;
             replay_input(ctx, &byte, 1);
@@ -607,6 +632,244 @@ static int picker(struct context *ctx)
     clear_panel(ctx);
     replay_input(ctx, "", 0);
     return choice;
+}
+
+static size_t history_collect(const char **items, size_t limit, const char *query)
+{
+    HIST_ENTRY **entries = history_list();
+    if (!entries) return 0;
+    int lower = history_length > 1000 ? history_length - 1000 : 0;
+    uint64_t hashes[1000];
+    if (limit > sizeof hashes / sizeof *hashes) limit = sizeof hashes / sizeof *hashes;
+    size_t count = 0;
+    for (int i = history_length - 1; i >= lower && count < limit; --i) {
+        const char *line = entries[i]->line;
+        if (!line || !*line) continue;
+        size_t length = strnlen(line, 4097);
+        if (length > 4096 || !strcasestr(line, query) || display_width(line, length) < 0) continue;
+        uint64_t hash = UINT64_C(14695981039346656037);
+        for (size_t j = 0; j < length; ++j) hash = (hash ^ (unsigned char)line[j]) * UINT64_C(1099511628211);
+        bool duplicate = false;
+        for (size_t j = 0; j < count; ++j) if (hashes[j] == hash && !strcmp(items[j], line)) {duplicate = true; break;}
+        if (!duplicate) {hashes[count] = hash; items[count++] = line;}
+    }
+    return count;
+}
+
+static void history_clear(void)
+{
+    if (!history_painted || !rl_outstream) return;
+    int rows, columns;
+    terminal_size(&rows, &columns);
+    (void)columns;
+    fputs("\0337", rl_outstream);
+    for (int i = 1; i <= history_height && history_row + i <= rows; ++i) {
+        move_cursor(history_row + i, 1);
+        fputs("\033[0m\033[2K", rl_outstream);
+    }
+    fputs("\0338", rl_outstream);
+    fflush(rl_outstream);
+    history_painted = false;
+}
+
+static void history_draw(void)
+{
+    if (!history_enabled || !rl_outstream || !rl_instream || !rl_line_buffer || !isatty(fileno(rl_outstream)) ||
+        !isatty(fileno(rl_instream)) || rl_executing_macro || rl_end < 0 || rl_end > 4096) return;
+    bool can_focus = false;
+    for (size_t i = 0; i < 2; ++i) {
+        Keymap map = history_tabs[i].map;
+        if (history_tabs[i].owned && map == rl_get_keymap() && map['\t'].type == ISFUNC && map['\t'].function == history_tab)
+            can_focus = true;
+    }
+    if (!can_focus) {history_matches = 0; history_clear(); return;}
+    if (strcmp(history_line, rl_line_buffer) != 0) {
+        memcpy(history_line, rl_line_buffer, (size_t)rl_end + 1);
+        history_dismissed = false;
+    }
+    const char *items[5] = {0};
+    history_matches = rl_end && !history_dismissed ? history_collect(items, 5, rl_line_buffer) : 0;
+    int rows, columns;
+    terminal_size(&rows, &columns);
+    int prompt = prompt_width(rl_display_prompt ? rl_display_prompt : "");
+    int line = display_width(rl_line_buffer, (size_t)rl_end);
+    if (rows < 5 || columns < 20 || prompt < 0 || line < 0 || prompt + line >= columns || !history_matches) {
+        history_clear();
+        return;
+    }
+    if (history_painted && (rows != history_rows || columns != history_columns)) history_clear();
+    int height = (int)history_matches + 1;
+    if (height > rows - 2) height = rows - 2;
+    if (!history_painted) {
+        struct context ctx = {0};
+        int row, column;
+        if (!cursor_position(&ctx, &row, &column) || row > rows || column > columns) {
+            replay_input(&ctx, NULL, 0);
+            history_matches = 0;
+            return;
+        }
+        replay_input(&ctx, NULL, 0);
+        int scroll = row + height - rows;
+        if (scroll > 0) {
+            move_cursor(rows, 1);
+            for (int i = 0; i < scroll; ++i) fputc('\n', rl_outstream);
+            row -= scroll;
+            move_cursor(row, column);
+        }
+        history_row = row;
+        history_rows = rows;
+        history_columns = columns;
+    } else if (history_height > height) history_clear();
+    fputs("\0337", rl_outstream);
+    move_cursor(history_row + 1, 1);
+    fputs("\033[2K\033[2mHistory  Tab focus  Ctrl-R search\033[0m", rl_outstream);
+    char text[4097];
+    for (int i = 0; i < height - 1 && (size_t)i < history_matches; ++i) {
+        move_cursor(history_row + i + 2, 1);
+        binit_text(text, sizeof text, items[i], columns - 3);
+        fprintf(rl_outstream, "\033[2K  %s", text);
+    }
+    fputs("\0338", rl_outstream);
+    fflush(rl_outstream);
+    history_height = height;
+    history_painted = true;
+}
+
+static int history_pick(bool search)
+{
+    if (!history_enabled || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
+        get_current_prompt_level() != 1 || active || !rl_line_buffer || rl_end > 4096) return 0;
+    const char *items[1000];
+    size_t count = history_collect(items, 1000, search ? "" : rl_line_buffer);
+    if (!count) return 0;
+    history_clear();
+    struct context *ctx = calloc(1, sizeof *ctx);
+    if (!ctx) return 0;
+    ctx->line = strdup(rl_line_buffer);
+    if (!ctx->line || binit_menu_init(&ctx->menu, items, count) != 0) {free(ctx->line); free(ctx); return 0;}
+    ctx->point = rl_point;
+    ctx->mark = rl_mark;
+    ctx->display = rl_completion_display_matches_hook;
+    ctx->last = rl_last_func;
+    ctx->event = rl_event_hook;
+    ctx->query_items = rl_completion_query_items;
+    ctx->show_all = option("show-all-if-ambiguous");
+    ctx->prefix_first = option("menu-complete-display-prefix");
+    ctx->history = true;
+    ctx->filtering = search;
+    active = ctx;
+    begin_unwind_frame("binit-history");
+    add_unwind_protect(completion_cleanup, ctx);
+    int selected = picker(ctx);
+    if (selected < 0) replay_input(ctx, NULL, 0);
+    rl_point = ctx->point;
+    rl_mark = ctx->mark;
+    if (selected > 0 && (size_t)selected <= count) {
+        rl_replace_line(items[(size_t)selected - 1], 0);
+        rl_point = rl_end;
+    }
+    history_dismissed = true;
+    snprintf(history_line, sizeof history_line, "%s", rl_line_buffer);
+    run_unwind_frame("binit-history");
+    rl_redisplay();
+    return selected < 0 ? 0 : 1;
+}
+
+static int delegate_binding(struct binding *owned, size_t count, int n, int key, rl_command_func_t *fallback)
+{
+    for (size_t i = 0; i < count; ++i)
+        if (owned[i].owned && owned[i].map == rl_get_keymap() && owned[i].previous)
+            return owned[i].previous(n, key);
+    return fallback(n, key);
+}
+
+static int history_tab(int n, int key)
+{
+    if (!history_dismissed && history_matches && history_pick(false)) return 0;
+    return delegate_binding(history_tabs, 2, n, key, rl_complete);
+}
+
+static int binit_history_search(int n, int key)
+{
+    if (history_pick(true)) return 0;
+    return delegate_binding(history_searches, 2, n, key, rl_reverse_search_history);
+}
+
+static void history_deprep(void)
+{
+    if (history_deprep_running) {
+        if (history_base_deprep && history_base_deprep != history_deprep) history_base_deprep();
+        return;
+    }
+    history_deprep_running = true;
+    history_clear();
+    history_dismissed = false;
+    history_line[0] = '\0';
+    if (history_previous_deprep && history_previous_deprep != history_deprep) history_previous_deprep();
+    history_deprep_running = false;
+}
+
+static void history_bind(struct binding *binding, Keymap map, int key, rl_command_func_t *current, rl_command_func_t *replacement)
+{
+    *binding = (struct binding){map, current, true};
+    rl_bind_key_in_map(key, replacement, map);
+}
+
+static void history_unbind(struct binding *binding, int key, rl_command_func_t *replacement)
+{
+    if (binding->owned && binding->map[key].type == ISFUNC && binding->map[key].function == replacement)
+        rl_bind_key_in_map(key, binding->previous, binding->map);
+    binding->owned = false;
+}
+
+static int enable_history(void)
+{
+    if (history_enabled) return EXECUTION_SUCCESS;
+    if (!suggestions_enabled) {
+        if (enable_suggestions() != EXECUTION_SUCCESS) return EXECUTION_FAILURE;
+        history_owns_suggestions = true;
+    }
+    const char *names[] = {"emacs-standard", "vi-insert"};
+    if (!history_deprep_detached) history_base_deprep = rl_deprep_term_function;
+    history_previous_deprep = rl_deprep_term_function;
+    rl_deprep_term_function = history_deprep;
+    history_deprep_detached = false;
+    for (size_t i = 0; i < 2; ++i) {
+        Keymap map = rl_get_keymap_by_name(names[i]);
+        if (!map) continue;
+        rl_command_func_t *tab = map['\t'].function;
+        if (map['\t'].type == ISFUNC && (tab == native_complete || tab == rl_complete || tab == rl_menu_complete || tab == rl_backward_menu_complete))
+            history_bind(&history_tabs[i], map, '\t', tab, history_tab);
+        if (map[18].type == ISFUNC && map[18].function == rl_reverse_search_history)
+            history_bind(&history_searches[i], map, 18, map[18].function, binit_history_search);
+    }
+    history_enabled = true;
+    return EXECUTION_SUCCESS;
+}
+
+static void disable_history(void)
+{
+    bool was_enabled = history_enabled;
+    history_clear();
+    history_enabled = false;
+    if (rl_deprep_term_function == history_deprep) {
+        rl_deprep_term_function = history_previous_deprep;
+        history_previous_deprep = NULL;
+        history_deprep_detached = false;
+    } else if (was_enabled) {
+        history_deprep_detached = true;
+    }
+    history_matches = 0;
+    history_line[0] = '\0';
+    for (size_t i = 0; i < 2; ++i) {
+        history_unbind(&history_tabs[i], '\t', history_tab);
+        history_unbind(&history_searches[i], 18, binit_history_search);
+    }
+    if (history_owns_suggestions) {history_owns_suggestions = false; disable_suggestions();}
+    else if (!suggestions_enabled && !highlighting_enabled) {
+        if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
+        previous_redisplay = NULL;
+    }
 }
 
 static void capture(char **matches, int count, int width)
@@ -879,6 +1142,9 @@ static void disable_menu(void)
         struct binding *binding = &bindings[i];
         if (binding->owned && binding->map['\t'].type == ISFUNC && binding->map['\t'].function == native_complete) {
             rl_bind_key_in_map('\t', binding->previous, binding->map);
+        } else if (binding->owned && history_tabs[i].owned && history_tabs[i].map == binding->map &&
+                   history_tabs[i].previous == native_complete) {
+            history_tabs[i].previous = binding->previous;
         }
         binding->owned = false;
     }
@@ -896,9 +1162,12 @@ static int enable_menu(void)
         Keymap map = rl_get_keymap_by_name(names[i]);
         if (!map || map['\t'].type != ISFUNC) continue;
         rl_command_func_t *previous = map['\t'].function;
+        bool wrapped = previous == history_tab && history_tabs[i].owned && history_tabs[i].map == map;
+        if (wrapped) previous = history_tabs[i].previous;
         if (previous != rl_complete && previous != rl_menu_complete && previous != rl_backward_menu_complete && previous != native_complete) continue;
         if (previous != native_complete) bindings[i] = (struct binding){map, previous, true};
-        rl_bind_key_in_map('\t', native_complete, map);
+        if (wrapped) history_tabs[i].previous = native_complete;
+        else rl_bind_key_in_map('\t', native_complete, map);
         available = true;
     }
     if (!available) return EXECUTION_FAILURE;
@@ -924,27 +1193,33 @@ static int enable_menu(void)
 EXPORT int binit_complete_builtin(WORD_LIST *arguments)
 {
     const char *action = arguments ? arguments->word->word : "status";
+    if (strcmp(action, "effects") == 0) return binit_effects(arguments->next);
     if (strcmp(action, "editor") == 0) {
         WORD_LIST *feature = arguments->next;
         WORD_LIST *setting = feature ? feature->next : NULL;
         if (!feature || !setting || setting->next) return EX_USAGE;
+        if (strcmp(feature->word->word, "history") == 0) {
+            if (strcmp(setting->word->word, "on") == 0) return enable_history();
+            if (strcmp(setting->word->word, "off") == 0) {disable_history(); return EXECUTION_SUCCESS;}
+            return EX_USAGE;
+        }
         if (strcmp(feature->word->word, "suggestions") == 0) {
-            if (strcmp(setting->word->word, "on") == 0) return enable_suggestions();
-            if (strcmp(setting->word->word, "off") == 0) {disable_suggestions(); return EXECUTION_SUCCESS;}
+            if (strcmp(setting->word->word, "on") == 0) {history_owns_suggestions = false; return enable_suggestions();}
+            if (strcmp(setting->word->word, "off") == 0) {history_owns_suggestions = false; disable_suggestions(); return EXECUTION_SUCCESS;}
         }
         if (strcmp(feature->word->word, "highlighting") == 0) {
 #ifdef BINIT_HIGHLIGHT
             if (strcmp(setting->word->word, "on") == 0) {
                 const char *term = get_string_value("TERM");
                 if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
-                if (!highlighting_enabled && !suggestions_enabled) {previous_redisplay = rl_redisplay_function; rl_redisplay_function = suggestion_redisplay;}
+                if (!highlighting_enabled && !suggestions_enabled && !history_enabled) {previous_redisplay = rl_redisplay_function; rl_redisplay_function = suggestion_redisplay;}
                 highlighting_enabled = true;
                 return EXECUTION_SUCCESS;
             }
             if (strcmp(setting->word->word, "off") == 0) {
                 highlighting_enabled = false;
                 binit_highlight_clear();
-                if (!suggestions_enabled) {if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay; previous_redisplay = NULL;}
+                if (!suggestions_enabled && !history_enabled) {if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay; previous_redisplay = NULL;}
                 return EXECUTION_SUCCESS;
             }
 #else
@@ -985,6 +1260,7 @@ EXPORT int binit_complete_builtin_load(char *name)
 EXPORT void binit_complete_builtin_unload(char *name)
 {
     (void)name;
+    disable_history();
     disable_suggestions();
     remove_poll_hook();
 #ifdef BINIT_HIGHLIGHT

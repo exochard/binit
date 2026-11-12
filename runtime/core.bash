@@ -338,6 +338,18 @@ __binit_source_ok() {
     local word_re='^[A-Za-z0-9_.-]+$' user_re='^[a-z_][a-z0-9_-]{0,31}$'
     [[ $source == /* ]] && return 0
     [[ $source != -* && $source != *::* && $source != *[!'!'-'~']* ]] || return 1
+    if [[ $source == release:* ]]; then
+        rest=${source#release:}
+        owner=${rest%%/*}; repo=${rest#*/}
+        [[ $rest == */* && $repo != */* && $owner =~ $word_re && $repo =~ $word_re && $owner != . && $owner != .. && $repo != . && $repo != .. ]] && return 0
+        return 1
+    fi
+    if [[ $source == snippet:https://* ]]; then
+        rest=${source#snippet:https://}
+        authority=${rest%%[/?#]*}
+        [[ -n $authority && $authority != *@* && $authority != -* && $rest != *'#'* && $rest != *'\'* ]] && return 0
+        return 1
+    fi
     if [[ $source == *://* ]]; then
         scheme=${source%%://*}
         rest=${source#*://}
@@ -391,7 +403,7 @@ __binit_plugin_line() {
     local -A __binit_plugin_keys=()
     if (( $# == 0 )); then
         printf 'Usage: binit plugin SOURCE [id=ID] [files=A,B] [load=startup|prompt|wait|command|completion]\n' >&2
-        printf '                          [commands=A,B] [completions=A,B] [requires=A,B] [depends=A,B]\n                          [ver=TAG|BRANCH|COMMIT]  (Git sources)\n' >&2
+        printf '                          [commands=A,B] [completions=A,B] [requires=A,B] [depends=A,B]\n                          [ver=TAG|BRANCH|COMMIT] [asset=NAME] [sha256=HEX] [format=raw|tar|tar.gz|zip]\n                          [atclone=SCRIPT] [atpull=SCRIPT]\n' >&2
         return 2
     fi
     if ! __binit_source_ok "$1"; then
@@ -404,7 +416,7 @@ __binit_plugin_line() {
     fi
     for __binit_plugin_arg in "${@:2}"; do
         case ${__binit_plugin_arg%%=*} in
-            id|files|bin|load|commands|completions|requires|depends|ver) ;;
+            id|files|bin|load|commands|completions|requires|depends|ver|sha256|asset|format|atclone|atpull) ;;
             *)
                 if [[ $__binit_plugin_arg == *=* ]]; then
                     printf 'binit: plugin %s: unknown key: %s\n' "$1" "${__binit_plugin_arg%%=*}" >&2

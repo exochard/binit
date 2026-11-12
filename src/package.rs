@@ -22,7 +22,7 @@ struct Declaration {
 }
 
 /// Splits one `bin=` item into its package-relative path and command name.
-fn bin_item(item: &str) -> Result<(String, String)> {
+pub(super) fn bin_item(item: &str) -> Result<(String, String)> {
     let (path, name) = match item.rsplit_once(':') {
         Some(parts) => parts,
         None => (item, item.rsplit('/').next().unwrap_or(item)),
@@ -34,6 +34,89 @@ fn bin_item(item: &str) -> Result<(String, String)> {
         return Err(format!("invalid command name {name:?} for bin {path}; use PATH:NAME").into());
     }
     Ok((path.to_owned(), name.to_owned()))
+}
+
+pub(super) fn downloaded_line(
+    argv: &[String],
+    root: &Path,
+) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
+    let keys = line_keys(argv)?;
+    let snippet = argv[0].starts_with("snippet:");
+    let value = |key: &str| list(keys.get(key).copied().unwrap_or(""));
+    let programs = value("bin")
+        .iter()
+        .map(|item| bin_item(item))
+        .collect::<Result<Vec<_>>>()?;
+    let plugin = Plugin {
+        schema: 1,
+        id: keys["id"].to_owned(),
+        entry: "entry.bash".into(),
+        load: keys.get("load").copied().unwrap_or("startup").into(),
+        requires: value("requires"),
+        depends: value("depends"),
+        commands: value("commands"),
+        completions: value("completions"),
+        bin: programs
+            .iter()
+            .map(|(path, name)| format!("files/{path}:{name}"))
+            .collect(),
+    };
+    validate_plugin(&plugin)?;
+    let sourced = if snippet {
+        vec!["snippet.bash".to_owned()]
+    } else {
+        value("files")
+    };
+    if sourced.iter().collect::<BTreeSet<_>>().len() != sourced.len() {
+        return Err("duplicate declared file in remote source".into());
+    }
+    let mut files = BTreeMap::new();
+    let mut entry = String::from("# Generated from a checksum-pinned remote source.\n");
+    let mut selected = BTreeSet::new();
+    for (path, is_program) in sourced
+        .iter()
+        .map(|p| (p, false))
+        .chain(programs.iter().map(|(p, _)| (p, true)))
+    {
+        if !valid_declared_file(path) {
+            return Err("invalid remote file path".into());
+        }
+        let mut full = root.to_owned();
+        for part in Path::new(path).components() {
+            full.push(part);
+            if fs::symlink_metadata(&full)?.file_type().is_symlink() {
+                return Err("symlink in remote selection".into());
+            }
+        }
+        let bytes = read_regular_limit(
+            &full,
+            if is_program {
+                acquire::MAX_PROGRAM_BYTES
+            } else {
+                MAX_BYTES
+            },
+        )?;
+        if selected.insert(path.clone()) {
+            files.insert(format!("files/{path}"), bytes);
+        }
+        if !is_program {
+            entry.push_str(&format!(
+                "source \"${{BASH_SOURCE[0]%/*}}\"/{} || return $?\n",
+                quote(&format!("files/{path}"))
+            ));
+        }
+    }
+    if selected.len() > MAX_FILES - 3
+        || files.values().map(Vec::len).sum::<usize>() as u64 > acquire::MAX_EXPANDED_BYTES
+    {
+        return Err("remote package exceeds file or expanded size limits".into());
+    }
+    files.insert("entry.bash".into(), entry.into_bytes());
+    files.insert(
+        "plugin.toml".into(),
+        toml::to_string_pretty(&plugin)?.into_bytes(),
+    );
+    Ok((plugin, files))
 }
 
 fn limits(files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
@@ -166,7 +249,7 @@ pub(super) fn read(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     Ok((plugin, files))
 }
 
-const LINE_KEYS: [&str; 9] = [
+const LINE_KEYS: [&str; 14] = [
     "id",
     "files",
     "bin",
@@ -176,6 +259,11 @@ const LINE_KEYS: [&str; 9] = [
     "requires",
     "depends",
     "ver",
+    "sha256",
+    "asset",
+    "format",
+    "atclone",
+    "atpull",
 ];
 
 fn list(value: &str) -> Vec<String> {
@@ -186,7 +274,7 @@ fn list(value: &str) -> Vec<String> {
     }
 }
 
-fn line_keys(argv: &[String]) -> Result<BTreeMap<&str, &str>> {
+pub(super) fn line_keys(argv: &[String]) -> Result<BTreeMap<&str, &str>> {
     let mut keys = BTreeMap::new();
     for argument in &argv[1..] {
         let (key, value) = argument
@@ -215,7 +303,9 @@ pub(super) fn line(argv: &[String]) -> Result<(Plugin, BTreeMap<String, Vec<u8>>
         return Err("ver= applies to Git sources only".into());
     }
     let metadata = fs::symlink_metadata(path)?;
-    if keys.is_empty() && fs::symlink_metadata(path.join("plugin.toml")).is_ok() {
+    if keys.keys().all(|key| ["atclone", "atpull"].contains(key))
+        && fs::symlink_metadata(path.join("plugin.toml")).is_ok()
+    {
         return read(path);
     }
     if !metadata.is_dir() {
@@ -232,6 +322,20 @@ pub(super) fn line(argv: &[String]) -> Result<(Plugin, BTreeMap<String, Vec<u8>>
 /// line fails before Binit contacts a remote.
 pub(super) fn check_keys(argv: &[String]) -> Result<()> {
     let keys = line_keys(argv)?;
+    if remote::is_source(&argv[0]) {
+        remote::origin(argv)?;
+    } else if keys
+        .keys()
+        .any(|key| ["sha256", "asset", "format"].contains(key))
+    {
+        return Err("sha256=, asset= and format= require a release or snippet source".into());
+    }
+    if ["atclone", "atpull"]
+        .iter()
+        .any(|key| keys.get(key).is_some_and(|script| script.len() > 8192))
+    {
+        return Err("lifecycle hook exceeds 8192 bytes".into());
+    }
     if !keys.keys().all(|key| *key == "ver")
         && !keys.contains_key("id")
         && let Some(remote) = git::parse_source(&argv[0])?
@@ -282,7 +386,11 @@ pub(super) fn git_paths(
     has: &dyn Fn(&str) -> bool,
 ) -> Result<Option<Vec<String>>> {
     let keys = line_keys(argv)?;
-    if keys.keys().all(|key| *key == "ver") && has("plugin.toml") {
+    if keys
+        .keys()
+        .all(|key| ["ver", "atclone", "atpull"].contains(key))
+        && has("plugin.toml")
+    {
         return Ok(None);
     }
     let id = line_id(&keys, name, &argv[0])?;
@@ -308,7 +416,9 @@ pub(super) fn git_line(
     name: &str,
 ) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     let keys = line_keys(argv)?;
-    if keys.keys().all(|key| *key == "ver")
+    if keys
+        .keys()
+        .all(|key| ["ver", "atclone", "atpull"].contains(key))
         && fs::symlink_metadata(root.join("plugin.toml")).is_ok()
     {
         return read(root);

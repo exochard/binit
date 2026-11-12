@@ -524,6 +524,7 @@ struct Entry {
     object: String,
     size: u64,
     symlink: bool,
+    executable: bool,
 }
 
 /// The files of a commit, read without checking anything out.
@@ -601,6 +602,7 @@ pub(super) fn list(mirror: &Path, commit: &str) -> Result<Listing> {
                 object: object.to_owned(),
                 size: size.parse().map_err(|_| malformed())?,
                 symlink: mode == "120000",
+                executable: mode == "100755",
             },
         );
     }
@@ -706,7 +708,7 @@ impl Checkout {
             OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .mode(0o600)
+                .mode(if entry.executable { 0o700 } else { 0o600 })
                 .open(target)?
                 .write_all(&bytes)?;
         }

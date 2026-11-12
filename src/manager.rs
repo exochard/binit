@@ -13,6 +13,8 @@ pub(super) struct Installed {
     /// The Git source and the commit it is pinned to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) origin: Option<Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) asset: Option<remote::Origin>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -73,6 +75,7 @@ fn catalog(lock: &Lock) -> Vec<Installed> {
                 source: None,
                 declaration: Vec::new(),
                 origin: None,
+                asset: None,
             })
             .collect()
     } else {
@@ -97,7 +100,7 @@ fn current(state: &Path) -> Result<Plan> {
         .keys()
         .filter(|name| name.starts_with("plugins/"))
     {
-        packages.insert(name.clone(), read_regular(&root.join(name))?);
+        packages.insert(name.clone(), snapshot_file(&root, name, &lock)?);
     }
     Ok(Plan { catalog, packages })
 }
@@ -136,13 +139,110 @@ fn installed(
             source,
             declaration,
             origin,
+            asset: None,
         },
         files,
     ))
 }
 
-fn line_package(argv: &[String]) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
-    let (plugin, files) = package::line(argv)?;
+struct Stage(PathBuf);
+impl Stage {
+    fn new(state: &Path, files: BTreeMap<String, Vec<u8>>) -> Result<Self> {
+        let parent = state.join("tmp");
+        private_dir(&parent)?;
+        let stage = Self(parent.join(format!("checkout-{}-{}", std::process::id(), unique())));
+        fs::DirBuilder::new().mode(0o700).create(&stage.0)?;
+        for (path, bytes) in files {
+            if !package::valid_declared_file(&path) {
+                return Err("unsafe staging path".into());
+            }
+            let path = stage.0.join(path);
+            fs::create_dir_all(path.parent().ok_or("staging parent missing")?)?;
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)?
+                .write_all(&bytes)?;
+        }
+        Ok(stage)
+    }
+}
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn hook(argv: &[String], directory: &Path, event: Option<&str>) -> Result<()> {
+    if let Some(event) = event {
+        let keys = package::line_keys(argv)?;
+        if let Some(script) = keys.get(event).filter(|script| !script.is_empty()) {
+            let id = if let Some(id) = keys.get("id") {
+                id.to_string()
+            } else if directory.join("plugin.toml").is_file() {
+                toml::from_str::<Plugin>(std::str::from_utf8(&read_regular(
+                    &directory.join("plugin.toml"),
+                )?)?)?
+                .id
+            } else if let Some(source) = git::parse_source(&argv[0])? {
+                source.name
+            } else {
+                Path::new(&argv[0])
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("plugin")
+                    .to_owned()
+            };
+            hooks::run(script, directory, &id, event)?;
+        }
+    }
+    Ok(())
+}
+
+fn line_package(
+    state: &Path,
+    argv: &[String],
+    event: Option<&str>,
+) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
+    let keys = package::line_keys(argv)?;
+    let staging =
+        if event.is_some_and(|event| keys.get(event).is_some_and(|script| !script.is_empty())) {
+            let root = Path::new(&argv[0]);
+            if !root.is_absolute() || !fs::symlink_metadata(root)?.is_dir() {
+                return Err("hook source must be an absolute directory, not a symlink".into());
+            }
+            let mut files = BTreeMap::new();
+            collect(root, Path::new(""), &mut files)?;
+            let executable = files
+                .keys()
+                .filter(|path| {
+                    fs::metadata(root.join(path))
+                        .is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let stage = Stage::new(state, files)?;
+            for path in executable {
+                fs::set_permissions(stage.0.join(path), fs::Permissions::from_mode(0o700))?;
+            }
+            Some(stage)
+        } else {
+            None
+        };
+    let (plugin, files) = if let Some(stage) = &staging {
+        hook(argv, &stage.0, event)?;
+        package::git_line(
+            argv,
+            &stage.0,
+            Path::new(&argv[0])
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("plugin"),
+        )?
+    } else {
+        package::line(argv)?
+    };
     let source = Some(fs::canonicalize(&argv[0])?);
     installed(plugin, files, source, true, argv.to_vec(), None)
 }
@@ -154,11 +254,19 @@ fn git_package(
     remote: &git::Remote,
     mirror: &Path,
     commit: &str,
+    event: Option<&str>,
 ) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
     let ver = git::line_ver(argv)?;
     let listing = git::list(mirror, commit)?;
-    let paths = package::git_paths(argv, &remote.name, &|path| listing.has(path))?;
+    let keys = package::line_keys(argv)?;
+    let paths =
+        if event.is_some_and(|event| keys.get(event).is_some_and(|script| !script.is_empty())) {
+            None
+        } else {
+            package::git_paths(argv, &remote.name, &|path| listing.has(path))?
+        };
     let checkout = git::Checkout::create(state, mirror, &listing, paths.as_deref())?;
+    hook(argv, checkout.root(), event)?;
     let (plugin, files) = package::git_line(argv, checkout.root(), &remote.name)?;
     let origin = Origin {
         url: remote.url.clone(),
@@ -166,6 +274,32 @@ fn git_package(
         commit: commit.to_owned(),
     };
     installed(plugin, files, None, true, argv.to_vec(), Some(origin))
+}
+
+fn remote_package(
+    state: &Path,
+    argv: &[String],
+    event: Option<&str>,
+) -> Result<(Installed, BTreeMap<String, Vec<u8>>)> {
+    package::check_keys(argv)?;
+    let origin = remote::origin(argv)?;
+    let stage = Stage::new(state, remote::materialize(state, argv, &origin)?)?;
+    for item in package::line_keys(argv)?
+        .get("bin")
+        .into_iter()
+        .flat_map(|value| value.split(','))
+    {
+        let (path, _) = package::bin_item(item)?;
+        let path = stage.0.join(path);
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    hook(argv, &stage.0, event)?;
+    let (plugin, files) = package::downloaded_line(argv, &stage.0)?;
+    let (mut item, files) = installed(plugin, files, None, true, argv.to_vec(), None)?;
+    item.asset = Some(origin);
+    Ok((item, files))
 }
 
 fn require_catalog(entry: &Installed) -> Result<()> {
@@ -262,7 +396,7 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
     let mut targets = Vec::new();
     if ids.is_empty() {
         for (position, entry) in plan.catalog.iter().enumerate() {
-            if entry.origin.is_some() {
+            if entry.origin.is_some() || entry.asset.is_some() {
                 targets.push(position);
             }
         }
@@ -281,7 +415,7 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
         if entry.declaration.is_empty() {
             return Err(format!("{id} is a catalog plugin; use binit update {id} [PATH]").into());
         }
-        if check && entry.origin.is_none() {
+        if check && entry.origin.is_none() && entry.asset.is_none() {
             return Err(format!("{id} is a local directory, not a Git plugin").into());
         }
         if !targets.contains(&position) {
@@ -303,6 +437,12 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
     for position in targets {
         let entry = plan.catalog[position].clone();
         let id = entry.plugin.id.clone();
+        if entry.asset.is_some() {
+            say(format!(
+                "{id}  pinned by sha256; edit the source line and run binit sync"
+            ));
+            continue;
+        }
         let wrap = |error: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
             git::line_error(&entry.declaration[0], error)
         };
@@ -319,7 +459,8 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
             ))
         };
         let Some(origin) = &entry.origin else {
-            let (item, files) = line_package(&entry.declaration).map_err(wrap)?;
+            let (item, files) =
+                line_package(state, &entry.declaration, Some("atpull")).map_err(wrap)?;
             unchanged_id(&item)?;
             say(format!("{id}  re-snapshotted"));
             changes.push((position, item, files));
@@ -358,8 +499,15 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
                 println!("{line}");
             }
         } else {
-            let (item, files) =
-                git_package(state, &entry.declaration, &remote, &mirror, &commit).map_err(wrap)?;
+            let (item, files) = git_package(
+                state,
+                &entry.declaration,
+                &remote,
+                &mirror,
+                &commit,
+                Some("atpull"),
+            )
+            .map_err(wrap)?;
             unchanged_id(&item)?;
             say(moved);
             changes.push((position, item, files));
@@ -481,6 +629,12 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
             "Ver: {}\nCommit: {}",
             origin.ver.as_deref().unwrap_or("default branch"),
             origin.commit
+        );
+    }
+    if let Some(asset) = &entry.asset {
+        println!(
+            "Remote: {}\nSHA256: {}\nFormat: {}",
+            asset.url, asset.sha256, asset.format
         );
     }
     Ok(())
@@ -621,11 +775,60 @@ pub(super) fn sync(state: &Path) -> Result<()> {
     plan.catalog.retain(|entry| entry.declaration.is_empty());
     let mut fetched = BTreeSet::new();
     for argv in &lines {
+        package::check_keys(argv)?;
+        let keys = package::line_keys(argv)?;
+        let same_source = old.iter().any(|entry| {
+            entry.declaration.first() == argv.first()
+                && package::line_keys(&entry.declaration).is_ok_and(|previous| {
+                    ["id", "ver", "sha256", "asset", "format"]
+                        .iter()
+                        .all(|key| previous.get(key) == keys.get(key))
+                })
+        });
+        let event = if same_source { None } else { Some("atclone") };
+        if remote::is_source(&argv[0])
+            || (argv.iter().any(|arg| arg.starts_with("atclone="))
+                && old.iter().any(|entry| entry.declaration == *argv))
+        {
+            if let Some(entry) = old.iter().find(|entry| entry.declaration == *argv) {
+                if plan
+                    .catalog
+                    .iter()
+                    .any(|item| item.plugin.id == entry.plugin.id)
+                {
+                    return Err(format!("plugin id is already in use: {}", entry.plugin.id).into());
+                }
+                let prefix = format!("plugins/{}/", entry.plugin.id);
+                plan.packages.extend(
+                    previous
+                        .iter()
+                        .filter(|(name, _)| name.starts_with(&prefix))
+                        .map(|(name, bytes)| (name.clone(), bytes.clone())),
+                );
+                plan.catalog.push(entry.clone());
+            } else {
+                let (entry, files) = if remote::is_source(&argv[0]) {
+                    remote_package(state, argv, event)?
+                } else {
+                    line_package(state, argv, event)?
+                };
+                if plan
+                    .catalog
+                    .iter()
+                    .any(|item| item.plugin.id == entry.plugin.id)
+                {
+                    return Err(format!("plugin id is already in use: {}", entry.plugin.id).into());
+                }
+                plan.catalog.push(entry);
+                plan.packages.extend(files);
+            }
+            continue;
+        }
         let wrap = |error: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
             git::line_error(&argv[0], error)
         };
         let (item, files) = match git::parse_source(&argv[0]).map_err(wrap)? {
-            None => line_package(argv).map_err(wrap)?,
+            None => line_package(state, argv, event).map_err(wrap)?,
             // A line that is already synced keeps its pin and its snapshot.
             Some(remote) => match old
                 .iter()
@@ -672,7 +875,7 @@ pub(super) fn sync(state: &Path) -> Result<()> {
                             git::pin(&mirror, &remote.url, ver.as_deref(), fresh).map_err(wrap)?
                         }
                     };
-                    git_package(state, argv, &remote, &mirror, &commit).map_err(wrap)?
+                    git_package(state, argv, &remote, &mirror, &commit, event).map_err(wrap)?
                 }
             },
         };

@@ -6,10 +6,13 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
+mod acquire;
 mod engine;
 mod git;
+mod hooks;
 mod manager;
 mod package;
+mod remote;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -94,10 +97,14 @@ fn text(path: &Path) -> Result<String> {
     Ok(String::from_utf8(bytes)?)
 }
 fn read_regular(path: &Path) -> Result<Vec<u8>> {
+    read_regular_limit(path, MAX_BYTES)
+}
+fn read_regular_limit(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let meta = fs::symlink_metadata(path)?;
-    if !meta.is_file() || meta.len() > MAX_BYTES {
+    if !meta.is_file() || meta.len() > limit {
         return Err(format!(
-            "expected a regular file of at most 2 MiB: {}",
+            "expected a regular file of at most {} MiB: {}",
+            limit / (1024 * 1024),
             path.display()
         )
         .into());
@@ -107,12 +114,35 @@ fn read_regular(path: &Path) -> Result<Vec<u8>> {
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)?
-        .take(MAX_BYTES + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err("file exceeds 2 MiB".into());
+    if bytes.len() as u64 > limit {
+        return Err("file exceeds size limit".into());
     }
     Ok(bytes)
+}
+
+fn snapshot_file(root: &Path, file: &str, lock: &Lock) -> Result<Vec<u8>> {
+    let program = file
+        .strip_prefix("bin/")
+        .is_some_and(|name| lock.bin.contains_key(name))
+        || lock.plugins.iter().any(|plugin| {
+            file.strip_prefix(&format!("plugins/{}/", plugin.id))
+                .is_some_and(|path| {
+                    plugin
+                        .bin
+                        .iter()
+                        .any(|item| split_bin(item).is_some_and(|(entry, _)| entry == path))
+                })
+        });
+    read_regular_limit(
+        &root.join(file),
+        if program {
+            acquire::MAX_PROGRAM_BYTES
+        } else {
+            MAX_BYTES
+        },
+    )
 }
 fn private_dir(path: &Path) -> Result<()> {
     if !path.exists() {
@@ -503,6 +533,13 @@ fn verify_generation(state: &Path, id: &str) -> Result<Lock> {
     for origin in lock.catalog.iter().filter_map(|item| item.origin.as_ref()) {
         git::validate_origin(&origin.url, origin.ver.as_deref(), &origin.commit)?;
     }
+    for item in lock.catalog.iter().filter(|item| item.asset.is_some()) {
+        if remote::origin(&item.declaration)?
+            != *item.asset.as_ref().ok_or("remote origin missing")?
+        {
+            return Err("remote origin does not match its declaration".into());
+        }
+    }
     for (file, expected) in &lock.files {
         if !valid_relative(file) {
             return Err("invalid locked path".into());
@@ -525,7 +562,7 @@ fn verify_generation(state: &Path, id: &str) -> Result<Lock> {
         if meta.uid() != unsafe { libc::geteuid() } || !mode_ok {
             return Err(format!("unexpected owner or mode: {file}").into());
         }
-        if hash(&read_regular(&path)?) != *expected {
+        if hash(&snapshot_file(&root, file, &lock)?) != *expected {
             return Err(format!("content changed: {file}").into());
         }
         if let Some(name) = program {

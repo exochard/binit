@@ -25,8 +25,8 @@ pins the declared sources into a verified generation; shell startup reads only
 that generation and never touches the network. A shell whose lines differ from
 the last sync prints one notice at its first prompt. `load=wait` is Zinit's
 `wait`: the prompt appears first and the plugin loads before the next key is
-read (at the first prompt when the native module is off). A source is an absolute
-local directory or a Git repository.
+read (at the first prompt when the native module is off). Sources include absolute
+local directories, Git repositories, release assets and HTTPS snippets.
 
 ### Commands on PATH
 
@@ -64,6 +64,10 @@ live in `$state/sources`.
 State lives in `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else
 `~/.local/share/binit`. `--state DIRECTORY` overrides all three. The
 [plugin interface](docs/plugins.md) lists the line keys and defaults.
+
+Checksum-pinned [release assets and snippets](docs/plugins.md#release-assets-and-snippets)
+use the same sync workflow. Manager-only `atclone` and `atpull` hooks can prepare
+selected files in an isolated source snapshot before publication.
 
 ## Try it
 
@@ -186,6 +190,6 @@ executable for that invocation. Script arguments and exit status pass through;
 plugin state is not required. The experimental builds have not met the release
 performance gate.
 
-The current prototype loads local packages and commit-pinned Git sources through plugin lines or declarations. The [qualification inventory](docs/qualification.md) records remaining acquisition, editor and distribution work. The experimental interpreter has not met the 25% execution target.
+The current prototype supports local and Git plugins, checksum-pinned release assets and snippets, and lifecycle hooks. A [user-local installer](docs/install.md) can add a backed-up startup block on request. The [qualification inventory](docs/qualification.md) records remaining editor and distribution evidence. The experimental interpreter has not met the 25% execution target.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and [the benchmark procedure](docs/benchmarks.md) for engine experiments. Original Binit code is under [MIT](LICENSE); [GNU-linked artifacts have additional distribution requirements](docs/licensing.md).

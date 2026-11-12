@@ -40,7 +40,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck cmake gcc clang make patch bison libncurses-dev python3-venv
+          sudo apt-get install -y shellcheck cmake gcc clang make patch bison curl libncurses-dev python3-venv
           rustup toolchain install stable --profile minimal --component clippy --component rustfmt
           rustup default stable
           python3 -m venv .venv
@@ -135,7 +135,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc git fzf bash-completion libncurses-dev python3-venv
+          sudo apt-get install -y gcc git curl fzf bash-completion libncurses-dev python3-venv
           rustup toolchain install stable --profile minimal
           rustup default stable
           python3 -m venv .venv

@@ -1358,6 +1358,354 @@ fn stdout(output: &Output) -> String {
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
+
+fn fixture_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn fake_download(h: &Home, bytes: &[u8]) -> (String, String, String) {
+    let payload = h.f.write("download", "");
+    fs::write(&payload, bytes).unwrap();
+    let curl = h.f.write("transport/curl", "#!/bin/sh\nprintf x >> \"$BINIT_DOWNLOAD_CALLS\"\nexec /bin/cat \"$BINIT_DOWNLOAD_FIXTURE\"\n");
+    fs::set_permissions(&curl, fs::Permissions::from_mode(0o700)).unwrap();
+    (
+        format!(
+            "{}:{}",
+            curl.parent().unwrap().display(),
+            std::env::var("PATH").unwrap()
+        ),
+        payload.to_str().unwrap().to_owned(),
+        h.f.root()
+            .join("download-calls")
+            .to_str()
+            .unwrap()
+            .to_owned(),
+    )
+}
+
+#[test]
+fn snippets_pin_bytes_sync_offline_update_explicitly_and_rollback() {
+    let h = Home::new();
+    let body = b"SNIPPET_VALUE=one\n";
+    let (path, payload, calls) = fake_download(&h, body);
+    let envs = [
+        ("PATH", path.as_str()),
+        ("BINIT_DOWNLOAD_FIXTURE", payload.as_str()),
+        ("BINIT_DOWNLOAD_CALLS", calls.as_str()),
+    ];
+    let line = format!(
+        "binit plugin snippet:https://example.com/init.bash id=snippet sha256={}\n",
+        fixture_digest(body)
+    );
+    success(h.shell_env(&line, "binit sync\n", &envs));
+    assert!(
+        stdout(&h.shell_env(&line, "echo value:$SNIPPET_VALUE\n", &envs)).contains("value:one")
+    );
+    let first = h.current();
+    fs::write(&payload, b"SNIPPET_VALUE=two\n").unwrap();
+    success(h.shell_env(&line, "binit sync\nbinit update --check\n", &envs));
+    assert_eq!(h.current(), first);
+    assert_eq!(fs::read_to_string(&calls).unwrap(), "x");
+    let next = format!(
+        "binit plugin snippet:https://example.com/init.bash id=snippet sha256={}\n",
+        fixture_digest(b"SNIPPET_VALUE=two\n")
+    );
+    success(h.shell_env(&next, "binit sync\n", &envs));
+    assert!(
+        stdout(&h.shell_env(&next, "echo value:$SNIPPET_VALUE\n", &envs)).contains("value:two")
+    );
+    success(h.binit(&["rollback"]));
+    assert_eq!(h.current(), first);
+    assert!(
+        stdout(&h.shell_env(&line, "echo value:$SNIPPET_VALUE\n", &envs)).contains("value:one")
+    );
+}
+
+#[test]
+fn releases_expose_large_programs_and_keep_apply_and_removal_transactional() {
+    let h = Home::new();
+    let mut bytes = b"#!/bin/sh\nprintf 'asset:%s\\n' \"$1\"\nexit 23\n#".to_vec();
+    bytes.resize(3 * 1024 * 1024, b'x');
+    let (path, payload, calls) = fake_download(&h, &bytes);
+    let envs = [
+        ("PATH", path.as_str()),
+        ("BINIT_DOWNLOAD_FIXTURE", payload.as_str()),
+        ("BINIT_DOWNLOAD_CALLS", calls.as_str()),
+    ];
+    let line = format!(
+        "binit plugin release:example/tool id=tool ver=v1 asset=tool.bin sha256={} bin=tool.bin:downloaded-tool\n",
+        fixture_digest(&bytes)
+    );
+    success(h.shell_env(&line, "binit sync\n", &envs));
+    let output = h.shell_env(
+        &line,
+        "downloaded-tool 'two words'; echo result:$?\n",
+        &envs,
+    );
+    assert!(
+        stdout(&output).contains("asset:two words\nresult:23"),
+        "{}",
+        stderr(&output)
+    );
+    success(h.binit(&["apply"]));
+    success(h.shell_env(&line, "binit sync\n", &envs));
+    assert_eq!(fs::read_to_string(&calls).unwrap(), "x");
+    let info = success(h.binit(&["inspect", "tool"]));
+    assert!(info.contains(&fixture_digest(&bytes)) && info.contains("Format: raw"));
+    success(h.shell_env("", "binit sync\n", &envs));
+    assert!(
+        stdout(&h.shell_env("", "command -v downloaded-tool || echo absent\n", &envs))
+            .contains("absent")
+    );
+}
+
+#[test]
+fn bad_remote_content_and_cache_tampering_preserve_the_generation() {
+    let h = Home::new();
+    let body = b"VALUE=ok\n";
+    let (path, payload, calls) = fake_download(&h, body);
+    let envs = [
+        ("PATH", path.as_str()),
+        ("BINIT_DOWNLOAD_FIXTURE", payload.as_str()),
+        ("BINIT_DOWNLOAD_CALLS", calls.as_str()),
+    ];
+    let line = format!(
+        "binit plugin snippet:https://example.com/init id=one sha256={}\n",
+        fixture_digest(body)
+    );
+    success(h.shell_env(&line, "binit sync\n", &envs));
+    let first = h.current();
+    let bad = format!(
+        "binit plugin snippet:https://example.com/init id=two sha256={}\n",
+        "0".repeat(64)
+    );
+    let output = h.shell_env(&bad, "binit sync\n", &envs);
+    assert!(stderr(&output).contains("SHA-256 mismatch"));
+    assert_eq!(h.current(), first);
+    fs::write(
+        h.f.state().join("assets").join(fixture_digest(body)),
+        b"tampered",
+    )
+    .unwrap();
+    let changed = line.replace("id=one", "id=two");
+    let output = h.shell_env(&changed, "binit sync\n", &envs);
+    assert!(stderr(&output).contains("cached remote source checksum mismatch"));
+    assert_eq!(h.current(), first);
+}
+
+#[test]
+fn clone_and_pull_hooks_prepare_isolated_local_sources_once() {
+    let h = Home::new();
+    let source = h.src("generated", "README", "source");
+    let builder = Path::new(&source).join("build");
+    fs::write(
+        &builder,
+        "#!/bin/sh\nprintf 'GENERATED=clone\\n' > init.bash\n",
+    )
+    .unwrap();
+    fs::set_permissions(&builder, fs::Permissions::from_mode(0o700)).unwrap();
+    let line = format!(
+        "binit plugin {} id=generated files=init.bash atclone=./build atpull={}\n",
+        sh_quote(&source),
+        sh_quote("printf 'GENERATED=pull\\n' > init.bash")
+    );
+    success(h.shell(&line, "binit sync\n"));
+    assert!(!Path::new(&source).join("init.bash").exists());
+    assert!(stdout(&h.shell(&line, "echo generated:$GENERATED\n")).contains("generated:clone"));
+    success(h.shell(&line, "binit sync\n"));
+    success(h.binit(&["update", "generated"]));
+    assert!(stdout(&h.shell(&line, "echo generated:$GENERATED\n")).contains("generated:pull"));
+    assert!(!Path::new(&source).join("init.bash").exists());
+}
+
+#[test]
+fn failing_hooks_leave_the_current_generation_and_source_untouched() {
+    let h = Home::new();
+    let source = h.src("plug", "init.bash", "VALUE=original\n");
+    let line = format!("binit plugin {} id=plug\n", sh_quote(&source));
+    success(h.shell(&line, "binit sync\n"));
+    let first = h.current();
+    let failing = format!(
+        "binit plugin {} id=other atclone={}\n",
+        sh_quote(&source),
+        sh_quote("printf broken > init.bash; exit 9")
+    );
+    let output = h.shell(&failing, "binit sync\n");
+    assert!(stderr(&output).contains("atclone"), "{}", stderr(&output));
+    assert_eq!(h.current(), first);
+    assert_eq!(
+        fs::read_to_string(Path::new(&source).join("init.bash")).unwrap(),
+        "VALUE=original\n"
+    );
+}
+
+#[test]
+fn release_archives_reject_duplicate_scripts_and_load_selected_content_once() {
+    let h = Home::new();
+    let mut archive = tar::Builder::new(Vec::new());
+    for (name, body) in [
+        ("bundle/init.bash", "COUNT=$(( ${COUNT:-0} + 1 ))\n"),
+        ("bundle/tool", "#!/bin/sh\nprintf archive-ok\\n\n"),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, name, body.as_bytes())
+            .unwrap();
+    }
+    let tar = archive.into_inner().unwrap();
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut gzip, &tar).unwrap();
+    let bytes = gzip.finish().unwrap();
+    let (path, payload, calls) = fake_download(&h, &bytes);
+    let envs = [
+        ("PATH", path.as_str()),
+        ("BINIT_DOWNLOAD_FIXTURE", payload.as_str()),
+        ("BINIT_DOWNLOAD_CALLS", calls.as_str()),
+    ];
+    let base = format!(
+        "binit plugin release:owner/repo id=archive ver=v1 asset=bundle.tar.gz sha256={} bin=bundle/tool:archived-tool",
+        fixture_digest(&bytes)
+    );
+    let duplicate = format!("{base} files=bundle/init.bash,bundle/init.bash\n");
+    let failed = h.shell_env(&duplicate, "binit sync\n", &envs);
+    assert!(
+        stderr(&failed).contains("duplicate declared file"),
+        "{}",
+        stderr(&failed)
+    );
+    let line = format!("{base} files=bundle/init.bash\n");
+    success(h.shell_env(&line, "binit sync\n", &envs));
+    let output = h.shell_env(&line, "echo count:$COUNT\narchived-tool\n", &envs);
+    assert!(stdout(&output).contains("count:1"), "{}", stderr(&output));
+    assert!(stdout(&output).contains("archive-ok"));
+    assert_eq!(fs::read_to_string(calls).unwrap(), "x");
+}
+
+#[test]
+fn git_hooks_run_only_on_acquisition_and_accepted_updates_with_derived_ids() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "hooked", "init.bash", "REVISION=one\n");
+    let line = format!(
+        "binit plugin {} files=init.bash atclone={} atpull={}\n",
+        repo.url(),
+        sh_quote("printf 'HOOK_ID=%s\\nHOOK_EVENT=clone\\n' \"$BINIT_PLUGIN_ID\" >> init.bash"),
+        sh_quote("printf 'HOOK_EVENT=pull\\n' >> init.bash")
+    );
+    success(h.shell(&line, "binit sync\n"));
+    let first = h.current();
+    assert!(
+        stdout(&h.shell(&line, "echo hook:$HOOK_ID:$HOOK_EVENT:$REVISION\n"))
+            .contains("hook:hooked:clone:one")
+    );
+    repo.commit("init.bash", "REVISION=two\n", "second");
+    success(h.binit(&["update", "--check"]));
+    assert_eq!(h.current(), first);
+    success(h.binit(&["update", "hooked"]));
+    assert!(stdout(&h.shell(&line, "echo hook:$HOOK_EVENT:$REVISION\n")).contains("hook:pull:two"));
+    success(h.binit(&["rollback"]));
+    assert!(
+        stdout(&h.shell(&line, "echo hook:$HOOK_EVENT:$REVISION\n")).contains("hook:clone:one")
+    );
+}
+
+#[test]
+fn interrupting_a_real_sync_hook_kills_background_children_and_preserves_state() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let h = Home::new();
+    let source = h.src("original", "init.bash", "VALUE=original\n");
+    success(h.shell(
+        &format!("binit plugin {}\n", sh_quote(&source)),
+        "binit sync\n",
+    ));
+    let before = h.current();
+    let ready = h.f.root().join("ready");
+    let escaped = h.f.root().join("must-not-be-written");
+    let script = format!(
+        "touch {}; (sleep 0.5; touch {}) & wait",
+        sh_quote(ready.to_str().unwrap()),
+        sh_quote(escaped.to_str().unwrap())
+    );
+    let atclone = format!("atclone={script}");
+    declare_lines(&h, &[&[&source, "id=interrupted", &atclone]]);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_binit"))
+        .arg("sync")
+        .arg("--state")
+        .arg(h.f.state())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    while !ready.exists() && started.elapsed() < Duration::from_secs(3) {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "hook exited before readiness"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if !ready.exists() {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("hook readiness timeout");
+    }
+    unsafe {
+        assert_eq!(libc::kill(child.id() as libc::pid_t, libc::SIGINT), 0);
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(h.current(), before);
+    std::thread::sleep(Duration::from_millis(650));
+    assert!(
+        !escaped.exists(),
+        "ordinary hook child survived cancellation"
+    );
+}
+
+#[test]
+fn hook_git_commands_cannot_discover_an_unrelated_or_inherited_repository() {
+    let h = Home::new();
+    let source = h.src("isolated", "init.bash", "SAFE=before\n");
+    let script = "if git rev-parse --show-toplevel >/dev/null 2>&1; then exit 19; fi; printf 'SAFE=isolated\\n' > init.bash";
+    let line = format!(
+        "binit plugin {} atclone={}\n",
+        sh_quote(&source),
+        sh_quote(script)
+    );
+    let git_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".git");
+    let work_tree = env!("CARGO_MANIFEST_DIR");
+    success(h.shell_env(
+        &line,
+        "binit sync\n",
+        &[
+            ("GIT_DIR", git_dir.to_str().unwrap()),
+            ("GIT_WORK_TREE", work_tree),
+        ],
+    ));
+    assert!(stdout(&h.shell(&line, "echo safe:$SAFE\n")).contains("safe:isolated"));
+    assert_eq!(
+        fs::read_to_string(Path::new(&source).join("init.bash")).unwrap(),
+        "SAFE=before\n"
+    );
+    let outer = tempfile::Builder::new()
+        .prefix(".scratch-hook-state-")
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+        .unwrap();
+    let colon = outer.path().join("state:colon");
+    success(h.shell_env(
+        &line,
+        "binit sync\n",
+        &[
+            ("BINIT_STATE", colon.to_str().unwrap()),
+            ("GIT_DIR", git_dir.to_str().unwrap()),
+            ("GIT_WORK_TREE", work_tree),
+        ],
+    ));
+}
 const NOTICE: &str = "changed since the last sync; run binit sync";
 
 #[test]

@@ -13,7 +13,7 @@ binit plugin ~/src/thing id=thing requires=git load=prompt
 
 Then run `binit sync` and open a new shell with `exec bash`. The first `binit init` creates an empty generation in the state directory (`--state`, else `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else `~/.local/share/binit`; each must be absolute).
 
-Grammar: `binit plugin SOURCE [KEY=VALUE...]`. `SOURCE` is an absolute directory after tilde expansion or a Git source (below); anything else fails with status 2 and the shell continues. Keys are `id`, `files`, `load`, `commands`, `completions`, `requires`, `depends` and, for Git sources, `ver`; list values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `wait`, `command` or `completion`.
+Grammar: `binit plugin SOURCE [KEY=VALUE...]`. Sources are absolute local directories, Git repositories, `release:OWNER/REPO` assets or `snippet:https://...` scripts. Common keys are `id`, `files`, `bin`, `load`, `commands`, `completions`, `requires` and `depends`. Acquisition and lifecycle keys are described below. List values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `wait`, `command` or `completion`.
 
 - A directory with `plugin.toml` and no keys uses that manifest.
 - Otherwise `id` defaults to the directory name, and `files` to the first existing of `ID.plugin.bash`, `ID.bash`, `init.bash`, `ID.sh`, `init.sh`. Sync fails and lists these names when none exists.
@@ -37,6 +37,63 @@ binit plugin user/scripts bin=tool.sh:tool
 ```
 
 Publishing copies each command of every enabled plugin to `bin/NAME` in the generation with mode 0700, the only executable files, and records the owning plugin in `lock.toml` (`[bin]`, name to plugin ID). Two enabled plugins with the same NAME fail the sync or publish naming both. Startup verification checks that `bin/` holds exactly the locked files, regular, owned by you and mode 0700. `init.bash` prepends `bin/` to `PATH` once (a re-sourced startup file does nothing; `BINIT_SAFE=1` skips init). Commands are generation-wide: a line removed from `.bashrc` keeps its command until the next `binit sync`, and the first-prompt notice says so. A command runs from its copy, so it cannot rely on sibling files. `binit inspect ID` lists them under `Programs:`.
+
+## Release assets and snippets
+
+Remote downloads require an explicit ID and SHA-256. A release also names an
+exact tag and asset; there is no implicit latest-version lookup. For Linux
+x86_64 with glibc:
+
+```bash
+binit plugin release:sharkdp/fd id=fd ver=v10.2.0 asset=fd-v10.2.0-x86_64-unknown-linux-gnu.tar.gz sha256=5f9030bcb0e1d03818521ed2e3d74fdb046480a45a4418ccff4f070241b4ed25 bin=fd-v10.2.0-x86_64-unknown-linux-gnu/fd:fd
+binit plugin snippet:https://raw.githubusercontent.com/nvm-sh/nvm/977563e97ddc66facf3a8e31c6cff01d236f09bd/nvm.sh id=nvm sha256=390260ab9eb1da20e8bc0ebea2ee90f528d53e5e9f6e13b16717db4af454df9d load=command commands=nvm
+```
+
+`format=raw|tar|tar.gz|zip` overrides format detection from the asset suffix.
+`bin=` selects exact paths within an archive and optionally renames commands.
+`files=` can source selected Bash scripts alongside release commands. Snippets
+source one downloaded Bash file; they do not accept `files=`, `bin=`, `ver=`,
+`asset=` or `format=`. Loading policies and dependencies work as with Git lines.
+
+Sync verifies the download before caching it in private `state/assets/SHA256`.
+Identical lines retain their snapshot; other selections can use the verified
+cache offline. `update --check` reports checksum-pinned sources without moving
+them. Edit the source/tag/asset and expected digest, then sync to select new
+content. Rollback restores the prior declaration and snapshot. Startup performs
+no download or archive extraction.
+
+Downloads and expanded archive contents are limited to 64 MiB, with 128 archive
+entries. A selected executable may be at most 32 MiB; sourced files retain the
+2 MiB limit. Archive links and special files are rejected, as are traversal,
+duplicate paths and encrypted ZIP entries. TAR PAX/GNU extension headers are
+currently unsupported. HTTPS redirects stay on HTTPS; URLs cannot carry user
+credentials. Curl is required during acquisition.
+
+## Clone and update hooks
+
+`atclone=SCRIPT` prepares a newly acquired source before selected files are
+snapshotted. `atpull=SCRIPT` runs on an accepted Git revision update, or an
+explicit local-line update. A preview never executes hooks. Unchanged syncs
+do not rerun clone hooks; checksum-pinned sources do not move on update.
+
+```bash
+binit plugin ~/src/tool files=completion.bash atclone='make completion.bash' atpull='make completion.bash'
+```
+
+Hooks run in a disposable source snapshot, leaving the original directory
+unchanged. Git and local hook snapshots retain the existing 128-file/2 MiB
+source limits. Each update starts from source again, so update hooks must be
+self-contained. These snapshots have no Git worktree metadata. Inherited Git
+context is removed; Git commands explicitly use staging's `.git` path and
+working directory, preventing discovery of an enclosing repository even when
+the state path contains a colon.
+
+Hooks receive `BINIT_PLUGIN_ID` and `BINIT_HOOK_EVENT` (`atclone` or `atpull`).
+They run through Bash without startup files, with closed stdin and a 120-second
+limit. Failure, timeout or interruption prevents generation publication.
+Ordinary child processes in the owned hook group are stopped. Deliberately
+detached processes and external side effects cannot be rolled back: hooks are
+trusted code with the user's authority. Hooks never run during shell startup.
 
 ## Git sources
 

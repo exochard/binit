@@ -8,7 +8,7 @@ before it can ship.
 ## Development
 
 Use Linux, Bash 5.2 or newer, Rust with edition 2024 support, Python 3.12 or
-newer, Git, ShellCheck, and GNU coreutils. Native completion also needs a C
+newer, Git, curl, ShellCheck, and GNU coreutils. Native completion also needs a C
 compiler and Bash/Readline development headers. Verification uses CMake and
 the pinned Python tools in `requirements-dev.txt`. On Debian or Ubuntu, the
 header packages are `bash-builtins` and `libreadline-dev`.

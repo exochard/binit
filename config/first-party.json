@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "plugins": [
+    {
+      "id": "autosuggestions",
+      "repository": "autosuggestions",
+      "commit": "ed088d6063e251ea79370a93ae13cb84d9cee67b",
+      "artifact": "autosuggestions-ed088d6063e2.tar.gz",
+      "sha256": "ed4069ae8fa168b049b6487cdf89156dec71375678c1c581bd7e0bd135be2392",
+      "publication": "local-candidate"
+    },
+    {
+      "id": "directory-jump",
+      "repository": "directory-jump",
+      "commit": "4b9e95a0c583ac047357b54f32f7b7e937540840",
+      "artifact": "directory-jump-4b9e95a0c583.tar.gz",
+      "sha256": "b6f797a13b8d18154d4b50670636068bed58ff7a4cff9860ee836d7d74c784c2",
+      "publication": "local-candidate"
+    },
+    {
+      "id": "git-completion",
+      "repository": "git-completion",
+      "commit": "c9c9288be6336533b46d8c2b63c222f3a865d86a",
+      "artifact": "git-completion-c9c9288be633.tar.gz",
+      "sha256": "dcd03eb2ff0f3a9ff5d9120a2b6e5c3118bfcf7c92469da7a4ee4fd3efcc09bc",
+      "publication": "local-candidate"
+    },
+    {
+      "id": "git-prompt",
+      "repository": "git-prompt",
+      "commit": "a6bdfe936c9cf13baf82477f4bd551da153247b6",
+      "artifact": "git-prompt-a6bdfe936c9c.tar.gz",
+      "sha256": "09c60e3bfe9b866643816bd8e76d5c9145551bdcc2833d1666a7e88998053eb8",
+      "publication": "local-candidate"
+    },
+    {
+      "id": "history-search",
+      "repository": "history-search",
+      "commit": "98e10709e1170142b97f31397de8f66258dcab3a",
+      "artifact": "history-search-98e10709e117.tar.gz",
+      "sha256": "3b70312f9faabcfab9d06300227e590e32792786776c37c0a0d69a0f311f385a",
+      "publication": "local-candidate"
+    },
+    {
+      "id": "project-context",
+      "repository": "project-context",
+      "commit": "994b753d7ecfc65780688c5267bc08701ca31b99",
+      "artifact": "project-context-994b753d7ecf.tar.gz",
+      "sha256": "17cf6d41a5fdf57c693b3292f8d304ef93715a20fba22029458b7e9d8d655818",
+      "publication": "local-candidate"
+    },
+    {
+      "id": "syntax-highlighting",
+      "repository": "syntax-highlighting",
+      "commit": "9f4cbe061b0d2dfb478a17d989208dd92fbc0cc4",
+      "artifact": "syntax-highlighting-9f4cbe061b0d.tar.gz",
+      "sha256": "c0251b848b3ba72f30f139ad8390375aba8d60d1a36539b4b11760ae15531298",
+      "publication": "local-candidate"
+    }
+  ]
+}

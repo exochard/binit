@@ -8,10 +8,12 @@ use std::path::{Component, Path, PathBuf};
 
 mod acquire;
 mod engine;
+mod extensions;
 mod git;
 mod hooks;
 mod manager;
 mod package;
+mod releases;
 mod remote;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -44,6 +46,14 @@ struct Plugin {
     id: String,
     entry: String,
     load: String,
+    #[serde(default)]
+    delay_ms: u64,
+    #[serde(default)]
+    event: String,
+    #[serde(default)]
+    when: String,
+    #[serde(default)]
+    watch: Vec<String>,
     #[serde(default)]
     requires: Vec<String>,
     #[serde(default)]
@@ -186,10 +196,13 @@ fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     Ok(())
 }
 fn unique() -> u128 {
-    std::time::SystemTime::now()
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let clock = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos()
+        .as_nanos();
+    (clock << 64) | u128::from(sequence)
 }
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
@@ -223,7 +236,17 @@ fn validate_plugin(plugin: &Plugin) -> Result<()> {
         || !valid_name(&plugin.id)
         || !valid_relative(&plugin.entry)
         || !plugin.entry.ends_with(".bash")
-        || !["startup", "prompt", "wait", "completion", "command"].contains(&plugin.load.as_str())
+        || ![
+            "startup",
+            "prompt",
+            "wait",
+            "completion",
+            "command",
+            "timed",
+            "event",
+            "watch",
+        ]
+        .contains(&plugin.load.as_str())
         || plugin
             .requires
             .iter()
@@ -237,6 +260,17 @@ fn validate_plugin(plugin: &Plugin) -> Result<()> {
             .commands
             .iter()
             .any(|s| s == "binit" || s.starts_with("__binit_"))
+        || plugin.delay_ms > 86_400_000
+        || (!plugin.event.is_empty() && !valid_name(&plugin.event))
+        || (!plugin.when.is_empty()
+            && (!valid_name(&plugin.when) || plugin.when.starts_with("__binit_")))
+        || (plugin.load == "event" && plugin.event.is_empty())
+        || (plugin.load == "watch" && plugin.watch.is_empty())
+        || plugin.watch.len() > 128
+        || plugin
+            .watch
+            .iter()
+            .any(|path| !Path::new(path).is_absolute() || path.contains([',', '\n', '\r', '\0']))
         || plugin.bin.iter().any(|s| split_bin(s).is_none())
     {
         return Err(format!("invalid plugin manifest: {}", plugin.id).into());
@@ -251,6 +285,10 @@ fn collect(root: &Path, relative: &Path, files: &mut BTreeMap<String, Vec<u8>>) 
     let mut entries = fs::read_dir(root.join(relative))?.collect::<std::io::Result<Vec<_>>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
+        // A local checkout is a package source, not a snapshot of Git's database.
+        if entry.file_name() == ".git" {
+            continue;
+        }
         let rel = relative.join(entry.file_name());
         let name = rel.to_str().ok_or("plugin paths must be UTF-8")?;
         if !valid_relative(name) {
@@ -418,14 +456,18 @@ fn publish(
     for id in &order {
         let p = &plugins[id];
         init.push_str(&format!(
-            "__binit_register {} \"$__binit_generation_dir\"/{} {} {} {} {} {}\n",
+            "__binit_register {} \"$__binit_generation_dir\"/{} {} {} {} {} {} {} {} {} {}\n",
             quote(id),
             quote(&format!("plugins/{id}/{}", p.entry)),
             quote(&p.load),
             quote(&p.requires.join(" ")),
             quote(&p.depends.join(" ")),
             quote(&p.completions.join(" ")),
-            quote(&p.commands.join(" "))
+            quote(&p.commands.join(" ")),
+            p.delay_ms,
+            quote(&p.event),
+            quote(&p.when),
+            quote(&p.watch.join(","))
         ));
         let declaration = catalog
             .iter()
@@ -738,12 +780,36 @@ fn run() -> Result<()> {
     if raw_args.first().is_some_and(|arg| arg == "run") {
         return engine::run(&raw_args[1..]);
     }
+    if raw_args.first().is_some_and(|arg| arg == "extension") {
+        return extensions::command(&raw_args[1..]);
+    }
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  sync             Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [ID...]  Move Git plugins to the commit their ver now names\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver now names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
+    }
+    if args.first().is_some_and(|s| s == "releases") {
+        return releases::command(&args[1..]);
+    }
+    let mut jobs = 4usize;
+    if let Some(position) = args.iter().position(|s| s == "--jobs") {
+        if !args.first().is_some_and(|s| s == "sync" || s == "update") {
+            return Err("--jobs is supported only for sync and update".into());
+        }
+        jobs = args
+            .get(position + 1)
+            .ok_or("--jobs needs a count")?
+            .parse()
+            .map_err(|_| "--jobs must be between 1 and 8")?;
+        if !(1..=8).contains(&jobs) {
+            return Err("--jobs must be between 1 and 8".into());
+        }
+        args.drain(position..=position + 1);
+        if args.iter().any(|s| s == "--jobs") {
+            return Err("--jobs may only be specified once".into());
+        }
     }
     let state = match args.iter().position(|s| s == "--state") {
         Some(pos) => {
@@ -769,7 +835,7 @@ fn run() -> Result<()> {
         ("add", 2) => manager::add(&state, Path::new(&args[1]), true)?,
         ("add", 3) if args[2] == "--disabled" => manager::add(&state, Path::new(&args[1]), false)?,
         ("enable" | "disable" | "remove", 2) => manager::change(&state, &args[1], command)?,
-        ("update", _) => manager::update_command(&state, &args[1..], check)?,
+        ("update", _) => manager::update_command_with_jobs(&state, &args[1..], check, jobs)?,
         ("plugins", 1) => manager::list(&state)?,
         ("inspect", 2) => manager::inspect(&state, &args[1])?,
         ("shell", 1) => manager::shell(&state)?,
@@ -778,7 +844,7 @@ fn run() -> Result<()> {
             let _guard = manager::MutationGuard::acquire(&state)?;
             println!("Prepared {}", prepare(Path::new(&args[1]), &state)?);
         }
-        ("sync", 1) => manager::sync(&state)?,
+        ("sync", 1) => manager::sync_with_jobs(&state, jobs)?,
         ("declare", 1) => manager::declare(&state)?,
         ("init", 1) => {
             if matches!(

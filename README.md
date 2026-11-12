@@ -97,6 +97,10 @@ exit
 
 `exit` returns to the parent shell. The demo does not install into shell startup files.
 
+See [loading and shell effects](docs/runtime-features.md) for timed, conditional,
+event and watched-file loading, reports and conservative unloading.
+[Manager extensions](docs/extensions.md) run explicitly from verified packages.
+
 ## Completion
 
 Press Tab to open the menu when several candidates match. Tab and Shift-Tab
@@ -152,7 +156,12 @@ loading](docs/plugins.md#existing-bash-scripts) for examples and scope limits.
 
 `binit add PATH --disabled` installs a plugin for later activation. `binit prepare CONFIG` replaces the complete catalog from a configuration file; ordinary demo startup preserves the catalog. Use `BINIT_DEMO_STATE=/absolute/path make demo` for a separate demo configuration.
 
-## Included plugins
+## First-party plugins
+
+First-party plugins are distributed as independent repositories and require
+explicit installation. Installing the manager installs none. See
+[plugin distribution](docs/first-party.md). The development demo uses fixtures
+of these original integrations:
 
 | Plugin | Behavior |
 | --- | --- |

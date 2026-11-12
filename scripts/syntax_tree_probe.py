@@ -8,18 +8,23 @@ import statistics
 import subprocess
 
 from syntax_probe import CORPUS, PROBE, digest
+from fetch_syntax import verify as verify_editor_source
 
 
 def build(destination, source):
     manifest = json.loads((PROBE / 'tree-source.json').read_text())
-    for name, expected in manifest['files'].items():
-        if digest(source / name) != expected:
-            raise ValueError(f'incremental grammar source mismatch: {name}')
+    if digest(source / 'src/parser.c') == manifest['files']['src/parser.c']:
+        for name, expected in manifest['files'].items():
+            if digest(source / name) != expected:
+                raise ValueError(f'incremental grammar source mismatch: {name}')
+    else:
+        verify_editor_source(source)
     if destination.exists():
         raise ValueError('incremental experiment requires a fresh destination')
     subprocess.run(['cmake', '-S', str(PROBE), '-B', str(destination), f'-DTREE_SITTER_GRAMMAR={source}'], check=True)
     subprocess.run(['cmake', '--build', str(destination), '--parallel', '2'], check=True)
-    metadata = {'source': manifest, 'probe_sha256': digest(PROBE / 'tree_probe.c'),
+    metadata = {'source': manifest, 'source_parser_sha256': digest(source / 'src/parser.c'),
+                'probe_sha256': digest(PROBE / 'tree_probe.c'),
                 'driver_sha256': digest(Path(__file__)), 'corpus_sha256': digest(CORPUS),
                 'binary_sha256': digest(destination / 'binit_tree_probe'),
                 'grammar_sha256': digest(destination / 'libbash_grammar.so'),
@@ -33,7 +38,8 @@ def check(binary, grammar, output, bash):
     for case in json.loads(CORPUS.read_text())['cases']:
         text = case['text']
         def parse(old, new):
-            result = subprocess.run([str(binary), old, new], check=True,
+            # Match the controlled alias configured by syntax_probe.SCRIPT.
+            result = subprocess.run([str(binary), old, new, 'magic=if true; then'], check=True,
                                     capture_output=True, text=True, timeout=5)
             value = json.loads(result.stdout)
             times.append(value['incremental_ns'])
@@ -60,7 +66,9 @@ def check(binary, grammar, output, bash):
                                   capture_output=True, text=True, timeout=5)
         sequences.append({'id': case['id'], **json.loads(sequence.stdout)})
     dialects = []
-    for case in json.loads((PROBE / 'dialects.json').read_text())['cases']:
+    dialect_cases = json.loads((PROBE / 'dialects.json').read_text())['cases']
+    dialect_cases += json.loads((PROBE / 'dialects-extra.json').read_text())['cases']
+    for case in dialect_cases:
         reference = subprocess.run([str(bash), '--noprofile', '--norc', '-n', '-c', case['text']],
                                    capture_output=True, text=True, timeout=5)
         candidate = json.loads(subprocess.check_output([str(binary), '', case['text']], text=True, timeout=5))
@@ -69,6 +77,7 @@ def check(binary, grammar, output, bash):
               'corpus_sha256': digest(CORPUS), 'driver_sha256': digest(Path(__file__)),
               'cases': rows, 'edits': edits, 'sequences': sequences,
               'dialects': dialects, 'dialects_sha256': digest(PROBE / 'dialects.json'), 'bash_sha256': digest(bash),
+              'extra_dialects_sha256': digest(PROBE / 'dialects-extra.json'),
               'incremental_median_ns': statistics.median(times),
               'incremental_max_ns': max(times), 'release_qualified': False}
     output.parent.mkdir(parents=True, exist_ok=True)

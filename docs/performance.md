@@ -8,7 +8,7 @@ The first targets are long scripts and loops. For interactive work, measure pars
 
 The execution cases cover a loop of Bash builtins and a loop of parameter expansions. Separate cases launch external commands or use command substitution. Their elapsed times include the return to the prompt. Raw scenario definitions and median/p95 results are saved in `evidence/bench.json`.
 
-The default execution engine is the system Bash. Experimental reference and PGO/LTO builds live beside it and can be selected with `binit run --engine PATH`. The [execution benchmark procedure](benchmarks.md) defines how those builds are compared; a faster prompt does not satisfy that gate. The [0.1 release requirements](release-0.1.md) retain the interpreter target alongside the plugin workflow.
+The default execution engine is the system Bash. Experimental reference and PGO/LTO builds live beside it and can be selected with `binit run --engine PATH`. The [execution benchmark procedure](benchmarks.md) defines how those builds are compared; a faster prompt does not satisfy that gate. The [release requirements](release-0.1.md) apply the interpreter target independently of the stock-Bash product.
 
 Before claiming an execution improvement, compare equivalent programs with matching output and exit status. Report process creation separately from builtin work. An optimization must beat the unchanged Bash baseline over repeated runs; disabling useful behavior does not satisfy that target.
 

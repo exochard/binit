@@ -2,6 +2,7 @@
 #define _GNU_SOURCE 1
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <tree_sitter/api.h>
@@ -85,7 +86,7 @@ static int sequence_check(TSParser *parser, const char *text)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3 || strlen(argv[1]) > 65536 || strlen(argv[2]) > 65536) return 2;
+    if ((argc != 3 && argc != 4) || strlen(argv[1]) > 65536 || strlen(argv[2]) > 65536 || (argc == 4 && strlen(argv[3]) > 4096)) return 2;
     TSParser *parser = ts_parser_new();
     if (!ts_parser_set_language(parser, tree_sitter_bash())) {ts_parser_delete(parser); return 2;}
     if (strcmp(argv[1], "--sequence") == 0) {
@@ -108,8 +109,29 @@ int main(int argc, char **argv)
     uint64_t elapsed = nanoseconds() - began;
     TSTree *fresh = ts_parser_parse_string(parser, NULL, argv[2], new_size);
     if (!incremental || !fresh) {ts_tree_delete(incremental); ts_tree_delete(fresh); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
-    printf("{\"parsed\":%s,\"incremental_matches_fresh\":%s,\"incremental_ns\":%llu,\"nodes\":[",
-           ts_node_has_error(ts_tree_root_node(incremental)) ? "false" : "true", same_tree(incremental, fresh) ? "true" : "false",
+    bool parsed = !ts_node_has_error(ts_tree_root_node(incremental));
+    bool alias_applied = false;
+    if (argc == 4) {
+        const char *equals = strchr(argv[3], '=');
+        size_t name_length = equals ? (size_t)(equals - argv[3]) : 0;
+        if (name_length && name_length <= new_size && !strncmp(argv[2], argv[3], name_length) &&
+            (name_length == new_size || strchr(" \t\n;|&()<>", argv[2][name_length]))) {
+            const char *value = equals + 1;
+            size_t value_length = strlen(value), remaining = new_size - name_length;
+            char *logical = malloc(value_length + remaining + 1);
+            if (!logical) {ts_tree_delete(fresh); ts_tree_delete(incremental); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
+            memcpy(logical, value, value_length);
+            memcpy(logical + value_length, argv[2] + name_length, remaining + 1);
+            TSTree *expanded = ts_parser_parse_string(parser, NULL, logical, (uint32_t)(value_length + remaining));
+            free(logical);
+            if (!expanded) {ts_tree_delete(fresh); ts_tree_delete(incremental); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
+            parsed = !ts_node_has_error(ts_tree_root_node(expanded));
+            alias_applied = true;
+            ts_tree_delete(expanded);
+        }
+    }
+    printf("{\"parsed\":%s,\"alias_applied\":%s,\"incremental_matches_fresh\":%s,\"incremental_ns\":%llu,\"nodes\":[",
+           parsed ? "true" : "false", alias_applied ? "true" : "false", same_tree(incremental, fresh) ? "true" : "false",
            (unsigned long long)elapsed);
     TSTreeCursor cursor = ts_tree_cursor_new(ts_tree_root_node(incremental));
     bool first = true;
@@ -117,6 +139,21 @@ int main(int argc, char **argv)
         TSNode node = ts_tree_cursor_current_node(&cursor);
         printf("%s[%u,%u]", first ? "" : ",", ts_node_start_byte(node), ts_node_end_byte(node));
         first = false;
+        uint32_t start_byte = ts_node_start_byte(node), end_byte = ts_node_end_byte(node);
+        if (strcmp(ts_node_type(node), "heredoc_body") == 0 && end_byte > start_byte &&
+            argv[2][end_byte - 1] == '\n')
+            printf(",[%u,%u]", start_byte, end_byte - 1);
+        if (strcmp(ts_node_type(node), "word") == 0 && end_byte + 2 <= new_size &&
+            argv[2][end_byte] == '\\' && argv[2][end_byte + 1] == '\n') {
+            TSNode next = ts_node_next_named_sibling(node);
+            while (!ts_node_is_null(next) && strcmp(ts_node_type(next), "word") == 0 &&
+                   ts_node_start_byte(next) == end_byte + 2) {
+                end_byte = ts_node_end_byte(next);
+                printf(",[%u,%u]", start_byte, end_byte);
+                if (end_byte + 2 > new_size || argv[2][end_byte] != '\\' || argv[2][end_byte + 1] != '\n') break;
+                next = ts_node_next_named_sibling(next);
+            }
+        }
     } while (advance(&cursor));
     puts("]}");
     ts_tree_cursor_delete(&cursor);

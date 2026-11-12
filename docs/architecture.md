@@ -83,5 +83,5 @@ the acceptance criteria.
 
 The optional interpreter is independent of the interactive module. Compiler
 training uses separate workloads, and unchanged validation scripts remain
-frozen. The [25% execution target](release-0.1.md) is a release condition.
+frozen. The [25% execution target](release-0.1.md) is an interpreter promotion condition.
 Native UI work does not establish an interpreter speedup.

@@ -1,5 +1,7 @@
 use super::*;
-use std::process::{Command, Stdio};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -9,6 +11,14 @@ const OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
 pub(super) struct Remote {
     pub(super) url: String,
     pub(super) name: String,
+}
+
+pub(super) fn is_ssh_url(url: &str) -> bool {
+    url.starts_with("ssh://")
+        || (!url.contains("://")
+            && url
+                .split_once(':')
+                .is_some_and(|(host, _)| host.contains('@')))
 }
 
 fn plain(text: &str) -> bool {
@@ -248,24 +258,69 @@ fn tail(stderr: &str) -> String {
         .join("; ")
 }
 
-/// Reads at most `limit` bytes and reports whether more was produced.
-fn drain(
-    mut source: impl Read + Send + 'static,
-    limit: u64,
-) -> std::thread::JoinHandle<(Vec<u8>, bool)> {
+/// Reads bounded output without waiting indefinitely for detached helpers.
+fn drain(mut source: impl Read + Send + 'static, limit: u64) -> Receiver<(Vec<u8>, bool)> {
+    let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = (&mut source).take(limit).read_to_end(&mut bytes);
         let more = std::io::copy(&mut source, &mut std::io::sink()).is_ok_and(|n| n > 0);
-        (bytes, more)
-    })
+        let _ = sender.send((bytes, more));
+    });
+    receiver
 }
 
-/// Runs one Git command without a shell, prompts, hooks or submodules and
-/// returns its standard output. Git stays in the terminal's foreground
-/// process group, so Ctrl-C reaches it and ssh can ask for a passphrase.
+// Keep the group leader unreaped until the group has been signalled, so its
+// process-group ID cannot be recycled. SSH shares the terminal group and only
+// its direct child can be killed on timeout. Abrupt manager death kills only
+// the direct Git child; descendants, including detached helpers, may survive.
+struct GitChild(Option<Child>, bool);
+
+impl GitChild {
+    fn stop(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let mut child = self.0.take().expect("owned child");
+        if self.1 {
+            let _ = child.kill();
+        } else {
+            unsafe {
+                libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+            }
+        }
+        child.wait()
+    }
+}
+
+impl Drop for GitChild {
+    fn drop(&mut self) {
+        if self.0.is_some() {
+            let _ = self.stop();
+        }
+    }
+}
+
+/// Runs Git without a shell, prompts, hooks or submodules.
 fn git_bytes(step: &str, scope: &Scope, args: &[&str], limit: u64) -> Result<Vec<u8>> {
-    let mut command = Command::new("git");
+    git_bytes_using(
+        std::ffi::OsStr::new("git"),
+        step,
+        scope,
+        args,
+        limit,
+        TIMEOUT,
+        args.iter().any(|arg| is_ssh_url(arg)),
+    )
+}
+
+fn git_bytes_using(
+    program: &std::ffi::OsStr,
+    step: &str,
+    scope: &Scope,
+    args: &[&str],
+    limit: u64,
+    timeout: Duration,
+    foreground: bool,
+) -> Result<Vec<u8>> {
+    let mut command = Command::new(program);
     command.args([
         "-c",
         "core.hooksPath=/dev/null",
@@ -288,7 +343,26 @@ fn git_bytes(step: &str, scope: &Scope, args: &[&str], limit: u64) -> Result<Vec
     ] {
         command.env_remove(name);
     }
-    let mut child = command
+    let parent = unsafe { libc::getpid() };
+    // SSH keeps the manager's foreground group so terminal authentication and
+    // Ctrl-C keep their usual behavior. Other Git commands own their group.
+    if !foreground {
+        command.process_group(0);
+    }
+    // A Git worker may run on any manager thread, so no global signal handler
+    // is installed. Linux kills the direct child if its spawning thread dies.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            Ok(())
+        });
+    }
+    let child = command
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "")
         .current_dir("/")
@@ -297,27 +371,51 @@ fn git_bytes(step: &str, scope: &Scope, args: &[&str], limit: u64) -> Result<Vec
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("git {step}: cannot run git: {error}"))?;
-    let out = drain(child.stdout.take().ok_or("git output unavailable")?, limit);
+    let mut child = GitChild(Some(child), foreground);
+    let process = child.0.as_mut().expect("owned child");
+    let out = drain(
+        process.stdout.take().ok_or("git output unavailable")?,
+        limit,
+    );
     let err = drain(
-        child.stderr.take().ok_or("git output unavailable")?,
+        process.stderr.take().ok_or("git output unavailable")?,
         OUTPUT_LIMIT,
     );
+    let pid = process.id();
     let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+    loop {
+        // WNOWAIT preserves the leader PID until group cleanup has completed.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
         }
-        if started.elapsed() > TIMEOUT {
-            // A helper that inherited the pipes may outlive git, so the
-            // reader threads are left to finish on their own.
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("git {step} timed out after {} s", TIMEOUT.as_secs()).into());
+        if unsafe { info.si_pid() } != 0 {
+            break;
+        }
+        if started.elapsed() > timeout {
+            return Err(format!("git {step} timed out after {} s", timeout.as_secs()).into());
         }
         std::thread::sleep(Duration::from_millis(20));
-    };
-    let (stdout, more) = out.join().unwrap_or_default();
-    let (stderr, _) = err.join().unwrap_or_default();
+    }
+    let status = child.stop()?;
+    let (stdout, more) = out
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| format!("git {step}: output did not close"))?;
+    let (stderr, _) = err
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| format!("git {step}: output did not close"))?;
     if !status.success() {
         return Err(format!(
             "git {step} failed ({status}): {}",
@@ -537,6 +635,10 @@ impl Listing {
     /// Whether the commit has a file or symlink at `path`.
     pub(super) fn has(&self, path: &str) -> bool {
         self.entries.contains_key(path)
+    }
+
+    pub(super) fn paths(&self) -> Vec<String> {
+        self.entries.keys().cloned().collect()
     }
 }
 
@@ -758,6 +860,33 @@ pub(super) fn clean_leftovers(state: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_terminates_git_process_group() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("git-fixture");
+        let marker = dir.path().join("escaped");
+        let body = format!(
+            "#!/bin/sh\n(sleep 0.5; printf escaped > {}) &\nwait\n",
+            quote(marker.to_str().unwrap())
+        );
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = git_bytes_using(
+            script.as_os_str(),
+            "fixture",
+            &Scope::default(),
+            &[],
+            1024,
+            Duration::from_millis(100),
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        std::thread::sleep(Duration::from_millis(650));
+        assert!(!marker.exists(), "a Git helper survived its process group");
+    }
 
     fn url(source: &str) -> String {
         parse_source(source).unwrap().unwrap().url

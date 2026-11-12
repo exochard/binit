@@ -3111,7 +3111,9 @@ fn wait_lines_load_by_the_first_prompt_without_the_native_module() {
     }
     let bad = h.shell("binit plugin /x load=later\n", "");
     assert!(
-        stderr(&bad).contains("load must be startup, prompt, wait, command or completion"),
+        stderr(&bad).contains(
+            "load must be startup, prompt, wait, command, completion, timed, event or watch"
+        ),
         "{}",
         stderr(&bad)
     );

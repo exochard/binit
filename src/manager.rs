@@ -263,7 +263,12 @@ fn git_package(
         if event.is_some_and(|event| keys.get(event).is_some_and(|script| !script.is_empty())) {
             None
         } else {
-            package::git_paths(argv, &remote.name, &|path| listing.has(path))?
+            package::git_paths(
+                argv,
+                &remote.name,
+                &|path| listing.has(path),
+                &listing.paths(),
+            )?
         };
     let checkout = git::Checkout::create(state, mirror, &listing, paths.as_deref())?;
     hook(argv, checkout.root(), event)?;
@@ -371,10 +376,100 @@ pub(super) fn change(state: &Path, id: &str, action: &str) -> Result<()> {
     Ok(())
 }
 
+type Mirrors = BTreeMap<String, (PathBuf, bool)>;
+
+/// Network work is grouped by mirror. Threads finish before packages and hooks
+/// are prepared, and publishing still happens once after all preparations.
+fn prefetch_mirrors(state: &Path, requests: Vec<(String, bool)>, jobs: usize) -> Result<Mirrors> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    if !(1..=8).contains(&jobs) {
+        return Err("jobs must be between 1 and 8".into());
+    }
+    let mut tasks: Vec<(String, String, bool)> = Vec::new();
+    let mut indices = BTreeMap::new();
+    for (source, refresh) in requests {
+        let remote = git::parse_source(&source)
+            .map_err(|error| git::line_error(&source, error))?
+            .ok_or("Git origin on a local line")?;
+        let key = git::normalize(&remote.url);
+        if let Some(&index) = indices.get(&key) {
+            let task: &mut (String, String, bool) = &mut tasks[index];
+            task.2 |= refresh;
+        } else {
+            indices.insert(key.clone(), tasks.len());
+            tasks.push((key, source, refresh));
+        }
+    }
+    if tasks.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    // Creating the shared directory once avoids races in private_dir's
+    // create-then-verify path; each worker owns a distinct mirror staging dir.
+    private_dir(&state.join("sources"))?;
+    let next = AtomicUsize::new(0);
+    // Foreground SSH can prompt on the terminal, so allow only one such
+    // acquisition at a time while other transports continue in parallel.
+    let ssh = Mutex::new(());
+    let results = Mutex::new(
+        std::iter::repeat_with(|| None)
+            .take(tasks.len())
+            .collect::<Vec<Option<std::result::Result<(PathBuf, bool), String>>>>(),
+    );
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.min(tasks.len()) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some((_, source, refresh)) = tasks.get(index) else {
+                        break;
+                    };
+                    let result = (|| -> Result<(PathBuf, bool)> {
+                        let remote =
+                            git::parse_source(source)?.ok_or("Git origin on a local line")?;
+                        let _ssh_guard = if git::is_ssh_url(&remote.url) {
+                            Some(ssh.lock().map_err(|_| "SSH acquisition lock poisoned")?)
+                        } else {
+                            None
+                        };
+                        let (mirror, created) = git::ensure(state, &remote)?;
+                        if *refresh && !created {
+                            git::refresh(&mirror, &remote.url)?;
+                        }
+                        Ok((mirror, created || *refresh))
+                    })()
+                    .map_err(|error| git::line_error(source, error).to_string());
+                    results.lock().expect("mirror result lock")[index] = Some(result);
+                }
+            });
+        }
+    });
+    let results = results
+        .into_inner()
+        .map_err(|_| "mirror result lock poisoned")?;
+    let mut mirrors = BTreeMap::new();
+    for ((key, _, _), result) in tasks.into_iter().zip(results) {
+        let prepared = result
+            .ok_or("missing mirror result")?
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        mirrors.insert(key, prepared);
+    }
+    Ok(mirrors)
+}
+
 /// `binit update [--check] [ID...]`. The old `update ID [PATH]` form applies
 /// to a catalog plugin, and a second argument is a PATH only when it is not
 /// an installed plugin.
-pub(super) fn update_command(state: &Path, args: &[String], check: bool) -> Result<()> {
+pub(super) fn update_command_with_jobs(
+    state: &Path,
+    args: &[String],
+    check: bool,
+    jobs: usize,
+) -> Result<()> {
+    if !(1..=8).contains(&jobs) {
+        return Err("jobs must be between 1 and 8".into());
+    }
     if !check && (1..=2).contains(&args.len()) {
         let plan = current(state)?;
         let catalog = plan
@@ -386,10 +481,10 @@ pub(super) fn update_command(state: &Path, args: &[String], check: bool) -> Resu
             return update(state, &args[0], args.get(1).map(Path::new));
         }
     }
-    update_lines(state, args, check)
+    update_lines(state, args, check, jobs)
 }
 
-fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
+fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Result<()> {
     let _guard = MutationGuard::acquire(state)?;
     git::clean_leftovers(state);
     let mut plan = current(state)?;
@@ -422,7 +517,17 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
             targets.push(position);
         }
     }
-    let mut fetched = BTreeSet::new();
+    let mut requests = Vec::new();
+    for &position in &targets {
+        let entry = &plan.catalog[position];
+        if let Some(origin) = &entry.origin
+            && !origin.ver.as_deref().is_some_and(git::valid_commit)
+        {
+            package::check_keys(&entry.declaration)?;
+            requests.push((entry.declaration[0].clone(), true));
+        }
+    }
+    let mirrors = prefetch_mirrors(state, requests, jobs)?;
     let mut changes = Vec::new();
     // Results print after the generation is published, so a failure shows no
     // moves.
@@ -476,20 +581,17 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
         let remote = git::parse_source(&entry.declaration[0])
             .map_err(wrap)?
             .ok_or("Git origin on a local line")?;
-        let (mirror, created) = git::ensure(state, &remote).map_err(wrap)?;
-        if created {
-            fetched.insert(remote.url.clone());
-        } else if fetched.insert(remote.url.clone()) {
-            git::refresh(&mirror, &remote.url).map_err(wrap)?;
-        }
-        let commit = git::pin(&mirror, &remote.url, origin.ver.as_deref(), true).map_err(wrap)?;
+        let (mirror, _) = mirrors
+            .get(&git::normalize(&remote.url))
+            .ok_or("missing prepared mirror")?;
+        let commit = git::pin(mirror, &remote.url, origin.ver.as_deref(), true).map_err(wrap)?;
         if commit == origin.commit {
             say(format!("{id}  up to date"));
             continue;
         }
         let moved = format!("{id}  {} -> {}", &origin.commit[..12], &commit[..12]);
         if check {
-            let (count, log) = git::changes(&mirror, &origin.commit, &commit);
+            let (count, log) = git::changes(mirror, &origin.commit, &commit);
             match count {
                 Some(1) => println!("{moved}  (1 commit)"),
                 Some(count) => println!("{moved}  ({count} commits)"),
@@ -503,7 +605,7 @@ fn update_lines(state: &Path, ids: &[String], check: bool) -> Result<()> {
                 state,
                 &entry.declaration,
                 &remote,
-                &mirror,
+                mirror,
                 &commit,
                 Some("atpull"),
             )
@@ -756,7 +858,26 @@ pub(super) fn declare(state: &Path) -> Result<()> {
     atomic_write(&state.join("declared"), &bytes)
 }
 
-pub(super) fn sync(state: &Path) -> Result<()> {
+fn kept_git_pin(
+    old: &[Installed],
+    argv: &[String],
+    remote: &git::Remote,
+    ver: &Option<String>,
+) -> Option<String> {
+    let wanted = argv[1..]
+        .iter()
+        .find_map(|arg| arg.strip_prefix("id="))
+        .unwrap_or(&remote.name);
+    old.iter().find_map(|entry| {
+        let origin = entry.origin.as_ref()?;
+        (entry.plugin.id == wanted
+            && git::normalize(&origin.url) == git::normalize(&remote.url)
+            && &origin.ver == ver)
+            .then(|| origin.commit.clone())
+    })
+}
+
+pub(super) fn sync_with_jobs(state: &Path, jobs: usize) -> Result<()> {
     let _guard = MutationGuard::acquire(state)?;
     git::clean_leftovers(state);
     let lines = read_declared(state)?;
@@ -768,12 +889,32 @@ pub(super) fn sync(state: &Path) -> Result<()> {
         .filter(|e| !e.declaration.is_empty())
         .cloned()
         .collect();
+    let mut requests = Vec::new();
+    for argv in &lines {
+        package::check_keys(argv)?;
+        if remote::is_source(&argv[0])
+            || old
+                .iter()
+                .any(|entry| entry.origin.is_some() && entry.declaration == *argv)
+        {
+            continue;
+        }
+        let Some(remote) =
+            git::parse_source(&argv[0]).map_err(|error| git::line_error(&argv[0], error))?
+        else {
+            continue;
+        };
+        let ver = git::line_ver(argv).map_err(|error| git::line_error(&argv[0], error))?;
+        let kept = kept_git_pin(&old, argv, &remote, &ver);
+        let refresh = kept.is_none() && !ver.as_deref().is_some_and(git::valid_commit);
+        requests.push((argv[0].clone(), refresh));
+    }
+    let mirrors = prefetch_mirrors(state, requests, jobs)?;
     for entry in &old {
         let prefix = format!("plugins/{}/", entry.plugin.id);
         plan.packages.retain(|name, _| !name.starts_with(&prefix));
     }
     plan.catalog.retain(|entry| entry.declaration.is_empty());
-    let mut fetched = BTreeSet::new();
     for argv in &lines {
         package::check_keys(argv)?;
         let keys = package::line_keys(argv)?;
@@ -849,33 +990,17 @@ pub(super) fn sync(state: &Path) -> Result<()> {
                     // A line keeps its commit while its id, source and ver stay
                     // the same. Any other change is a new choice and resolves
                     // the current commit.
-                    let wanted = argv[1..]
-                        .iter()
-                        .find_map(|a| a.strip_prefix("id="))
-                        .unwrap_or(&remote.name);
-                    let kept = old.iter().find_map(|entry| {
-                        let origin = entry.origin.as_ref()?;
-                        (entry.plugin.id == wanted
-                            && git::normalize(&origin.url) == git::normalize(&remote.url)
-                            && origin.ver == ver)
-                            .then(|| origin.commit.clone())
-                    });
-                    let (mirror, created) = git::ensure(state, &remote).map_err(wrap)?;
+                    let kept = kept_git_pin(&old, argv, &remote, &ver);
+                    let (mirror, fresh) = mirrors
+                        .get(&git::normalize(&remote.url))
+                        .ok_or("missing prepared mirror")?;
                     let commit = match kept {
                         Some(commit) => commit,
                         None => {
-                            if created {
-                                fetched.insert(remote.url.clone());
-                            } else if !ver.as_deref().is_some_and(git::valid_commit)
-                                && fetched.insert(remote.url.clone())
-                            {
-                                git::refresh(&mirror, &remote.url).map_err(wrap)?;
-                            }
-                            let fresh = fetched.contains(&remote.url);
-                            git::pin(&mirror, &remote.url, ver.as_deref(), fresh).map_err(wrap)?
+                            git::pin(mirror, &remote.url, ver.as_deref(), *fresh).map_err(wrap)?
                         }
                     };
-                    git_package(state, argv, &remote, &mirror, &commit, event).map_err(wrap)?
+                    git_package(state, argv, &remote, mirror, &commit, event).map_err(wrap)?
                 }
             },
         };

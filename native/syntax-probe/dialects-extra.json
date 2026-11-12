@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "cases": [
+    {"id": "nested-current-environment-substitution", "text": "printf %s \"${ printf '%s' \"$(printf x)\"; }\""},
+    {"id": "quoted-reply-substitution", "text": "printf %s \"${| REPLY=\"x y\"; }\""},
+    {"id": "case-retest-followed-by-pattern", "text": "case x in x) : ;;& y) : ;; esac"}
+  ]
+}

@@ -45,6 +45,22 @@ fn fetch_using(
     if !sha256_ok(expected_sha256) || limit == 0 || limit > MAX_DOWNLOAD_BYTES {
         return Err("invalid SHA-256 or download size limit".into());
     }
+    let bytes = request_using(program, url, limit)?;
+    if format!("{:x}", Sha256::digest(&bytes)) != expected_sha256.to_ascii_lowercase() {
+        return Err("download SHA-256 mismatch".into());
+    }
+    Ok(bytes)
+}
+
+pub(super) fn metadata(url: &str, limit: u64) -> Result<Vec<u8>> {
+    request_using(std::ffi::OsStr::new("curl"), url, limit)
+}
+
+fn request_using(program: &std::ffi::OsStr, url: &str, limit: u64) -> Result<Vec<u8>> {
+    validate_url(url)?;
+    if limit == 0 || limit > MAX_DOWNLOAD_BYTES {
+        return Err("invalid download size limit".into());
+    }
     let mut child = Command::new(program)
         .args([
             "-q",
@@ -60,6 +76,8 @@ fn fetch_using(
             "120",
             "--connect-timeout",
             "20",
+            "--user-agent",
+            "binit",
             "--",
             url,
         ])
@@ -78,9 +96,6 @@ fn fetch_using(
     }
     if !child.wait()?.success() {
         return Err("HTTPS download failed".into());
-    }
-    if format!("{:x}", Sha256::digest(&bytes)) != expected_sha256.to_ascii_lowercase() {
-        return Err("download SHA-256 mismatch".into());
     }
     Ok(bytes)
 }

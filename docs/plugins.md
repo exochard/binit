@@ -13,7 +13,7 @@ binit plugin ~/src/thing id=thing requires=git load=prompt
 
 Then run `binit sync` and open a new shell with `exec bash`. The first `binit init` creates an empty generation in the state directory (`--state`, else `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else `~/.local/share/binit`; each must be absolute).
 
-Grammar: `binit plugin SOURCE [KEY=VALUE...]`. Sources are absolute local directories, Git repositories, `release:OWNER/REPO` assets or `snippet:https://...` scripts. Common keys are `id`, `files`, `bin`, `load`, `commands`, `completions`, `requires` and `depends`. Acquisition and lifecycle keys are described below. List values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `wait`, `command` or `completion`.
+Grammar: `binit plugin SOURCE [KEY=VALUE...]`. Sources are absolute local directories, Git repositories, `release:OWNER/REPO` assets or `snippet:https://...` scripts. Common keys are `id`, `files`, `bin`, `load`, `commands`, `completions`, `requires` and `depends`. Acquisition and lifecycle keys are described below. List values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `wait`, `command`, `completion`, `timed`, `event` or `watch`. See [scheduling and lifecycle](runtime-features.md) for `delay_ms`, `when`, `event` and `watch`.
 
 - A directory with `plugin.toml` and no keys uses that manifest.
 - Otherwise `id` defaults to the directory name, and `files` to the first existing of `ID.plugin.bash`, `ID.bash`, `init.bash`, `ID.sh`, `init.sh`. Sync fails and lists these names when none exists.
@@ -26,6 +26,11 @@ At startup, a line whose exact arguments match a synced plugin activates it at o
 A synced plugin with no matching line is `undeclared` and never loads, including as a dependency; its dependants become unavailable. Declare a dependency before the plugin that needs it.
 
 When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync; run binit sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.
+
+`files=` accepts bounded `*` and `?` patterns within a path component. Matches
+are sorted; duplicate or empty selections fail. Scans visit at most 8,192
+entries and select at most 125 files. Paths and symlinks retain the normal
+package restrictions.
 
 ## Commands on PATH
 
@@ -94,6 +99,15 @@ limit. Failure, timeout or interruption prevents generation publication.
 Ordinary child processes in the owned hook group are stopped. Deliberately
 detached processes and external side effects cannot be rolled back: hooks are
 trusted code with the user's authority. Hooks never run during shell startup.
+
+Discover release assets with `binit releases OWNER/REPO --ver latest --platform host`.
+Use `--asset GLOB` to narrow names. Discovery lists exact assets and available
+published digests; it does not change a pin. `--platform` also accepts
+`linux/x86_64` and `linux/arm64`.
+
+`binit sync --jobs N` and `binit update --jobs N` bound independent Git acquisition
+to 1–8 workers (default 4). SSH acquisitions remain serial and foreground for
+authentication. Preparation hooks and generation publication remain ordered.
 
 ## Git sources
 

@@ -1,0 +1,59 @@
+name: Editor
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-enabled:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        bash: ['5.2', '5.3']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config patch bison curl libncurses-dev python3-venv shellcheck
+          rustup update stable
+          rustup default stable
+          rustup component add clippy rustfmt
+          cargo install --locked tree-sitter-cli --version 0.26.9
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+      - name: Prepare pinned interpreter and syntax dependencies
+        run: |
+          python3 scripts/ci_bash.py '${{ matrix.bash }}' .cache/editor/bash
+          python3 scripts/fetch_syntax.py "$PWD/.cache/editor/grammar" --runtime-prefix "$PWD/.cache/editor/tree-sitter"
+      - name: Verify syntax-enabled configuration
+        run: |
+          export PATH="$PWD/.venv/bin:$PATH"
+          export BINIT_BASH="$PWD/.cache/editor/bash/install/bin/bash"
+          export BINIT_BASH_INCLUDE="$PWD/.cache/editor/bash/install/include/bash"
+          if [[ '${{ matrix.bash }}' == '5.2' ]]; then version=5.2.15; else version=5.3; fi
+          export BINIT_READLINE_INCLUDE="$PWD/.cache/editor/bash/bash-$version/lib"
+          export BINIT_SYNTAX_SOURCE="$PWD/.cache/editor/grammar"
+          export BINIT_SYNTAX_RUNTIME="$PWD/.cache/editor/tree-sitter"
+          export BINIT_EXPECT_HIGHLIGHT=1
+          export CARGO_TARGET_DIR="$PWD/.cache/editor/target"
+          cargo fetch --locked
+          bash scripts/verify.bash > .cache/editor/verification.log 2>&1
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: editor-${{ matrix.os }}-${{ matrix.bash }}
+          path: |
+            .cache/editor/verification.log
+            .cache/editor/target/verification/

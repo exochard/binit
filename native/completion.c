@@ -5,23 +5,31 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
 #include "builtins.h"
 #include "variables.h"
 #include "execute_cmd.h"
 #include "common.h"
 #include "shell.h"
+#include "externs.h"
+#include "alias.h"
 #include "version.h"
 #include "unwind_prot.h"
 #include "xmalloc.h"
 #include "quit.h"
 #include <readline/readline.h>
+#include <readline/history.h>
 #include "menu.h"
+#ifdef BINIT_HIGHLIGHT
+#include "highlight.h"
+#endif
 
 #define EXPORT __attribute__((visibility("default")))
 #define INPUT_LIMIT 128
@@ -67,6 +75,207 @@ static int wait_hook(void);
 extern int running_trap;
 static rl_hook_func_t *previous_pre_input;
 static bool wait_installed;
+static bool poll_installed;
+static bool poll_running;
+static long last_poll;
+static rl_hook_func_t *previous_event_hook;
+static bool suggestions_enabled;
+static bool highlighting_enabled;
+static bool suggestion_visible;
+static bool redisplay_running;
+static rl_voidfunc_t *previous_redisplay;
+static struct binding suggestion_bindings[2];
+
+#ifdef BINIT_HIGHLIGHT
+static bool alias_context_unknown(const char *line)
+{
+    while (*line == ' ' || *line == '\t') ++line;
+    size_t length = 0;
+    while (line[length] && !strchr(" \t\n;|&()<>", line[length])) ++length;
+    if (!length || length > 256) return false;
+    char name[257];
+    memcpy(name, line, length);
+    name[length] = '\0';
+    return find_alias(name) != NULL;
+}
+#endif
+
+static int display_width(const char *text, size_t size)
+{
+    mbstate_t state = {0};
+    size_t offset = 0;
+    int width = 0;
+    while (offset < size) {
+        wchar_t character;
+        size_t used = mbrtowc(&character, text + offset, size - offset, &state); // NOLINT(concurrency-mt-unsafe): Readline runs on Bash's shell thread.
+        if (used == (size_t)-1 || used == (size_t)-2 || used == 0) return -1;
+        int cells = wcwidth(character);
+        if (cells < 0) return -1;
+        width += cells;
+        offset += used;
+    }
+    return width;
+}
+
+/* Readline marks prompt escapes as non-printing with SOH/STX.  Only SGR
+   sequences are safe to account for without terminal cursor queries. */
+static int prompt_width(const char *prompt)
+{
+    const unsigned char *p = (const unsigned char *)prompt;
+    size_t length = strnlen(prompt, 8193);
+    if (length > 8192) return -1;
+    const unsigned char *end = p + length;
+    mbstate_t state = {0};
+    int width = 0;
+    bool marked = false;
+    while (p < end) {
+        if (*p == 1 && !marked) {marked = true; ++p; continue;}
+        if (*p == 2 && marked) {marked = false; ++p; continue;}
+        if (*p == '\033' && p + 1 < end && p[1] == '[') {
+            p += 2;
+            while (p < end && ((*p >= '0' && *p <= '9') || *p == ';' || *p == ':')) ++p;
+            if (p == end || *p != 'm') return -1;
+            ++p;
+            continue;
+        }
+        if (marked) return -1;
+        wchar_t character;
+        size_t used = mbrtowc(&character, (const char *)p, (size_t)(end - p), &state); // NOLINT(concurrency-mt-unsafe): Readline runs on Bash's shell thread.
+        if (used == (size_t)-1 || used == (size_t)-2 || used == 0 || used > (size_t)(end - p)) return -1;
+        int cells = wcwidth(character);
+        if (cells < 0) return -1;
+        width += cells;
+        p += used;
+    }
+    return marked ? -1 : width;
+}
+
+static const char *history_suggestion(void)
+{
+    if (!suggestions_enabled || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
+        rl_point != rl_end || rl_end <= 0 || rl_end > 4096 || !rl_line_buffer) return NULL;
+    if (display_width(rl_line_buffer, (size_t)rl_end) < 0) return NULL;
+    HIST_ENTRY **entries = history_list();
+    if (!entries) return NULL;
+    int lower = history_length > 1000 ? history_length - 1000 : 0;
+    for (int i = history_length - 1; i >= lower; --i) {
+        const char *line = entries[i]->line;
+        if (!line || strncmp(line, rl_line_buffer, (size_t)rl_end) != 0 || !line[rl_end]) continue;
+        const char *suffix = line + rl_end;
+        size_t size = strnlen(suffix, 1025);
+        if (size > 1024 || display_width(suffix, size) < 0) return NULL;
+        return suffix;
+    }
+    return NULL;
+}
+
+static void suggestion_redisplay(void)
+{
+    if (redisplay_running) {rl_redisplay(); return;}
+    redisplay_running = true;
+    if (previous_redisplay && previous_redisplay != suggestion_redisplay) previous_redisplay();
+    else rl_redisplay();
+    redisplay_running = false;
+    if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level) return;
+#ifdef BINIT_HIGHLIGHT
+    if (highlighting_enabled && rl_outstream && rl_line_buffer && rl_end > 0 && rl_end <= 4096 && rl_point >= 0 && rl_point <= rl_end) {
+        const char *prompt = rl_display_prompt ? rl_display_prompt : "";
+        int rows, columns;
+        rl_get_screen_size(&rows, &columns);
+        (void)rows;
+        int width = display_width(rl_line_buffer, (size_t)rl_end);
+        int before = display_width(rl_line_buffer, (size_t)rl_point);
+        uint8_t colors[4096];
+        bool uncertain = alias_context_unknown(rl_line_buffer);
+        int prompt_cells = prompt_width(prompt);
+        if (prompt_cells >= 0 && width >= 0 && before >= 0 && columns > 1 &&
+            (size_t)prompt_cells + (size_t)width < (size_t)columns &&
+            (uncertain ? (memset(colors, 0, (size_t)rl_end), true) : binit_highlight(rl_line_buffer, (size_t)rl_end, colors))) {
+            static const char *styles[] = {"0", "2", "32", "36", "33", "35"};
+            fputs("\0337", rl_outstream);
+            if (before) fprintf(rl_outstream, "\033[%dD", before);
+            unsigned int color = 0;
+            for (int i = 0; i < rl_end; ++i) {
+                if (colors[i] != color) {color = colors[i]; fprintf(rl_outstream, "\033[%sm", styles[color]);}
+                fputc((unsigned char)rl_line_buffer[i], rl_outstream);
+            }
+            fputs("\033[0m\0338", rl_outstream);
+            fflush(rl_outstream);
+        }
+    }
+#endif
+    if (!suggestions_enabled || !rl_outstream) return;
+    if (rl_point != rl_end) {
+        if (suggestion_visible && rl_line_buffer && rl_point >= 0 && rl_point < rl_end) {
+            int cells = display_width(rl_line_buffer + rl_point, (size_t)(rl_end - rl_point));
+            if (cells >= 0) fprintf(rl_outstream, "\0337\033[%dC\033[K\0338", cells);
+            fflush(rl_outstream);
+            suggestion_visible = false;
+        }
+        return;
+    }
+    const char *suffix = history_suggestion();
+    const char *prompt = rl_display_prompt ? rl_display_prompt : "";
+    int rows, columns;
+    rl_get_screen_size(&rows, &columns);
+    (void)rows;
+    int prompt_cells = prompt_width(prompt);
+    if (prompt_cells < 0 || columns <= 1) suffix = NULL;
+    int line_width = display_width(rl_line_buffer, (size_t)rl_end);
+    int suffix_width = suffix ? display_width(suffix, strlen(suffix)) : 0;
+    if (suffix && (line_width < 0 || suffix_width < 0 || (size_t)prompt_cells + (size_t)line_width + (size_t)suffix_width >= (size_t)columns)) suffix = NULL;
+    if (!suffix && !suggestion_visible) return;
+    fputs("\033[K", rl_outstream);
+    if (suffix) fprintf(rl_outstream, "\0337\033[2m%s\033[0m\0338", suffix);
+    fflush(rl_outstream);
+    suggestion_visible = suffix != NULL;
+}
+
+static int accept_suggestion(int count, int key)
+{
+    const char *suffix = history_suggestion();
+    if (suffix) return rl_insert_text(suffix) < 0 ? 1 : 0;
+    for (size_t i = 0; i < 2; ++i)
+        if (suggestion_bindings[i].map == rl_get_keymap() && suggestion_bindings[i].previous)
+            return suggestion_bindings[i].previous(count, key);
+    return rl_forward_char(count, key);
+}
+
+static void disable_suggestions(void)
+{
+    suggestions_enabled = false;
+    suggestion_visible = false;
+    if (!highlighting_enabled) {
+        if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
+        previous_redisplay = NULL;
+    }
+    for (size_t i = 0; i < 2; ++i) {
+        struct binding *binding = &suggestion_bindings[i];
+        if (binding->owned && binding->map[6].type == ISFUNC && binding->map[6].function == accept_suggestion)
+            rl_bind_key_in_map(6, binding->previous, binding->map);
+        binding->owned = false;
+    }
+}
+
+static int enable_suggestions(void)
+{
+    if (suggestions_enabled) return EXECUTION_SUCCESS;
+    const char *term = get_string_value("TERM");
+    if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
+    const char *names[] = {"emacs-standard", "vi-insert"};
+    for (size_t i = 0; i < 2; ++i) {
+        Keymap map = rl_get_keymap_by_name(names[i]);
+        if (!map || map[6].type != ISFUNC || map[6].function != rl_forward_char) continue;
+        suggestion_bindings[i] = (struct binding){map, map[6].function, true};
+        rl_bind_key_in_map(6, accept_suggestion, map);
+    }
+    if (!highlighting_enabled) {
+        previous_redisplay = rl_redisplay_function;
+        rl_redisplay_function = suggestion_redisplay;
+    }
+    suggestions_enabled = true;
+    return EXECUTION_SUCCESS;
+}
 
 static int option(const char *name)
 {
@@ -560,7 +769,7 @@ static void restore_wait_parser(void *state)
  * -e` has a builtin running, `bind -x` and nested evaluation raise the parse
  * level, and a trap sets running_trap. Bash itself does not use this hook.
  */
-static void run_wait_dispatch(void)
+static void run_wait_dispatch(const char *command, bool always_redraw)
 {
     sh_parser_state_t state;
     int status = last_command_exit_value;
@@ -578,7 +787,7 @@ static void run_wait_dispatch(void)
     /* Bash 5.2 uses this combination for Readline's bind -x callbacks. */
     int flags = SEVAL_NONINT | SEVAL_NOHIST | SEVAL_NOOPTIMIZE;
 #endif
-    parse_and_execute(savestring("__binit_wait_dispatch"), "binit_wait", flags);
+    parse_and_execute(savestring(command), "binit_wait", flags);
     rl_set_signals();
     restore_parser_state(&state);
     discard_unwind_frame("binit-wait");
@@ -588,18 +797,22 @@ static void run_wait_dispatch(void)
     }
     free(saved);
     last_command_exit_value = status;
-    /* Output may have moved the cursor; forced redisplay assumes a fresh line. */
-    rl_clear_visible_line();
-    rl_forced_update_display();
+    const char *changed = get_string_value("__binit_event_changed");
+    if (always_redraw || (changed && strcmp(changed, "1") == 0)) {
+        /* Output may have moved the cursor; forced redisplay assumes a fresh line. */
+        rl_clear_visible_line();
+        rl_forced_update_display();
+    }
 }
 
 static int wait_hook(void)
 {
     if (previous_pre_input && previous_pre_input != wait_hook) previous_pre_input();
-    if (!wait_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level) return 0;
+    if (!wait_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
+        get_current_prompt_level() != 1) return 0;
     SHELL_VAR *pending = find_variable("__binit_wait_pending");
     if (!pending || !value_cell(pending) || strcmp(value_cell(pending), "1") != 0) return 0;
-    run_wait_dispatch();
+    run_wait_dispatch("__binit_wait_dispatch", true);
     return 0;
 }
 
@@ -618,6 +831,44 @@ static void remove_wait_hook(void)
     if (wait_installed && rl_pre_input_hook == wait_hook) rl_pre_input_hook = previous_pre_input;
     wait_installed = false;
     previous_pre_input = NULL;
+}
+
+static int poll_hook(void)
+{
+    if (poll_running) return 0;
+    poll_running = true;
+    if (previous_event_hook && previous_event_hook != poll_hook) previous_event_hook();
+    poll_running = false;
+    if (!poll_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
+        get_current_prompt_level() != 1 || rl_end != 0) return 0;
+    SHELL_VAR *pending = find_variable("__binit_dispatch_pending");
+    if (!pending || !value_cell(pending) || strcmp(value_cell(pending), "1") != 0) return 0;
+    int saved_errno = errno;
+    long now = milliseconds();
+    errno = saved_errno;
+    if (now <= 0 || (last_poll > 0 && now >= last_poll && now - last_poll < 250)) return 0;
+    last_poll = now;
+    run_wait_dispatch("__binit_event_dispatch", false);
+    return 0;
+}
+
+static int enable_poll(void)
+{
+    if (!poll_installed) {
+        previous_event_hook = rl_event_hook;
+        rl_event_hook = poll_hook;
+        last_poll = 0;
+        poll_installed = true;
+    }
+    return EXECUTION_SUCCESS;
+}
+
+static void remove_poll_hook(void)
+{
+    if (poll_installed && rl_event_hook == poll_hook) rl_event_hook = previous_event_hook;
+    poll_installed = false;
+    last_poll = 0;
+    previous_event_hook = NULL;
 }
 
 static void disable_menu(void)
@@ -673,9 +924,41 @@ static int enable_menu(void)
 EXPORT int binit_complete_builtin(WORD_LIST *arguments)
 {
     const char *action = arguments ? arguments->word->word : "status";
+    if (strcmp(action, "editor") == 0) {
+        WORD_LIST *feature = arguments->next;
+        WORD_LIST *setting = feature ? feature->next : NULL;
+        if (!feature || !setting || setting->next) return EX_USAGE;
+        if (strcmp(feature->word->word, "suggestions") == 0) {
+            if (strcmp(setting->word->word, "on") == 0) return enable_suggestions();
+            if (strcmp(setting->word->word, "off") == 0) {disable_suggestions(); return EXECUTION_SUCCESS;}
+        }
+        if (strcmp(feature->word->word, "highlighting") == 0) {
+#ifdef BINIT_HIGHLIGHT
+            if (strcmp(setting->word->word, "on") == 0) {
+                const char *term = get_string_value("TERM");
+                if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
+                if (!highlighting_enabled && !suggestions_enabled) {previous_redisplay = rl_redisplay_function; rl_redisplay_function = suggestion_redisplay;}
+                highlighting_enabled = true;
+                return EXECUTION_SUCCESS;
+            }
+            if (strcmp(setting->word->word, "off") == 0) {
+                highlighting_enabled = false;
+                binit_highlight_clear();
+                if (!suggestions_enabled) {if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay; previous_redisplay = NULL;}
+                return EXECUTION_SUCCESS;
+            }
+#else
+            builtin_error("highlighting unavailable: rebuild with BINIT_SYNTAX_SOURCE");
+            return EXECUTION_FAILURE;
+#endif
+        }
+        return EX_USAGE;
+    }
     if (arguments && arguments->next) return EX_USAGE;
     if (strcmp(action, "on") == 0) return enable_menu();
     if (strcmp(action, "wait") == 0) return enable_wait();
+    if (strcmp(action, "poll") == 0) return enable_poll();
+    if (strcmp(action, "poll-off") == 0) {remove_poll_hook(); return EXECUTION_SUCCESS;}
     if (strcmp(action, "off") == 0) {disable_menu(); return EXECUTION_SUCCESS;}
     if (strcmp(action, "status") != 0) return EX_USAGE;
     printf("Completion menu: %s\n", enabled ? terminal_support < 0 ? "unavailable in this terminal" : "on" : "off");
@@ -702,6 +985,14 @@ EXPORT int binit_complete_builtin_load(char *name)
 EXPORT void binit_complete_builtin_unload(char *name)
 {
     (void)name;
+    disable_suggestions();
+    remove_poll_hook();
+#ifdef BINIT_HIGHLIGHT
+    highlighting_enabled = false;
+    binit_highlight_clear();
+    if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
+    previous_redisplay = NULL;
+#endif
     disable_menu();
 }
 

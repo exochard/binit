@@ -10,6 +10,14 @@ struct Declaration {
     files: Vec<String>,
     load: String,
     #[serde(default)]
+    delay_ms: u64,
+    #[serde(default)]
+    event: String,
+    #[serde(default)]
+    when: String,
+    #[serde(default)]
+    watch: Vec<String>,
+    #[serde(default)]
     requires: Vec<String>,
     #[serde(default)]
     depends: Vec<String>,
@@ -55,6 +63,15 @@ pub(super) fn downloaded_line(
         requires: value("requires"),
         depends: value("depends"),
         commands: value("commands"),
+        delay_ms: keys
+            .get("delay_ms")
+            .map(|v| v.parse::<u64>())
+            .transpose()
+            .map_err(|_| "delay_ms must be an integer")?
+            .unwrap_or(0),
+        event: keys.get("event").copied().unwrap_or("").to_owned(),
+        when: keys.get("when").copied().unwrap_or("").to_owned(),
+        watch: value("watch"),
         completions: value("completions"),
         bin: programs
             .iter()
@@ -140,6 +157,120 @@ pub(super) fn valid_declared_file(name: &str) -> bool {
         && Path::new(name).components().count() <= 16
 }
 
+fn wildcard(pattern: &str, name: &str) -> bool {
+    let mut previous = vec![false; name.len() + 1];
+    previous[0] = true;
+    for p in pattern.bytes() {
+        let mut current = vec![false; name.len() + 1];
+        current[0] = p == b'*' && previous[0];
+        for (index, c) in name.bytes().enumerate() {
+            current[index + 1] = if p == b'*' {
+                previous[index + 1] || (c != b'/' && current[index])
+            } else {
+                previous[index] && (p == c || (p == b'?' && c != b'/'))
+            };
+        }
+        previous = current;
+    }
+    previous[name.len()]
+}
+
+fn has_wildcard(name: &str) -> bool {
+    name.contains(['*', '?'])
+}
+
+fn expand_patterns(patterns: &[String], candidates: &[String]) -> Result<Vec<String>> {
+    let mut selected = Vec::new();
+    let mut seen = BTreeSet::new();
+    for pattern in patterns {
+        if !valid_declared_file(pattern) || pattern.len() > 1024 {
+            return Err(format!("invalid declared file: {pattern}").into());
+        }
+        if has_wildcard(pattern) && candidates.len() > 8192 {
+            return Err("file pattern search exceeds 8192 entries".into());
+        }
+        if has_wildcard(pattern) && candidates.iter().any(|name| name.len() > 4096) {
+            return Err("file pattern candidate exceeds 4096 bytes".into());
+        }
+        let matches: Vec<_> = if has_wildcard(pattern) {
+            candidates
+                .iter()
+                .filter(|name| wildcard(pattern, name))
+                .cloned()
+                .collect()
+        } else {
+            vec![pattern.clone()]
+        };
+        if matches.is_empty() {
+            return Err(format!("declared file pattern matches no files: {pattern}").into());
+        }
+        for name in matches {
+            if !seen.insert(name.clone()) {
+                return Err(format!("duplicate declared file: {name}").into());
+            }
+            selected.push(name);
+            if selected.len() > MAX_FILES - 3 {
+                return Err("a declaration must select between 1 and 125 files".into());
+            }
+        }
+    }
+    Ok(selected)
+}
+
+fn local_candidates(root: &Path, patterns: &[String]) -> Result<Vec<String>> {
+    let mut paths = BTreeSet::new();
+    let mut visited = 0usize;
+    for pattern in patterns.iter().filter(|name| has_wildcard(name)) {
+        if !valid_declared_file(pattern) || pattern.len() > 1024 {
+            return Err(format!("invalid declared file: {pattern}").into());
+        }
+        let mut prefixes = vec![String::new()];
+        let parts: Vec<_> = pattern.split('/').collect();
+        for (index, part) in parts.iter().enumerate() {
+            let mut next = Vec::new();
+            for prefix in prefixes {
+                let directory = root.join(&prefix);
+                let entries = match fs::read_dir(directory) {
+                    Ok(entries) => entries,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                for entry in entries {
+                    visited += 1;
+                    if visited > 8192 {
+                        return Err("file pattern search exceeds 8192 entries".into());
+                    }
+                    let entry = entry?;
+                    let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    if !wildcard(part, &name) {
+                        continue;
+                    }
+                    let path = if prefix.is_empty() {
+                        name
+                    } else {
+                        format!("{prefix}/{name}")
+                    };
+                    let kind = entry.file_type()?;
+                    if kind.is_symlink() {
+                        return Err(format!("symlink in declared file: {path}").into());
+                    }
+                    if index + 1 == parts.len() {
+                        if kind.is_file() {
+                            paths.insert(path);
+                        }
+                    } else if kind.is_dir() {
+                        next.push(path);
+                    }
+                }
+            }
+            prefixes = next;
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
 /// Copies one declared file into the package as `files/NAME` unless it is
 /// already there, refusing symlinks and special files.
 fn copy_declared(root: &Path, name: &str, files: &mut BTreeMap<String, Vec<u8>>) -> Result<String> {
@@ -181,6 +312,10 @@ fn build(
         depends: declaration.depends,
         completions: declaration.completions,
         commands: declaration.commands,
+        delay_ms: declaration.delay_ms,
+        event: declaration.event,
+        when: declaration.when,
+        watch: declaration.watch,
         bin: bin
             .iter()
             .map(|(path, name)| format!("files/{path}:{name}"))
@@ -200,7 +335,8 @@ fn build(
     let mut files = BTreeMap::new();
     let mut entry = "# Generated from the pinned source declaration.\n".to_owned();
     let mut sourced = BTreeSet::new();
-    for name in declaration.files {
+    let candidates = local_candidates(&root, &declaration.files)?;
+    for name in expand_patterns(&declaration.files, &candidates)? {
         if !sourced.insert(name.clone()) {
             return Err(format!("duplicate declared file: {name}").into());
         }
@@ -249,7 +385,7 @@ pub(super) fn read(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     Ok((plugin, files))
 }
 
-const LINE_KEYS: [&str; 14] = [
+const LINE_KEYS: [&str; 18] = [
     "id",
     "files",
     "bin",
@@ -264,6 +400,10 @@ const LINE_KEYS: [&str; 14] = [
     "format",
     "atclone",
     "atpull",
+    "delay_ms",
+    "event",
+    "when",
+    "watch",
 ];
 
 fn list(value: &str) -> Vec<String> {
@@ -357,6 +497,15 @@ pub(super) fn check_keys(argv: &[String]) -> Result<()> {
         depends: value("depends"),
         completions: value("completions"),
         commands: value("commands"),
+        delay_ms: keys
+            .get("delay_ms")
+            .map(|v| v.parse::<u64>())
+            .transpose()
+            .map_err(|_| "delay_ms must be an integer")?
+            .unwrap_or(0),
+        event: keys.get("event").copied().unwrap_or("").to_owned(),
+        when: keys.get("when").copied().unwrap_or("").to_owned(),
+        watch: value("watch"),
         bin: Vec::new(),
     };
     validate_plugin(&plugin)?;
@@ -384,6 +533,7 @@ pub(super) fn git_paths(
     argv: &[String],
     name: &str,
     has: &dyn Fn(&str) -> bool,
+    candidates: &[String],
 ) -> Result<Option<Vec<String>>> {
     let keys = line_keys(argv)?;
     if keys
@@ -395,7 +545,7 @@ pub(super) fn git_paths(
     }
     let id = line_id(&keys, name, &argv[0])?;
     let mut paths = match (keys.get("files"), keys.get("bin")) {
-        (Some(files), _) => list(files),
+        (Some(files), _) => expand_patterns(&list(files), candidates)?,
         (None, Some(_)) => Vec::new(),
         (None, None) => vec![default_file(&id, &argv[0], has)?],
     };
@@ -491,6 +641,15 @@ fn line_in(
         depends: value("depends"),
         completions: value("completions"),
         commands: value("commands"),
+        delay_ms: keys
+            .get("delay_ms")
+            .map(|v| v.parse::<u64>())
+            .transpose()
+            .map_err(|_| "delay_ms must be an integer")?
+            .unwrap_or(0),
+        event: keys.get("event").copied().unwrap_or("").to_owned(),
+        when: keys.get("when").copied().unwrap_or("").to_owned(),
+        watch: value("watch"),
         bin: value("bin"),
     };
     let bytes = toml::to_string_pretty(&declaration)?.into_bytes();

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "cases": [
+    {"id": "simple", "text": "printf 'ok' value", "parsed": true, "spans": ["printf", "'ok'", "value"]},
+    {"id": "leading-blanks", "text": "  printf x", "parsed": true, "spans": ["printf", "x"]},
+    {"id": "operators", "text": "echo x && echo y", "parsed": true, "spans": ["&&", "x", "y"]},
+    {"id": "quoted-space", "text": "printf \"a b\"", "parsed": true, "spans": ["printf", "\"a b\""]},
+    {"id": "utf8", "text": "printf 'caffè'", "parsed": true, "spans": ["printf", "'caffè'"]},
+    {"id": "multiline-quote", "text": "printf 'a\nb'", "parsed": true, "spans": ["printf", "'a\nb'"]},
+    {"id": "continued-line", "text": "printf a\\\nb", "parsed": true, "spans": ["printf", "a\\\nb"]},
+    {"id": "heredoc", "text": "cat <<EOF\nbody\nEOF\n", "parsed": true, "spans": ["cat", "<<", "body"]},
+    {"id": "incomplete-heredoc", "text": "cat <<EOF\nbody\n", "parsed": false, "spans": ["cat", "body"]},
+    {"id": "incomplete-quote", "text": "printf 'open", "parsed": false, "spans": ["printf", "'open"]},
+    {"id": "incomplete-substitution", "text": "echo $(printf x", "parsed": false, "spans": ["echo", "printf"]},
+    {"id": "incomplete-if", "text": "if true; then", "parsed": false, "spans": ["if", "then"]},
+    {"id": "invalid", "text": "if ; then", "parsed": false, "spans": ["if", ";"]},
+    {"id": "conditional", "text": "[[ abc == a* ]]", "parsed": true, "spans": ["[[", "abc", "==", "a*", "]]"]},
+    {"id": "alias-context", "text": "magic", "parsed": false, "spans": ["magic"]},
+    {"id": "multiple-commands", "text": "echo a\necho b", "parsed": true, "spans": ["a", "b"]},
+    {"id": "redirection-sentinel", "text": ": > \"$BINIT_SYNTAX_MARKER\"", "parsed": true, "spans": [":", ">"]},
+    {"id": "substitution-sentinel", "text": "echo \"$(: > \"$BINIT_SYNTAX_MARKER\")\"", "parsed": true, "spans": ["echo"]},
+    {"id": "process-substitution-sentinel", "text": "cat <(: > \"$BINIT_SYNTAX_MARKER\")", "parsed": true, "spans": ["cat"]},
+    {"id": "arithmetic-sentinel", "text": "echo $((side_effect += 1))", "parsed": true, "spans": ["echo"]}
+  ]
+}

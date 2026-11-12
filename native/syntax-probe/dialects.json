@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "cases": [
+    {"id": "bash53-current-environment-substitution", "text": "printf %s \"${ printf x; }\""},
+    {"id": "bash53-reply-substitution", "text": "printf %s \"${| REPLY=x; }\""},
+    {"id": "case-retest", "text": "case x in x) : ;;& esac"}
+  ]
+}

@@ -1,0 +1,49 @@
+--- a/parse.y
++++ b/parse.y
+@@ -304,6 +304,24 @@
+ static size_t shell_input_line_index;
+ static size_t shell_input_line_size;	/* Amount allocated for shell_input_line. */
+ static size_t shell_input_line_len;	/* strlen (shell_input_line) */
++
++/* Experimental observer: physical input coordinates, not an editor ABI. */
++typedef void (*binit_observer_fn) (int, int, size_t, int, size_t, void *);
++static binit_observer_fn binit_observer;
++static void *binit_observer_data;
++static int binit_token_line;
++static size_t binit_token_column;
++void
++binit_syntax_observe (binit_observer_fn observer, void *data)
++{
++  binit_observer = observer;
++  binit_observer_data = data;
++}
++int
++binit_syntax_observer_active (void)
++{
++  return binit_observer != 0;
++}
+ 
+ /* Either zero or EOF. */
+ static int shell_input_line_terminator;
+@@ -3076,6 +3094,9 @@
+   token_before_that = last_read_token;
+   last_read_token = current_token;
+   current_token = read_token (READ);
++  if (binit_observer)
++    binit_observer (current_token, binit_token_line, binit_token_column,
++                    line_number, shell_input_line_index, binit_observer_data);
+ 
+   if ((parser_state & PST_EOFTOKEN) && current_token == shell_eof_token)
+     {
+@@ -3611,6 +3632,11 @@
+   /* Read a single word from input.  Start by skipping blanks. */
+   while ((character = shell_getc (1)) != EOF && shellblank (character))
+     ;
++  if (binit_observer)
++    {
++      binit_token_line = line_number;
++      binit_token_column = shell_input_line_index ? shell_input_line_index - 1 : 0;
++    }
+ 
+   if (character == EOF)
+     {

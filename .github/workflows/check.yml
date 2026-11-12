@@ -70,6 +70,27 @@ jobs:
         run: |
           set -o pipefail
           bash scripts/verify.bash 2>&1 | tee .cache/ci/evidence/verify.log
+      - name: Exercise isolated parser safety experiment
+        if: matrix.bash.version == '5.3' && matrix.native == '1' && matrix.compiler == 'gcc'
+        run: |
+          set -o pipefail
+          {
+            python3 scripts/syntax_probe.py build .cache/ci/syntax-private --archive .cache/ci/bash-5.3/source.tar.gz
+            python3 scripts/syntax_probe.py check --bash "$BINIT_BASH" --module .cache/ci/syntax-private/module/binit_syntax_probe.so --output .cache/ci/evidence/syntax-reference.json
+            python3 scripts/syntax_probe.py check --bash .cache/ci/syntax-private/install/bin/bash --module .cache/ci/syntax-private/module/binit_syntax_probe.so --output .cache/ci/evidence/syntax-private.json
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for name in ('reference', 'private'):
+              report = json.loads(Path(f'.cache/ci/evidence/syntax-{name}.json').read_text())
+              assert len(report['cases']) == 20
+              assert all(row['state_preserved'] and row['no_execution'] for row in report['cases'])
+              assert report['interruption']['recovered']
+              assert report['release_qualified'] is False
+          assert report['interruption']['parser_phase_confirmed']
+          assert report['interruption']['observer_cleared']
+          PY
+          } 2>&1 | tee .cache/ci/evidence/syntax-experiment.log
       - name: Collect verification receipts
         if: always()
         run: |

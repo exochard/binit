@@ -381,6 +381,12 @@ class CompletionTests(unittest.TestCase):
             self.assertFalse(session.panel)
             self.assertIn("value", session.capture()[1])
 
+    def test_few_candidates_keep_compact_cells_on_a_wide_terminal(self):
+        with Session(columns=200) as session:
+            session.open('demo_cmd va')
+            row = next(row for row in session.screen.display if 'value one' in row and 'value two' in row)
+            self.assertLess(row.index('value two'), 30)
+
 
 if __name__ == "__main__":
     unittest.main()

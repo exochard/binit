@@ -337,3 +337,149 @@ class EditorTests(unittest.TestCase):
             colors = {cell.fg for row in session.screen.buffer.values() for cell in row.values()}
             self.assertEqual(colors, {'default'})
             self.assertEqual(session.capture()[1], line)
+
+SUGGEST = "history -s 'echo sample-suggestion'\n"
+GHOST = 'sample-suggestion'
+
+
+def input_row(session):
+    return next(row for row in session.screen.display if row.startswith(PROMPT + 'echo sam'))
+
+
+class SuggestionLifecycleTests(unittest.TestCase):
+    CONFIGS = (('suggestions', 'binit_complete editor suggestions on\n'),
+               ('history', 'binit_complete editor history on\n'))
+
+    def test_enter_erases_the_ghost(self):
+        for mode in ('vi', 'emacs'):
+            for name, setup in self.CONFIGS:
+                with self.subTest(mode=mode, config=name), Session(extra=SUGGEST + setup, mode=mode) as session:
+                    session.send('echo sam')
+                    session.wait(lambda: GHOST in session.text)
+                    session.send(b'\r')
+                    session.pump(.3)
+                    self.assertNotIn(GHOST, session.text)
+                    self.assertEqual(session.screen.display[session.screen.cursor.y].rstrip(), PROMPT.rstrip())
+
+    def test_enter_erases_the_ghost_on_a_blank_wrap_row(self):
+        entry = ': ' + 'x' * 31 + '-suggestion-tail'
+        for mode in ('vi', 'emacs'):
+            for name, setup in self.CONFIGS:
+                with self.subTest(mode=mode, config=name), Session(
+                        extra=f"history -s '{entry}'\n" + setup, mode=mode, columns=40) as session:
+                    settle(session)
+                    session.send(': ' + 'x' * 31)
+                    session.wait(lambda: '-suggestion-' in session.text)
+                    session.send(b'\r')
+                    session.pump(.3)
+                    # The next prompt may overwrite the first cells of a leftover; the tail still shows.
+                    self.assertNotIn('tail', session.text)
+
+    def test_ctrl_j_erases_the_ghost(self):
+        with Session(extra=SUGGEST + 'binit_complete editor suggestions on\n') as session:
+            session.send('echo sam')
+            session.wait(lambda: GHOST in session.text)
+            session.send(b'\n')
+            session.pump(.3)
+            self.assertNotIn(GHOST, session.text)
+
+    def test_interrupt_leaves_only_the_caret_echo(self):
+        for mode in ('vi', 'emacs'):
+            for name, setup in self.CONFIGS:
+                with self.subTest(mode=mode, config=name), Session(extra=SUGGEST + setup, mode=mode) as session:
+                    session.send('echo sam')
+                    session.wait(lambda: GHOST in session.text)
+                    session.send(b'\x03')
+                    session.pump(.3)
+                    self.assertEqual(input_row(session).rstrip(), PROMPT + 'echo sam^C')
+                    self.assertNotIn(GHOST, session.text)
+                    self.assertNotIn('History', session.text)
+
+    def test_interrupt_in_the_middle_keeps_the_text_after_the_cursor(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=SUGGEST + 'binit_complete editor history on\n', mode=mode) as session:
+                session.send('echo sample')
+                session.wait(lambda: 'History' in session.text)
+                session.send(b'\x1b[D' * 3)
+                session.pump(.2)
+                session.send(b'\x03')
+                session.pump(.3)
+                self.assertEqual(input_row(session).rstrip(), PROMPT + 'echo sam^Ce')
+                self.assertNotIn('History', session.text)
+                self.assertNotIn(GHOST, session.text)
+
+
+class AcceptKeyTests(unittest.TestCase):
+    KEYS = (b'\x06', b'\x1b[C', b'\x1bOC', b'\x1b[F', b'\x1bOF')
+
+    def test_every_accept_key_inserts_the_suggestion(self):
+        for mode in ('vi', 'emacs'):
+            keys = self.KEYS + ((b'\x05',) if mode == 'emacs' else ())
+            for key in keys:
+                with self.subTest(mode=mode, key=key), Session(extra=SUGGEST + 'binit_complete editor suggestions on\n', mode=mode) as session:
+                    session.send('echo sam')
+                    session.wait(lambda: GHOST in session.text)
+                    session.send(key)
+                    self.assertEqual(session.capture()[1], 'echo sample-suggestion')
+
+    def test_keys_keep_their_meaning_without_a_suggestion(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=SUGGEST + 'binit_complete editor suggestions on\n', mode=mode) as session:
+                session.send('abc\x1b[D\x1b[D\x1b[C')
+                self.assertEqual(session.capture(), (2, 'abc'))
+        with Session(extra=SUGGEST + 'binit_complete editor suggestions on\n', mode='vi') as session:
+            session.send(b'abc\x06')
+            self.assertEqual(session.capture(), (4, 'abc\x06'))
+
+    def test_disable_restores_every_binding(self):
+        extra = (SUGGEST + "binit_complete editor suggestions on\nbinit_complete editor suggestions off\n"
+                 "bind -m vi-insert -p > .binds-vi\nbind -m emacs-standard -p > .binds-emacs\n")
+        with Session(extra=extra) as session:
+            session.pump(.3)
+            vi = (session.directory / '.binds-vi').read_text()
+            emacs = (session.directory / '.binds-emacs').read_text()
+        self.assertIn('"\\C-f": self-insert', vi)
+        self.assertIn('"\\C-f": forward-char', emacs)
+        self.assertIn('"\\e[C": forward-char', emacs)
+        self.assertIn('"\\C-e": end-of-line', emacs)
+        for text in (vi, emacs):
+            self.assertIn('"\\e[C": forward-char', text)
+            self.assertRegex(text, r'"\\e\[F": end-of-line')
+
+    def test_history_owned_suggestions_restore_bindings_on_disable(self):
+        extra = (SUGGEST + "binit_complete editor history on\nbinit_complete editor history off\n"
+                 "bind -m vi-insert -p > .binds-vi\n")
+        with Session(extra=extra) as session:
+            session.pump(.3)
+            self.assertIn('"\\C-f": self-insert', (session.directory / '.binds-vi').read_text())
+            session.send('echo sam')
+            session.pump(.2)
+            self.assertNotIn(GHOST, session.text)
+
+    def test_unload_restores_bindings(self):
+        extra = (SUGGEST + "binit_complete editor suggestions on\nenable -d binit_complete\n"
+                 "bind -m vi-insert -p > .binds-vi\n")
+        with Session(extra=extra) as session:
+            session.pump(.3)
+            self.assertIn('"\\C-f": self-insert', (session.directory / '.binds-vi').read_text())
+
+    def test_user_binding_made_before_enable_is_kept(self):
+        extra = (SUGGEST + "bind '\"\\e[C\": backward-char'\nbinit_complete editor suggestions on\n")
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                session.send('echo sam')
+                session.wait(lambda: GHOST in session.text)
+                session.send(b'\x1b[C')
+                self.assertEqual(session.capture(), (7, 'echo sam'))
+                session.send(b'\x15binit_complete editor suggestions off\n')
+                session.wait(lambda: session.text.count(PROMPT) >= 2)
+                session.send(b'abc\x1b[C')
+                self.assertEqual(session.capture(), (2, 'abc'))
+
+    def test_user_binding_made_after_enable_is_kept(self):
+        extra = (SUGGEST + "binit_complete editor suggestions on\nbind '\"\\e[C\": backward-char'\n"
+                 "binit_complete editor suggestions off\n")
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                session.send(b'abc\x1b[C')
+                self.assertEqual(session.capture(), (2, 'abc'))

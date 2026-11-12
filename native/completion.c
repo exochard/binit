@@ -80,7 +80,7 @@ static rl_hook_func_t *previous_pre_input;
 static bool wait_installed;
 static bool history_enabled, history_owns_suggestions, history_dismissed;
 static bool history_painted, colors_painted;
-static bool history_deprep_running, history_deprep_detached;
+static bool history_deprep_active, history_deprep_running, history_deprep_detached;
 static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
 static char history_line[4097];
 static struct binding history_tabs[2], history_searches[2];
@@ -91,10 +91,10 @@ static long last_poll;
 static rl_hook_func_t *previous_event_hook;
 static bool suggestions_enabled;
 static bool highlighting_enabled;
-static bool suggestion_visible;
+static bool suggestion_visible, ghost_on_blank_row;
+static int ghost_column;
 static bool redisplay_running;
 static rl_voidfunc_t *previous_redisplay;
-static struct binding suggestion_bindings[2];
 static int option(const char *);
 static size_t history_panel(const char **, const struct binit_layout *, int, int, bool);
 static void history_draw(const char **, size_t, int, int *);
@@ -252,21 +252,55 @@ static void suggestion_redisplay(void)
     move_to(&row, layout.end.row, layout.end.column);
     fputs(history_painted && !matches ? "\033[J" : "\033[K", rl_outstream);
     suggestion_visible = suffix && draw_ghost(suffix, columns - layout.end.column - 1);
+    ghost_column = layout.end.column;
+    ghost_on_blank_row = layout.end.column == 0 && layout.end.row > 0;
     if (matches) history_draw(items, matches, columns, &row);
     else history_painted = false;
     move_to(&row, layout.cursor.row, layout.cursor.column);
     fflush(rl_outstream);
 }
 
-static int accept_suggestion(int count, int key)
+/* Inserts the whole suggestion when one is shown at the end of the input; otherwise the key keeps its meaning. */
+static int accept_or(rl_command_func_t *fallback, int count, int key)
 {
     const char *suffix = history_suggestion();
     if (suffix) return rl_insert_text(suffix) < 0 ? 1 : 0;
-    for (size_t i = 0; i < 2; ++i)
-        if (suggestion_bindings[i].map == rl_get_keymap() && suggestion_bindings[i].previous)
-            return suggestion_bindings[i].previous(count, key);
-    return rl_forward_char(count, key);
+    return fallback(count, key);
 }
+
+static int accept_or_forward_char(int count, int key) {return accept_or(rl_forward_char, count, key);}
+static int accept_or_end_of_line(int count, int key) {return accept_or(rl_end_of_line, count, key);}
+static int accept_or_self_insert(int count, int key) {return accept_or(rl_insert, count, key);}
+
+enum {EMACS_KEYMAP = 1, VI_KEYMAP = 2};
+static const struct {
+    const char *sequence;
+    rl_command_func_t *original, *wrapper;
+    int keymaps;
+} accept_keys[] = {
+    {"\006", rl_forward_char, accept_or_forward_char, EMACS_KEYMAP | VI_KEYMAP},
+    {"\033[C", rl_forward_char, accept_or_forward_char, EMACS_KEYMAP | VI_KEYMAP},
+    {"\033OC", rl_forward_char, accept_or_forward_char, EMACS_KEYMAP | VI_KEYMAP},
+    {"\033[F", rl_end_of_line, accept_or_end_of_line, EMACS_KEYMAP | VI_KEYMAP},
+    {"\033OF", rl_end_of_line, accept_or_end_of_line, EMACS_KEYMAP | VI_KEYMAP},
+    {"\033[4~", rl_end_of_line, accept_or_end_of_line, EMACS_KEYMAP | VI_KEYMAP},
+    {"\033[8~", rl_end_of_line, accept_or_end_of_line, EMACS_KEYMAP | VI_KEYMAP},
+    {"\005", rl_end_of_line, accept_or_end_of_line, EMACS_KEYMAP},
+    /* Stock vi-insert binds Ctrl-F to self-insert. */
+    {"\006", rl_insert, accept_or_self_insert, VI_KEYMAP},
+};
+static const char *const accept_keymaps[] = {"emacs-standard", "vi-insert"};
+static bool accept_owned[2][sizeof accept_keys / sizeof *accept_keys];
+
+static rl_command_func_t *bound_function(Keymap map, const char *sequence)
+{
+    int type;
+    rl_command_func_t *function = rl_function_of_keyseq_len(sequence, strlen(sequence), map, &type);
+    return type == ISFUNC ? function : NULL;
+}
+
+static void deprep_install(void);
+static void deprep_release(void);
 
 static void disable_suggestions(void)
 {
@@ -277,11 +311,15 @@ static void disable_suggestions(void)
         previous_redisplay = NULL;
     }
     for (size_t i = 0; i < 2; ++i) {
-        struct binding *binding = &suggestion_bindings[i];
-        if (binding->owned && binding->map[6].type == ISFUNC && binding->map[6].function == accept_suggestion)
-            rl_bind_key_in_map(6, binding->previous, binding->map);
-        binding->owned = false;
+        Keymap map = rl_get_keymap_by_name(accept_keymaps[i]);
+        for (size_t j = 0; j < sizeof accept_keys / sizeof *accept_keys; ++j) {
+            if (!accept_owned[i][j]) continue;
+            accept_owned[i][j] = false;
+            if (map && bound_function(map, accept_keys[j].sequence) == accept_keys[j].wrapper)
+                rl_bind_keyseq_in_map(accept_keys[j].sequence, accept_keys[j].original, map);
+        }
     }
+    deprep_release();
 }
 
 static int enable_suggestions(void)
@@ -289,18 +327,21 @@ static int enable_suggestions(void)
     if (suggestions_enabled) return EXECUTION_SUCCESS;
     const char *term = get_string_value("TERM");
     if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
-    const char *names[] = {"emacs-standard", "vi-insert"};
     for (size_t i = 0; i < 2; ++i) {
-        Keymap map = rl_get_keymap_by_name(names[i]);
-        if (!map || map[6].type != ISFUNC || map[6].function != rl_forward_char) continue;
-        suggestion_bindings[i] = (struct binding){map, map[6].function, true};
-        rl_bind_key_in_map(6, accept_suggestion, map);
+        Keymap map = rl_get_keymap_by_name(accept_keymaps[i]);
+        if (!map) continue;
+        for (size_t j = 0; j < sizeof accept_keys / sizeof *accept_keys; ++j) {
+            if (!(accept_keys[j].keymaps & (1 << i)) || bound_function(map, accept_keys[j].sequence) != accept_keys[j].original) continue;
+            rl_bind_keyseq_in_map(accept_keys[j].sequence, accept_keys[j].wrapper, map);
+            accept_owned[i][j] = true;
+        }
     }
     if (!highlighting_enabled && !history_enabled) {
         previous_redisplay = rl_redisplay_function;
         rl_redisplay_function = suggestion_redisplay;
     }
     suggestions_enabled = true;
+    deprep_install();
     return EXECUTION_SUCCESS;
 }
 
@@ -577,7 +618,7 @@ static int picker(struct context *ctx)
     if (ctx->cells > 4) ctx->cells = 4;
     if ((size_t)ctx->cells > ctx->menu.total) ctx->cells = (int)ctx->menu.total;
     if (ctx->cells < 1) return -1;
-    ctx->cell_width = (ctx->columns - 2) / ctx->cells;
+    ctx->cell_width = (ctx->columns - 2) / ctx->cells < cell ? (ctx->columns - 2) / ctx->cells : cell;
     int rows = (int)((ctx->menu.total + (size_t)ctx->cells - 1) / (size_t)ctx->cells);
     if (rows > (ctx->history ? 5 : 6)) rows = ctx->history ? 5 : 6;
     if (rows > ctx->rows / 3) rows = ctx->rows / 3;
@@ -781,6 +822,9 @@ static int binit_history_search(int n, int key)
     return delegate_binding(history_searches, 2, n, key, rl_reverse_search_history);
 }
 
+/* Runs after Readline has left the input: with RL_STATE_DONE the cursor is at column 0 of the row below
+   the last input row (on the blank wrap row itself when the input ends at the right margin); after ^C
+   it is on the last input row, where the ghost starts. */
 static void history_deprep(void)
 {
     if (history_deprep_running) {
@@ -788,10 +832,15 @@ static void history_deprep(void)
         return;
     }
     history_deprep_running = true;
-    if (history_painted && rl_outstream) {
-        // After ^C the column is unknown, so the one place that saves and restores the cursor is here.
-        if (RL_ISSTATE(RL_STATE_SIGHANDLER)) fputs("\0337\r\n\033[J\0338", rl_outstream);
-        else if (RL_ISSTATE(RL_STATE_DONE)) fputs("\033[J", rl_outstream);
+    if (rl_outstream) {
+        if (RL_ISSTATE(RL_STATE_SIGHANDLER)) {
+            // After ^C the column is unknown, so the one place that saves and restores the cursor is here.
+            if (suggestion_visible) fputs("\033[J", rl_outstream);
+            else if (history_painted) fputs("\0337\r\n\033[J\0338", rl_outstream);
+        } else if (RL_ISSTATE(RL_STATE_DONE)) {
+            if (suggestion_visible && !ghost_on_blank_row) fprintf(rl_outstream, "\033[A\033[%dG\033[K\033[B\r", ghost_column + 1);
+            if (history_painted || (suggestion_visible && ghost_on_blank_row)) fputs("\033[J", rl_outstream);
+        }
         fflush(rl_outstream);
     }
     colors_painted = suggestion_visible = history_painted = false;
@@ -799,6 +848,29 @@ static void history_deprep(void)
     history_line[0] = '\0';
     if (history_previous_deprep && history_previous_deprep != history_deprep) history_previous_deprep();
     history_deprep_running = false;
+}
+
+static void deprep_install(void)
+{
+    if (history_deprep_active) return;
+    if (!history_deprep_detached) history_base_deprep = rl_deprep_term_function;
+    history_previous_deprep = rl_deprep_term_function;
+    rl_deprep_term_function = history_deprep;
+    history_deprep_detached = false;
+    history_deprep_active = true;
+}
+
+static void deprep_release(void)
+{
+    if (!history_deprep_active || suggestions_enabled || history_enabled) return;
+    if (rl_deprep_term_function == history_deprep) {
+        rl_deprep_term_function = history_previous_deprep;
+        history_previous_deprep = NULL;
+        history_deprep_detached = false;
+    } else {
+        history_deprep_detached = true;
+    }
+    history_deprep_active = false;
 }
 
 static void history_bind(struct binding *binding, Keymap map, int key, rl_command_func_t *current, rl_command_func_t *replacement)
@@ -822,10 +894,6 @@ static int enable_history(void)
         history_owns_suggestions = true;
     }
     const char *names[] = {"emacs-standard", "vi-insert"};
-    if (!history_deprep_detached) history_base_deprep = rl_deprep_term_function;
-    history_previous_deprep = rl_deprep_term_function;
-    rl_deprep_term_function = history_deprep;
-    history_deprep_detached = false;
     for (size_t i = 0; i < 2; ++i) {
         Keymap map = rl_get_keymap_by_name(names[i]);
         if (!map) continue;
@@ -841,16 +909,8 @@ static int enable_history(void)
 
 static void disable_history(void)
 {
-    bool was_enabled = history_enabled;
     history_clear();
     history_enabled = false;
-    if (rl_deprep_term_function == history_deprep) {
-        rl_deprep_term_function = history_previous_deprep;
-        history_previous_deprep = NULL;
-        history_deprep_detached = false;
-    } else if (was_enabled) {
-        history_deprep_detached = true;
-    }
     history_matches = 0;
     history_line[0] = '\0';
     for (size_t i = 0; i < 2; ++i) {
@@ -862,6 +922,7 @@ static void disable_history(void)
         if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
         previous_redisplay = NULL;
     }
+    deprep_release();
 }
 
 static void capture(char **matches, int count, int width)

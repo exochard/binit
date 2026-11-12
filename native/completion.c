@@ -26,8 +26,10 @@
 #include "quit.h"
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <readline/keymaps.h>
 #include "menu.h"
 #include "effects.h"
+#include "layout.h"
 #ifdef BINIT_HIGHLIGHT
 #include "highlight.h"
 #endif
@@ -77,10 +79,9 @@ extern int running_trap;
 static rl_hook_func_t *previous_pre_input;
 static bool wait_installed;
 static bool history_enabled, history_owns_suggestions, history_dismissed;
-static bool history_painted;
+static bool history_painted, colors_painted;
 static bool history_deprep_running, history_deprep_detached;
 static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
-static int history_row, history_rows, history_columns, history_height;
 static char history_line[4097];
 static struct binding history_tabs[2], history_searches[2];
 static size_t history_matches;
@@ -94,7 +95,9 @@ static bool suggestion_visible;
 static bool redisplay_running;
 static rl_voidfunc_t *previous_redisplay;
 static struct binding suggestion_bindings[2];
-static void history_draw(void);
+static int option(const char *);
+static size_t history_panel(const char **, const struct binit_layout *, int, int, bool);
+static void history_draw(const char **, size_t, int, int *);
 static void history_clear(void);
 static int history_tab(int, int);
 static int binit_history_search(int, int);
@@ -114,63 +117,11 @@ static bool alias_context_unknown(const char *line)
 }
 #endif
 
-static int display_width(const char *text, size_t size)
-{
-    mbstate_t state = {0};
-    size_t offset = 0;
-    int width = 0;
-    while (offset < size) {
-        wchar_t character;
-        size_t used = mbrtowc(&character, text + offset, size - offset, &state); // NOLINT(concurrency-mt-unsafe): Readline runs on Bash's shell thread.
-        if (used == (size_t)-1 || used == (size_t)-2 || used == 0) return -1;
-        if ((character >= 0x80 && character <= 0x9f) || (character >= 0x202a && character <= 0x202e) ||
-            (character >= 0x2066 && character <= 0x2069)) return -1;
-        int cells = wcwidth(character);
-        if (cells < 0) return -1;
-        width += cells;
-        offset += used;
-    }
-    return width;
-}
-
-/* Readline marks prompt escapes as non-printing with SOH/STX.  Only SGR
-   sequences are safe to account for without terminal cursor queries. */
-static int prompt_width(const char *prompt)
-{
-    const unsigned char *p = (const unsigned char *)prompt;
-    size_t length = strnlen(prompt, 8193);
-    if (length > 8192) return -1;
-    const unsigned char *end = p + length;
-    mbstate_t state = {0};
-    int width = 0;
-    bool marked = false;
-    while (p < end) {
-        if (*p == 1 && !marked) {marked = true; ++p; continue;}
-        if (*p == 2 && marked) {marked = false; ++p; continue;}
-        if (*p == '\033' && p + 1 < end && p[1] == '[') {
-            p += 2;
-            while (p < end && ((*p >= '0' && *p <= '9') || *p == ';' || *p == ':')) ++p;
-            if (p == end || *p != 'm') return -1;
-            ++p;
-            continue;
-        }
-        if (marked) return -1;
-        wchar_t character;
-        size_t used = mbrtowc(&character, (const char *)p, (size_t)(end - p), &state); // NOLINT(concurrency-mt-unsafe): Readline runs on Bash's shell thread.
-        if (used == (size_t)-1 || used == (size_t)-2 || used == 0 || used > (size_t)(end - p)) return -1;
-        int cells = wcwidth(character);
-        if (cells < 0) return -1;
-        width += cells;
-        p += used;
-    }
-    return marked ? -1 : width;
-}
-
 static const char *history_suggestion(void)
 {
     if (!suggestions_enabled || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1 ||
         rl_point != rl_end || rl_end <= 0 || rl_end > 4096 || !rl_line_buffer) return NULL;
-    if (display_width(rl_line_buffer, (size_t)rl_end) < 0) return NULL;
+    if (binit_cells(rl_line_buffer, (size_t)rl_end) < 0) return NULL;
     HIST_ENTRY **entries = history_list();
     if (!entries) return NULL;
     int lower = history_length > 1000 ? history_length - 1000 : 0;
@@ -179,10 +130,94 @@ static const char *history_suggestion(void)
         if (!line || strncmp(line, rl_line_buffer, (size_t)rl_end) != 0 || !line[rl_end]) continue;
         const char *suffix = line + rl_end;
         size_t size = strnlen(suffix, 1025);
-        if (size > 1024 || display_width(suffix, size) < 0) return NULL;
+        if (size > 1024 || binit_cells(suffix, size) < 0) return NULL;
         return suffix;
     }
     return NULL;
+}
+
+static int mode_cells(void)
+{
+    if (!option("show-mode-in-prompt") || rl_display_prompt != rl_prompt) return 0;
+    const char *name = rl_editing_mode == 1 /* Readline's emacs mode */ ? "emacs-mode-string" :
+                       rl_get_keymap() == vi_insertion_keymap ? "vi-ins-mode-string" : "vi-cmd-mode-string";
+    const char *text = rl_variable_value(name);
+    return text ? binit_prompt_cells(text) : 0;
+}
+
+/* Where Readline has drawn the line, or false when the overlays cannot be placed with confidence. */
+static bool current_layout(struct binit_layout *layout, int *rows, int *columns)
+{
+    if (!rl_line_buffer || !rl_instream) return false;
+    rl_get_screen_size(rows, columns); /* Readline wraps at its own idea of the width */
+    int prompt = binit_prompt_cells(rl_display_prompt ? rl_display_prompt : ""), mode = mode_cells();
+    return prompt >= 0 && mode >= 0 && binit_layout(prompt + mode, *columns, rl_line_buffer, (size_t)rl_end, (size_t)rl_point, layout) &&
+           layout->rows <= *rows - 1;
+}
+
+/* The overlays are drawn after Readline's redisplay and only ever move relative to Readline's cursor:
+   an absolute row from an earlier cursor query is wrong after the screen scrolls or reflows. */
+static void move_to(int *row, int to_row, int to_column)
+{
+    if (to_row < *row) fprintf(rl_outstream, "\033[%dA", *row - to_row);
+    else if (to_row > *row) fprintf(rl_outstream, "\033[%dB", to_row - *row);
+    *row = to_row;
+    fprintf(rl_outstream, "\033[%dG", to_column + 1);
+}
+
+#ifdef BINIT_HIGHLIGHT
+/* The input is rewritten as one run that the terminal wraps, as Readline wrote it: moving between
+   rows would end the terminal's soft wrap, and a copied command would then contain line breaks. */
+static bool paint_colors(const struct binit_layout *layout, int columns, int *row)
+{
+    uint8_t colors[4096];
+    if (alias_context_unknown(rl_line_buffer)) memset(colors, 0, (size_t)rl_end);
+    else if (!binit_highlight(rl_line_buffer, (size_t)rl_end, colors)) return false;
+    static const char *styles[] = {"0", "2", "32", "36", "33", "35"};
+    move_to(row, 0, layout->column[0]);
+    unsigned int color = 0;
+    for (int r = 0; r < layout->rows; ++r) {
+        size_t end = r + 1 < layout->rows ? layout->offset[r + 1] : (size_t)rl_end;
+        for (size_t i = layout->offset[r]; i < end; ++i) {
+            if (colors[i] != color) {color = colors[i]; fprintf(rl_outstream, "\033[%sm", styles[color]);}
+            fputc((unsigned char)rl_line_buffer[i], rl_outstream);
+        }
+        if (r + 1 == layout->rows || end == (size_t)rl_end) break;
+        // Readline pads a row with spaces when a wide character moves to the next one.
+        int used = layout->column[r] + binit_cells(rl_line_buffer + layout->offset[r], end - layout->offset[r]);
+        if (used < columns && color) {fputs("\033[0m", rl_outstream); color = 0;}
+        for (; used < columns; ++used) fputc(' ', rl_outstream);
+    }
+    fputs("\033[0m", rl_outstream);
+    // Text that ends at the right margin leaves the cursor on the last cell of the full row.
+    bool full = layout->rows > 1 && layout->end.column == 0 && layout->offset[layout->rows - 1] == (size_t)rl_end;
+    *row = full ? layout->rows - 2 : layout->rows - 1;
+    return true;
+}
+#endif
+
+/* Writes the suggestion after the input without using the last column, so it never wraps. */
+static bool draw_ghost(const char *suffix, int available)
+{
+    size_t length = strnlen(suffix, 1025);
+    int used;
+    size_t size = binit_fit(suffix, length, available, &used);
+    bool ellipsis = size < length && MB_CUR_MAX > 1 && available > 0;
+    if (ellipsis) size = binit_fit(suffix, length, available - 1, &used);
+    if (!size && !ellipsis) return false;
+    fprintf(rl_outstream, "\033[2m%.*s%s\033[0m", (int)size, suffix, ellipsis ? "\xe2\x80\xa6" : "");
+    return true;
+}
+
+/* Back to a plain Readline line when the overlays can no longer be placed.  A forced update would
+   print the first lines of a multi-line prompt again. */
+static void reset_display(void)
+{
+    rl_clear_visible_line();
+    fputs("\033[J", rl_outstream);
+    rl_on_new_line();
+    rl_redisplay();
+    colors_painted = suggestion_visible = history_painted = false;
 }
 
 static void suggestion_redisplay(void)
@@ -192,60 +227,35 @@ static void suggestion_redisplay(void)
     if (previous_redisplay && previous_redisplay != suggestion_redisplay) previous_redisplay();
     else rl_redisplay();
     redisplay_running = false;
-    if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1) return;
-#ifdef BINIT_HIGHLIGHT
-    if (highlighting_enabled && rl_outstream && rl_line_buffer && rl_end > 0 && rl_end <= 4096 && rl_point >= 0 && rl_point <= rl_end) {
-        const char *prompt = rl_display_prompt ? rl_display_prompt : "";
-        int rows, columns;
-        rl_get_screen_size(&rows, &columns);
-        (void)rows;
-        int width = display_width(rl_line_buffer, (size_t)rl_end);
-        int before = display_width(rl_line_buffer, (size_t)rl_point);
-        uint8_t colors[4096];
-        bool uncertain = alias_context_unknown(rl_line_buffer);
-        int prompt_cells = prompt_width(prompt);
-        if (prompt_cells >= 0 && width >= 0 && before >= 0 && columns > 1 &&
-            (size_t)prompt_cells + (size_t)width < (size_t)columns &&
-            (uncertain ? (memset(colors, 0, (size_t)rl_end), true) : binit_highlight(rl_line_buffer, (size_t)rl_end, colors))) {
-            static const char *styles[] = {"0", "2", "32", "36", "33", "35"};
-            fputs("\0337", rl_outstream);
-            if (before) fprintf(rl_outstream, "\033[%dD", before);
-            unsigned int color = 0;
-            for (int i = 0; i < rl_end; ++i) {
-                if (colors[i] != color) {color = colors[i]; fprintf(rl_outstream, "\033[%sm", styles[color]);}
-                fputc((unsigned char)rl_line_buffer[i], rl_outstream);
-            }
-            fputs("\033[0m\0338", rl_outstream);
-            fflush(rl_outstream);
-        }
-    }
-#endif
-    if (history_enabled && !active) history_draw();
-    if (!suggestions_enabled || !rl_outstream) return;
-    if (rl_point != rl_end) {
-        if (suggestion_visible && rl_line_buffer && rl_point >= 0 && rl_point < rl_end) {
-            int cells = display_width(rl_line_buffer + rl_point, (size_t)(rl_end - rl_point));
-            if (cells >= 0) fprintf(rl_outstream, "\0337\033[%dC\033[K\0338", cells);
-            fflush(rl_outstream);
-            suggestion_visible = false;
-        }
+    if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1 || !rl_outstream) return;
+    struct binit_layout layout;
+    int rows, columns;
+    if (!current_layout(&layout, &rows, &columns)) {
+        history_matches = 0;
+        if (colors_painted || suggestion_visible || history_painted) reset_display();
         return;
     }
-    const char *suffix = history_suggestion();
-    const char *prompt = rl_display_prompt ? rl_display_prompt : "";
-    int rows, columns;
-    rl_get_screen_size(&rows, &columns);
-    (void)rows;
-    int prompt_cells = prompt_width(prompt);
-    if (prompt_cells < 0 || columns <= 1) suffix = NULL;
-    int line_width = display_width(rl_line_buffer, (size_t)rl_end);
-    int suffix_width = suffix ? display_width(suffix, strlen(suffix)) : 0;
-    if (suffix && (line_width < 0 || suffix_width < 0 || (size_t)prompt_cells + (size_t)line_width + (size_t)suffix_width >= (size_t)columns)) suffix = NULL;
-    if (!suffix && !suggestion_visible) return;
-    fputs("\033[K", rl_outstream);
-    if (suffix) fprintf(rl_outstream, "\0337\033[2m%s\033[0m\0338", suffix);
+    bool searching = RL_ISSTATE(RL_STATE_ISEARCH | RL_STATE_NSEARCH);
+    const char *items[5] = {0};
+    const char *suffix = searching ? NULL : history_suggestion();
+    size_t matches = history_panel(items, &layout, rows, columns, searching);
+    bool colors = false;
+#ifdef BINIT_HIGHLIGHT
+    colors = highlighting_enabled && !searching && rl_end > 0;
+#endif
+    if (!rl_end) colors_painted = false;
+    if (!colors && !suffix && !matches && !suggestion_visible && !history_painted) return;
+    int row = layout.cursor.row;
+#ifdef BINIT_HIGHLIGHT
+    if (colors && paint_colors(&layout, columns, &row)) colors_painted = true;
+#endif
+    move_to(&row, layout.end.row, layout.end.column);
+    fputs(history_painted && !matches ? "\033[J" : "\033[K", rl_outstream);
+    suggestion_visible = suffix && draw_ghost(suffix, columns - layout.end.column - 1);
+    if (matches) history_draw(items, matches, columns, &row);
+    else history_painted = false;
+    move_to(&row, layout.cursor.row, layout.cursor.column);
     fflush(rl_outstream);
-    suggestion_visible = suffix != NULL;
 }
 
 static int accept_suggestion(int count, int key)
@@ -646,7 +656,7 @@ static size_t history_collect(const char **items, size_t limit, const char *quer
         const char *line = entries[i]->line;
         if (!line || !*line) continue;
         size_t length = strnlen(line, 4097);
-        if (length > 4096 || !strcasestr(line, query) || display_width(line, length) < 0) continue;
+        if (length > 4096 || !strcasestr(line, query) || binit_cells(line, length) < 0) continue;
         uint64_t hash = UINT64_C(14695981039346656037);
         for (size_t j = 0; j < length; ++j) hash = (hash ^ (unsigned char)line[j]) * UINT64_C(1099511628211);
         bool duplicate = false;
@@ -656,82 +666,58 @@ static size_t history_collect(const char **items, size_t limit, const char *quer
     return count;
 }
 
+/* Erases the panel and the suggestion below and after the input, leaving the cursor where it was. */
 static void history_clear(void)
 {
     if (!history_painted || !rl_outstream) return;
+    struct binit_layout layout;
     int rows, columns;
-    terminal_size(&rows, &columns);
-    (void)columns;
-    fputs("\0337", rl_outstream);
-    for (int i = 1; i <= history_height && history_row + i <= rows; ++i) {
-        move_cursor(history_row + i, 1);
-        fputs("\033[0m\033[2K", rl_outstream);
+    if (!RL_ISSTATE(RL_STATE_DONE) && current_layout(&layout, &rows, &columns)) {
+        int row = layout.cursor.row;
+        move_to(&row, layout.end.row, layout.end.column);
+        fputs("\033[J", rl_outstream);
+        move_to(&row, layout.cursor.row, layout.cursor.column);
+        fflush(rl_outstream);
+        suggestion_visible = false;
     }
-    fputs("\0338", rl_outstream);
-    fflush(rl_outstream);
     history_painted = false;
 }
 
-static void history_draw(void)
+/* Number of history rows to show below the input; 0 leaves Tab to completion. */
+static size_t history_panel(const char **items, const struct binit_layout *layout, int rows, int columns, bool searching)
 {
-    if (!history_enabled || !rl_outstream || !rl_instream || !rl_line_buffer || !isatty(fileno(rl_outstream)) ||
-        !isatty(fileno(rl_instream)) || rl_executing_macro || rl_end < 0 || rl_end > 4096) return;
+    history_matches = 0;
+    if (!history_enabled || active || searching || !rl_instream || !isatty(fileno(rl_outstream)) ||
+        !isatty(fileno(rl_instream)) || rl_executing_macro) return 0;
     bool can_focus = false;
     for (size_t i = 0; i < 2; ++i) {
         Keymap map = history_tabs[i].map;
         if (history_tabs[i].owned && map == rl_get_keymap() && map['\t'].type == ISFUNC && map['\t'].function == history_tab)
             can_focus = true;
     }
-    if (!can_focus) {history_matches = 0; history_clear(); return;}
+    if (!can_focus) return 0;
     if (strcmp(history_line, rl_line_buffer) != 0) {
         memcpy(history_line, rl_line_buffer, (size_t)rl_end + 1);
         history_dismissed = false;
     }
-    const char *items[5] = {0};
-    history_matches = rl_end && !history_dismissed ? history_collect(items, 5, rl_line_buffer) : 0;
-    int rows, columns;
-    terminal_size(&rows, &columns);
-    int prompt = prompt_width(rl_display_prompt ? rl_display_prompt : "");
-    int line = display_width(rl_line_buffer, (size_t)rl_end);
-    if (rows < 5 || columns < 20 || prompt < 0 || line < 0 || prompt + line >= columns || !history_matches) {
-        history_clear();
-        return;
-    }
-    if (history_painted && (rows != history_rows || columns != history_columns)) history_clear();
-    int height = (int)history_matches + 1;
-    if (height > rows - 2) height = rows - 2;
-    if (!history_painted) {
-        struct context ctx = {0};
-        int row, column;
-        if (!cursor_position(&ctx, &row, &column) || row > rows || column > columns) {
-            replay_input(&ctx, NULL, 0);
-            history_matches = 0;
-            return;
-        }
-        replay_input(&ctx, NULL, 0);
-        int scroll = row + height - rows;
-        if (scroll > 0) {
-            move_cursor(rows, 1);
-            for (int i = 0; i < scroll; ++i) fputc('\n', rl_outstream);
-            row -= scroll;
-            move_cursor(row, column);
-        }
-        history_row = row;
-        history_rows = rows;
-        history_columns = columns;
-    } else if (history_height > height) history_clear();
-    fputs("\0337", rl_outstream);
-    move_cursor(history_row + 1, 1);
-    fputs("\033[2K\033[2mHistory  Tab focus  Ctrl-R search\033[0m", rl_outstream);
+    if (!rl_end || history_dismissed || rows < 5 || columns < 20) return 0;
+    size_t count = history_collect(items, 5, rl_line_buffer);
+    if (layout->end.row + 2 + (int)count > rows) return 0;
+    history_matches = count;
+    return count;
+}
+
+/* Draws below the input; \r\n scrolls the screen when the input is on the bottom row. */
+static void history_draw(const char **items, size_t count, int columns, int *row)
+{
     char text[4097];
-    for (int i = 0; i < height - 1 && (size_t)i < history_matches; ++i) {
-        move_cursor(history_row + i + 2, 1);
+    fputs("\r\n\033[2K\033[2mHistory  Tab focus  Ctrl-R search\033[0m", rl_outstream);
+    for (size_t i = 0; i < count; ++i) {
         binit_text(text, sizeof text, items[i], columns - 3);
-        fprintf(rl_outstream, "\033[2K  %s", text);
+        fprintf(rl_outstream, "\r\n\033[2K  %s", text);
     }
-    fputs("\0338", rl_outstream);
-    fflush(rl_outstream);
-    history_height = height;
+    if (history_painted) fputs("\033[J", rl_outstream);
+    *row += (int)count + 1;
     history_painted = true;
 }
 
@@ -802,7 +788,13 @@ static void history_deprep(void)
         return;
     }
     history_deprep_running = true;
-    history_clear();
+    if (history_painted && rl_outstream) {
+        // After ^C the column is unknown, so the one place that saves and restores the cursor is here.
+        if (RL_ISSTATE(RL_STATE_SIGHANDLER)) fputs("\0337\r\n\033[J\0338", rl_outstream);
+        else if (RL_ISSTATE(RL_STATE_DONE)) fputs("\033[J", rl_outstream);
+        fflush(rl_outstream);
+    }
+    colors_painted = suggestion_visible = history_painted = false;
     history_dismissed = false;
     history_line[0] = '\0';
     if (history_previous_deprep && history_previous_deprep != history_deprep) history_previous_deprep();

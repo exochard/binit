@@ -4,6 +4,34 @@ import re
 
 from test_completion import MODULE, Session
 
+PROMPT = 'READY> '
+WRAPPED = 'echo ' + 'a' * 28 + '; ls -l | cat'
+
+
+def prompt_row(session):
+    return max(y for y, row in enumerate(session.screen.display) if PROMPT in row)
+
+
+def settle(session):
+    """The harness resize leaves a doubled prompt under a custom redisplay; start a fresh prompt."""
+    session.pump(.3)
+    session.send(b'\x03')
+    session.pump(.3)
+
+
+def typed(session):
+    """The input as it sits on screen, from the last prompt row up to the cursor."""
+    rows, cursor = session.screen.display, session.screen.cursor
+    start = prompt_row(session)
+    return (''.join(rows[start:cursor.y]) + rows[cursor.y][:cursor.x]).split(PROMPT, 1)[-1]
+
+
+def foreground(session, offset, prompt_cells=len(PROMPT)):
+    """Foreground colour of the input byte at offset, following the 40-column wrap."""
+    position = prompt_cells + offset
+    cell = session.screen.buffer[prompt_row(session) + position // 40][position % 40]
+    return cell.fg
+
 
 class EditorTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
@@ -204,3 +232,108 @@ class EditorTests(unittest.TestCase):
             session.send('echo café')
             session.wait(lambda: '\x1b[36m' in bytes(session.transcript).decode(errors='replace'))
             self.assertEqual(session.capture()[1], 'echo café')
+
+    def test_wrapped_input_keeps_a_truncated_suggestion_and_accepts_the_full_text(self):
+        entry = 'echo ' + 'x' * 30 + '-suggestion-' + 'y' * 60
+        with Session(extra=f"history -s '{entry}'\nbinit_complete editor suggestions on\n", columns=40) as session:
+            settle(session)
+            session.send('echo ' + 'x' * 30)
+            session.wait(lambda: '-suggestion-' in session.text)
+            row = session.screen.display[session.screen.cursor.y]
+            self.assertEqual(row[session.screen.cursor.x:].rstrip(), entry[35:35 + 36] + '…')
+            session.send(b'\x06')
+            self.assertEqual(session.capture()[1], entry)
+
+    def test_cursor_and_suggestion_stay_right_across_the_right_margin(self):
+        entry = 'abcdefghij' * 8
+        with Session(extra=f"history -s '{entry}'\nbinit_complete editor suggestions on\n", columns=40) as session:
+            settle(session)
+            start = prompt_row(session)
+            sent = 0
+            for length in range(30, 37):
+                session.send(entry[sent:length])
+                sent = length
+                position = len(PROMPT) + length
+                row, column = divmod(position, 40)
+                suffix, available = entry[length:], 40 - column - 1
+                ghost = '' if available < 1 else suffix if len(suffix) <= available else suffix[:available - 1] + '…'
+                session.wait(lambda: (session.screen.cursor.y, session.screen.cursor.x) == (start + row, column) and
+                             session.screen.display[start + row][column:].rstrip() == ghost)
+                self.assertEqual(typed(session), entry[:length])
+
+    def test_multiline_prompt_shows_the_suggestion(self):
+        with Session(extra="history -s 'echo sample-suggestion'\nbinit_complete editor suggestions on\n") as session:
+            settle(session)
+            session.send("PS1=$'top line\\nREADY> '\n")
+            session.pump(.2)
+            session.send('echo sam')
+            session.wait(lambda: 'echo sample-suggestion' in session.text)
+            session.send(b'\x06')
+            self.assertEqual(session.capture()[1], 'echo sample-suggestion')
+
+    def test_marked_title_in_prompt_shows_the_suggestion(self):
+        with Session(extra="history -s 'echo sample-suggestion'\nbinit_complete editor suggestions on\n") as session:
+            settle(session)
+            session.send("PS1='\\[\\e]0;t\\a\\]READY> '\n")
+            session.pump(.2)
+            session.send('echo sam')
+            session.wait(lambda: 'echo sample-suggestion' in session.text)
+            session.send(b'\x06')
+            self.assertEqual(session.capture()[1], 'echo sample-suggestion')
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_wrapped_input_is_colored_on_every_row(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra='binit_complete editor highlighting on\n', mode=mode, columns=40) as session:
+                settle(session)
+                start = prompt_row(session)
+                session.send(WRAPPED)
+                session.wait(lambda: foreground(session, WRAPPED.index('cat')) != 'default')
+                command = foreground(session, 0)
+                self.assertNotEqual(command, 'default')
+                self.assertEqual(foreground(session, WRAPPED.index('ls')), command)
+                self.assertEqual(foreground(session, WRAPPED.index('cat')), command)
+                self.assertEqual(typed(session), WRAPPED)
+                self.assertEqual((session.screen.cursor.y, session.screen.cursor.x), (start + 1, 13))
+                # The repaint is one run the terminal wraps itself; cursor moves between rows would
+                # end the terminal's soft wrap and copying the command would insert a line break.
+                plain = re.sub(r'\x1b\[[0-9;]*m', '', bytes(session.transcript).decode(errors='replace'))
+                self.assertTrue(plain[plain.rindex('echo '):].startswith(WRAPPED), plain[-200:])
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_multiline_prompt_is_highlighted(self):
+        with Session(extra='binit_complete editor highlighting on\n') as session:
+            settle(session)
+            session.send("PS1=$'top line\\nREADY> '\n")
+            session.pump(.2)
+            session.send('echo $(true)')
+            session.wait(lambda: foreground(session, 0) != 'default')
+            self.assertEqual(typed(session), 'echo $(true)')
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_mode_string_in_prompt_keeps_colors_aligned(self):
+        for mode, label in (('vi', '(ins)'), ('emacs', '@')):
+            with self.subTest(mode=mode), Session(extra="bind 'set show-mode-in-prompt on'\nbinit_complete editor highlighting on\n",
+                                                  mode=mode, columns=40) as session:
+                settle(session)
+                cells = len(label + PROMPT)
+                session.send(WRAPPED)
+                session.wait(lambda: foreground(session, WRAPPED.index('cat'), cells) != 'default')
+                command = foreground(session, 0, cells)
+                self.assertNotEqual(command, 'default')
+                self.assertEqual(foreground(session, WRAPPED.index('ls'), cells), command)
+                self.assertEqual(foreground(session, WRAPPED.index('cat'), cells), command)
+                self.assertEqual(typed(session), WRAPPED)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_input_taller_than_the_screen_is_plain(self):
+        with Session(extra='binit_complete editor highlighting on\n', rows=6, columns=40) as session:
+            settle(session)
+            session.send('echo hi ')
+            session.wait(lambda: foreground(session, 0) != 'default')
+            line = 'echo hi ' + 'a' * 192
+            session.send(line[8:])
+            session.pump(.4)
+            colors = {cell.fg for row in session.screen.buffer.values() for cell in row.values()}
+            self.assertEqual(colors, {'default'})
+            self.assertEqual(session.capture()[1], line)

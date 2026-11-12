@@ -282,3 +282,96 @@ class LiveHistoryTests(unittest.TestCase):
             session.send(b'echo unique\r')
             session.pump(.2)
             self.assertEqual(session.capture()[1], 'custom-enter')
+
+
+PROMPT = 'READY> '
+ENTRY = 'echo ' + 'x' * 70
+
+
+def prompt_row(session):
+    return max(y for y, row in enumerate(session.screen.display) if PROMPT in row)
+
+
+def settle(session):
+    """The harness resize leaves a doubled prompt under a custom redisplay; start a fresh prompt."""
+    session.pump(.3)
+    session.send(b'\x03')
+    session.pump(.3)
+
+
+def typed(session):
+    """The input as it sits on screen, from the last prompt row up to the cursor."""
+    rows, cursor = session.screen.display, session.screen.cursor
+    start = prompt_row(session)
+    return (''.join(rows[start:cursor.y]) + rows[cursor.y][:cursor.x]).split(PROMPT, 1)[-1]
+
+
+def headers(session):
+    return [y for y, row in enumerate(session.screen.display) if 'History  Tab focus' in row]
+
+
+class LivePanelLayoutTests(unittest.TestCase):
+    extra = f"history -s '{ENTRY}'\nbinit_complete editor history on\n"
+
+    def test_pasting_across_the_margin_keeps_the_wrapped_rows(self):
+        with Session(extra=self.extra, columns=40) as session:
+            settle(session)
+            session.send('echo x')
+            session.wait(lambda: headers(session))
+            line = 'echo ' + 'x' * 55
+            session.send(line[6:])
+            session.wait(lambda: typed(session) == line)
+            start = prompt_row(session)
+            session.wait(lambda: headers(session) == [start + 2])
+            self.assertEqual(typed(session), line)
+
+    def test_header_stays_directly_below_the_last_input_row(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=self.extra, mode=mode, columns=40) as session:
+                settle(session)
+                start = prompt_row(session)
+                session.send('echo ' + 'x' * 20)
+                session.wait(lambda: headers(session) == [start + 1])
+                session.send('x' * 10)
+                session.wait(lambda: headers(session) == [start + 2])
+                self.assertEqual(typed(session), 'echo ' + 'x' * 30)
+                session.send(b'\x7f' * 10)
+                session.wait(lambda: headers(session) == [start + 1])
+                self.assertEqual(typed(session), 'echo ' + 'x' * 20)
+
+    def test_panel_scrolls_into_view_on_the_bottom_row(self):
+        with Session(extra=self.extra, rows=8) as session:
+            settle(session)
+            session.send('seq 1 12\n')
+            session.wait(lambda: PROMPT in session.screen.display[-1])
+            session.send('echo x')
+            session.wait(lambda: headers(session))
+            rows = session.screen.display
+            self.assertEqual(headers(session), [6])
+            self.assertIn('echo xxxx', rows[7])
+            self.assertEqual((session.screen.cursor.y, session.screen.cursor.x), (5, len(PROMPT) + 6))
+            self.assertEqual(typed(session), 'echo x')
+
+    def test_resize_keeps_the_input_rows(self):
+        with Session(extra=self.extra, columns=80) as session:
+            settle(session)
+            session.send('echo ' + 'x' * 10)
+            session.wait(lambda: headers(session))
+            session.screen.resize(24, 40)
+            fcntl.ioctl(session.terminal.fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 40, 0, 0))
+            os.kill(session.terminal.pid, signal.SIGWINCH)
+            session.pump(.3)
+            session.send(b'\x0c')  # the test screen cannot reflow, so start from a cleared one
+            session.wait(lambda: typed(session) == 'echo ' + 'x' * 10 and headers(session))
+            session.send('x' * 30)
+            session.wait(lambda: typed(session) == 'echo ' + 'x' * 40)
+            session.wait(lambda: headers(session) == [prompt_row(session) + 2])
+
+    def test_multiline_prompt_shows_the_panel(self):
+        with Session(extra=self.extra) as session:
+            settle(session)
+            session.send("PS1=$'top line\\nREADY> '\n")
+            session.pump(.2)
+            session.send('echo x')
+            session.wait(lambda: headers(session) == [prompt_row(session) + 1])
+            self.assertEqual(typed(session), 'echo x')

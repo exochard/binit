@@ -6,7 +6,7 @@ fn main() {
     for file in ["native/completion.c", "native/menu.c", "native/menu.h"] {
         println!("cargo:rerun-if-changed={file}");
     }
-    for name in ["CC", "BINIT_BASH_INCLUDE"] {
+    for name in ["CC", "BINIT_BASH_INCLUDE", "BINIT_READLINE_INCLUDE"] {
         println!("cargo:rerun-if-env-changed={name}");
     }
     if env::var_os("CARGO_FEATURE_COMPLETION_MENU").is_none() {
@@ -24,7 +24,18 @@ fn main() {
         "cargo:rerun-if-changed={}",
         headers.join("config.h").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        headers.join("version.h").display()
+    );
     println!("cargo:rerun-if-changed=/usr/include/readline/readline.h");
+    let readline = env::var_os("BINIT_READLINE_INCLUDE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/include"));
+    println!(
+        "cargo:rerun-if-changed={}",
+        readline.join("readline/readline.h").display()
+    );
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("completion.so");
     let result = Command::new(env::var_os("CC").unwrap_or_else(|| "cc".into()))
         .args([
@@ -45,6 +56,7 @@ fn main() {
             "-Wl,-z,relro,-z,now,-z,noexecstack",
         ])
         .arg(format!("-I{}", headers.display()))
+        .arg(format!("-I{}", readline.display()))
         .arg(format!("-I{}", headers.join("include").display()))
         .arg(format!("-I{}", headers.join("builtins").display()))
         .args(["native/completion.c", "native/menu.c", "-ldl", "-o"])

@@ -37,6 +37,22 @@ Rust integration tests, Python tests, and real terminal smoke tests. Keep
 tests focused on behavior: argument handling, shell state preservation, and
 recovery are more useful than matching generated implementation text.
 
+`BINIT_BASH=/absolute/path/to/bash` selects the interpreter used by `binit shell`
+and the terminal harness, including recovery sessions. It does not change the
+default interpreter for `binit run`. When building the native module, set
+`BINIT_BASH_INCLUDE` to that interpreter's installed Bash headers and
+`BINIT_READLINE_INCLUDE` to the directory containing its matching
+`readline/readline.h`. A module compiled for another interpreter is not a
+supported combination.
+
+Use an absolute `CARGO_TARGET_DIR` for each interpreter/compiler configuration.
+Verification exports `BINIT_TEST_BINARY` and `BINIT_TEST_MODULE` from that
+directory and writes tool identities to `verification/environment.json` there.
+`BINIT_NATIVE=0 bash scripts/verify.bash` qualifies the native-disabled build:
+Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
+Native completion and post-prompt PTY checks run in native-enabled jobs.
+See [qualification](docs/qualification.md) for CI coverage and remaining gates.
+
 The native menu tests use a real Bash PTY with a terminal emulator. They check
 the visible screen and command-line state, including cancellation, paste,
 and terminal control characters. Read [the architecture](docs/architecture.md)

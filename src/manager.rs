@@ -488,8 +488,13 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
 
 pub(super) fn shell(state: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
+    let bash = match std::env::var_os("BINIT_BASH") {
+        Some(value) if Path::new(&value).is_absolute() => value,
+        Some(_) => return Err("BINIT_BASH must be an absolute executable path".into()),
+        None => "bash".into(),
+    };
     if std::env::var_os("BINIT_SAFE").is_some_and(|value| value == "1") {
-        return Err(std::process::Command::new("bash")
+        return Err(std::process::Command::new(&bash)
             .args(["--noprofile", "--norc", "-i"])
             .exec()
             .into());
@@ -497,7 +502,7 @@ pub(super) fn shell(state: &Path) -> Result<()> {
     let id = pointer(state, "current")?;
     verify_generation(state, &id)?;
     let init = fs::canonicalize(state.join("generations").join(id).join("init.bash"))?;
-    let error = std::process::Command::new("bash")
+    let error = std::process::Command::new(&bash)
         .arg("--noprofile")
         .arg("--rcfile")
         .arg(init)

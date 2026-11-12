@@ -2,7 +2,7 @@
 set -euo pipefail
 cd -- "${BASH_SOURCE[0]%/*}/.."
 prototype_root=$PWD
-prototype_binary=$prototype_root/target/release/binit
+prototype_binary=${BINIT_TEST_BINARY:-$prototype_root/target/release/binit}
 prototype_state=${BINIT_DEMO_STATE:-$prototype_root/.local-demo}
 if [[ ! -x $prototype_binary ]]; then printf 'Run make build first.\n' >&2; exit 1; fi
 if [[ ${BINIT_SAFE-0} != 1 ]]; then

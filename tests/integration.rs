@@ -4,6 +4,106 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
+fn test_bash() -> std::ffi::OsString {
+    std::env::var_os("BINIT_BASH").unwrap_or_else(|| "bash".into())
+}
+
+#[test]
+fn shell_uses_the_selected_interpreter_in_normal_and_recovery_modes() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let f = Fixture::new();
+    f.demo();
+    let wrapper = f.write(
+        "selected bash",
+        "#!/bin/sh\nexport BINIT_SELECTED=yes\nexec \"$BINIT_TEST_REAL_BASH\" \"$@\"\n",
+    );
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+    for safe in ["0", "1"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_binit"))
+            .args(["shell", "--state"])
+            .arg(f.state())
+            .env("BINIT_BASH", &wrapper)
+            .env("BINIT_TEST_REAL_BASH", test_bash())
+            .env("BINIT_SAFE", safe)
+            .env("PS1", "")
+            .env("HISTFILE", "/dev/null")
+            .env_remove("BASH_ENV")
+            .env_remove("ENV")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(
+            b"printf 'selected=%s active=%s\\n' \"$BINIT_SELECTED\" \"${__binit_active-0}\"\nexit 23\n"
+        ).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(23));
+        let active = if safe == "1" { "0" } else { "1" };
+        assert!(
+            stdout(&output).contains(&format!("selected=yes active={active}")),
+            "{}",
+            stderr(&output)
+        );
+    }
+    for invalid in ["", "bash", "--norc"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_binit"))
+            .args(["shell", "--state"])
+            .arg(f.state())
+            .env("BINIT_BASH", invalid)
+            .output()
+            .unwrap();
+        failure(output, "BINIT_BASH must be an absolute executable path");
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_binit"))
+        .args(["shell", "--state"])
+        .arg(f.state())
+        .env("BINIT_BASH", "/no-such-binit-shell")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "missing interpreter must not fall back"
+    );
+}
+
+#[test]
+fn initialization_preserves_user_shell_configuration_against_clean_bash() {
+    let f = Fixture::new();
+    f.plugin("noop", "load='startup'", ":\n");
+    success(f.prepare(&["noop"]));
+    let observations = r#"
+printf 'cwd=%s args=' "$PWD"; printf '<%s>' "$@"; printf '\n'
+declare -p IFS SAMPLE sample_array
+export -p | grep ' SAMPLE='
+alias user_alias
+declare -f user_function
+trap -p DEBUG RETURN USR1
+set +o
+shopt -p extglob nullglob failglob globstar
+"#;
+    for setup in [
+        "IFS=$' :\t'; export SAMPLE='two words'; sample_array=('one' 'two words')",
+        "IFS=; export SAMPLE=''; sample_array=([3]='sparse'); set -o pipefail; shopt -s nullglob globstar",
+        "export SAMPLE=present; sample_array=(); trap ':' DEBUG RETURN USR1; shopt -s extglob",
+    ] {
+        let prefix = format!(
+            "{setup}\nalias user_alias='printf alias'; user_function() {{ printf '%s' user; }}\nset -- 'two words' '' '*.literal'\n"
+        );
+        let clean = f.bash(&format!("{prefix}{observations}\n:"));
+        let configured = f.bash(&format!(
+            "{prefix}source \"$BINIT_TEST_INIT\"\n{observations}\n:"
+        ));
+        assert!(
+            clean.status.success() && configured.status.success(),
+            "{}",
+            stderr(&configured)
+        );
+        assert_eq!(stdout(&configured), stdout(&clean), "setup: {setup}");
+    }
+}
+
 #[test]
 fn run_preserves_script_arguments_environment_directory_and_status() {
     use std::ffi::OsString;
@@ -172,7 +272,7 @@ impl Fixture {
             .join(fs::read_to_string(self.state().join("current")).unwrap())
     }
     fn bash(&self, script: &str) -> Output {
-        Command::new("bash")
+        Command::new(test_bash())
             .args(["--noprofile", "--norc", "-ic", script])
             .env("BINIT_TEST_INIT", self.generation().join("init.bash"))
             .env("BINIT_TEST_ROOT", self.root())
@@ -301,7 +401,7 @@ fn recovery_and_noninteractive_sourcing_do_not_initialize() {
     let f = Fixture::new();
     f.demo();
     assert_eq!(success(f.bash("BINIT_SAFE=1; source \"$BINIT_TEST_INIT\"; declare -F binit >/dev/null && exit 1; printf safe")), "safe");
-    let output = Command::new("bash")
+    let output = Command::new(test_bash())
         .args([
             "--noprofile",
             "--norc",
@@ -1224,7 +1324,7 @@ impl Home {
         let rc = self.f.write("rc", &self.rc(lines));
         let mut child = self
             .isolate(
-                Command::new("bash")
+                Command::new(test_bash())
                     .args(["--noprofile", "--rcfile"])
                     .arg(&rc)
                     .arg("-i")

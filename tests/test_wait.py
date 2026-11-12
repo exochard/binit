@@ -26,7 +26,7 @@ PROMPT = "READY>"
 
 
 class Session:
-    def __init__(self, wait_body, startup_body="", menu=True, rows=24, columns=80):
+    def __init__(self, wait_body, startup_body="", menu=True, rows=24, columns=80, mode="emacs"):
         if not BINARY.is_file():
             raise RuntimeError("binit binary missing; run cargo build first")
         self.temporary = tempfile.TemporaryDirectory(prefix=".scratch-wait-", dir=ROOT)
@@ -46,6 +46,8 @@ class Session:
         state = self.directory / "state"
         home = self.directory / "home"
         home.mkdir()
+        inputrc = self.directory / "inputrc"
+        inputrc.write_text(f"set editing-mode {mode}\n")
         subprocess.run([str(BINARY), "prepare", str(self.directory / "config.toml"), "--state", str(state)],
                        check=True, capture_output=True)
         self.started = time.monotonic()
@@ -53,7 +55,7 @@ class Session:
         if self.pid == 0:
             os.chdir(self.directory)
             env = dict(os.environ, TERM="xterm-256color", PS1=PROMPT + " ", HOME=str(home), HISTFILE="/dev/null",
-                       INPUTRC="/dev/null", LC_ALL="C.UTF-8", BINIT_SAFE="0", BINIT_COMPLETION_MENU="1" if menu else "0",
+                       INPUTRC=str(inputrc), LC_ALL="C.UTF-8", BINIT_SAFE="0", BINIT_COMPLETION_MENU="1" if menu else "0",
                        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
             env.pop("BASH_ENV", None)
             env.pop("ENV", None)
@@ -181,6 +183,27 @@ class WaitTests(unittest.TestCase):
             session.send("echo st=$?\n")
             session.wait(lambda: "st=7" in session.text)
             self.assertEqual((session.marks / "count").read_text(), "xx")
+
+    def test_last_argument_survives_a_later_dispatch(self):
+        startup = "arm() { __binit_state[slow]=pending; __binit_wait_pending=1; __binit_wait_queue+=(slow); return 7; }\n"
+        body = "printf x >> MARKS/count\ntrue plugin-argument\ntouch MARKS/done\n"
+        with Session(body, startup) as session:
+            session.wait(lambda: session.mark("done"))
+            session.settle()
+            session.send("arm sentinel-argument\n")
+            session.wait(lambda: (session.marks / "count").read_text() == "xx")
+            session.settle()
+            session.send("printf 'observed=%s:%s\\n' \"$_\" \"$?\"\n")
+            session.wait(lambda: "observed=sentinel-argument:7" in session.text)
+
+    def test_vi_mode_keeps_keys_typed_during_loading(self):
+        with Session(SLOW, mode="vi") as session:
+            session.wait(lambda: PROMPT in session.text)
+            session.send("echo vi-kept")
+            self.assertFalse(session.mark("done"))
+            session.wait(lambda: session.mark("done"))
+            session.send("\n")
+            session.wait(lambda: "\nvi-kept" in session.text)
 
     def test_an_interrupted_load_is_reported_and_the_shell_continues(self):
         body = "touch MARKS/start\nsleep 3\ntouch MARKS/done\n"

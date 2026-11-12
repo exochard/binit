@@ -186,6 +186,6 @@ executable for that invocation. Script arguments and exit status pass through;
 plugin state is not required. The experimental builds have not met the release
 performance gate.
 
-The current prototype loads local packages and source declarations. The [0.1 release plan](docs/release-0.1.md) includes pinned Git sources, installation, and further native interactive features. The experimental interpreter has not met the 25% execution target.
+The current prototype loads local packages and commit-pinned Git sources through plugin lines or declarations. The [qualification inventory](docs/qualification.md) records remaining acquisition, editor and distribution work. The experimental interpreter has not met the 25% execution target.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and [the benchmark procedure](docs/benchmarks.md) for engine experiments. Original Binit code is under [MIT](LICENSE); [GNU-linked artifacts have additional distribution requirements](docs/licensing.md).

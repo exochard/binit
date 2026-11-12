@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "files": [
+    {"repository": "nvm-sh/nvm", "commit": "977563e97ddc66facf3a8e31c6cff01d236f09bd", "path": "nvm.sh", "sha256": "390260ab9eb1da20e8bc0ebea2ee90f528d53e5e9f6e13b16717db4af454df9d", "destination": "nvm/nvm.sh"},
+    {"repository": "junegunn/fzf", "commit": "c0a193e031f01fb50bf6f7be4381990a3753f7cf", "path": "shell/completion.bash", "sha256": "263f7c4e602c002747175c69efa507bd3fb663633bb2419efda2e7641ffb6912", "destination": "fzf/completion.bash"},
+    {"repository": "junegunn/fzf", "commit": "c0a193e031f01fb50bf6f7be4381990a3753f7cf", "path": "shell/key-bindings.bash", "sha256": "89103adb2e29816b0ed8f36814ce4c95945a5f1c7dcd3b0620d2973ea2dbd6ea", "destination": "fzf/key-bindings.bash"},
+    {"repository": "scop/bash-completion", "commit": "b80d38cce5645fb98acd4eba857843fdf66be570", "path": "bash_completion", "sha256": "cceebcefec604ae833f67e17928dc376eab1f4e6bc07ca8d922be2aa95faa7a6", "destination": "bash-completion/bash_completion"},
+    {"repository": "scop/bash-completion", "commit": "b80d38cce5645fb98acd4eba857843fdf66be570", "path": "startup-core/000_bash_completion_compat.bash", "sha256": "ea8f709889c821161008f7723ff3f920440093f247a0c4f5afba588516a9be7d", "destination": "bash-completion/startup-core/000_bash_completion_compat.bash"}
+  ]
+}

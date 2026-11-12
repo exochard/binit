@@ -12,6 +12,183 @@ jobs:
   check:
     strategy:
       fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        bash:
+          - version: '5.2'
+            source: '5.2.15'
+          - version: '5.3'
+            source: '5.3'
+        native: ['0', '1']
+        compiler: [gcc, clang]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CC: ${{ matrix.compiler }}
+      BINIT_NATIVE: ${{ matrix.native }}
+      BINIT_BASH: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/install/bin/bash
+      BINIT_BASH_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/install/include/bash
+      BINIT_READLINE_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/bash-${{ matrix.bash.source }}/lib
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ci/target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare evidence directory
+        run: mkdir -p .cache/ci/evidence
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck cmake gcc clang libncurses-dev python3-venv
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+          rustup default stable
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Build selected Bash and matching headers
+        run: |
+          set -o pipefail
+          python3 scripts/ci_bash.py '${{ matrix.bash.version }}' "$PWD/.cache/ci/bash-${{ matrix.bash.version }}" 2>&1 | tee .cache/ci/evidence/bash-build.log
+          cp .cache/ci/bash-${{ matrix.bash.version }}/build.json .cache/ci/evidence/bash-build.json
+      - name: Record environment
+        run: |
+          {
+            git rev-parse HEAD
+            uname -a
+            "$BINIT_BASH" --version | head -n 1
+            "$CC" --version | head -n 1
+            rustc --version
+            cargo --version
+            python3 --version
+            cmake --version | head -n 1
+            printf 'native=%s\ninterpreter=%s\nheaders=%s\nreadline=%s\n' "$BINIT_NATIVE" "$BINIT_BASH" "$BINIT_BASH_INCLUDE" "$BINIT_READLINE_INCLUDE"
+          } > .cache/ci/evidence/environment.txt
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Verify
+        run: |
+          set -o pipefail
+          bash scripts/verify.bash 2>&1 | tee .cache/ci/evidence/verify.log
+      - name: Collect verification receipts
+        if: always()
+        run: |
+          mkdir -p .cache/ci/evidence
+          if [[ -d "$CARGO_TARGET_DIR/verification" ]]; then cp -r "$CARGO_TARGET_DIR/verification" .cache/ci/evidence/; fi
+          if [[ -f "$CARGO_TARGET_DIR/native-check/Testing/Temporary/LastTest.log" ]]; then cp "$CARGO_TARGET_DIR/native-check/Testing/Temporary/LastTest.log" .cache/ci/evidence/ctest.log; fi
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: check-${{ matrix.os }}-bash-${{ matrix.bash.version }}-native-${{ matrix.native }}-${{ matrix.compiler }}
+          path: .cache/ci/evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+  ecosystem:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        bash:
+          - version: '5.2'
+            source: '5.2.15'
+          - version: '5.3'
+            source: '5.3'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CC: gcc
+      BINIT_BASH: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/install/bin/bash
+      BINIT_BASH_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/install/include/bash
+      BINIT_READLINE_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/bash-${{ matrix.bash.source }}/lib
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ci/target
+      BINIT_TEST_BINARY: ${{ github.workspace }}/.cache/ci/target/release/binit
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare evidence directory
+        run: mkdir -p .cache/ci/evidence
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc git fzf bash-completion libncurses-dev python3-venv
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Build selected Bash and matching headers
+        run: |
+          set -o pipefail
+          python3 scripts/ci_bash.py '${{ matrix.bash.version }}' "$PWD/.cache/ci/bash-${{ matrix.bash.version }}" 2>&1 | tee .cache/ci/evidence/bash-build.log
+          cp .cache/ci/bash-${{ matrix.bash.version }}/build.json .cache/ci/evidence/bash-build.json
+      - name: Build Binit
+        run: |
+          set -o pipefail
+          cargo fetch --locked
+          cargo build --release --locked --offline 2>&1 | tee .cache/ci/evidence/binit-build.log
+      - name: Acquire pinned plugin fixtures
+        run: |
+          set -o pipefail
+          python3 scripts/fetch_plugins.py .cache/ci/plugins 2>&1 | tee .cache/ci/evidence/fixture-fetch.log
+          cp .cache/ci/plugins/sources.json .cache/ci/evidence/sources.json
+      - name: Check plugin workflows without network access
+        run: |
+          set -o pipefail
+          sudo unshare --net -- runuser -u "$(id -un)" -- env PATH="$PATH" BINIT_BASH="$BINIT_BASH" BINIT_TEST_BINARY="$BINIT_TEST_BINARY" "$PWD/.venv/bin/python3" scripts/check_plugins.py --fzf .cache/ci/plugins/fzf --bash-completion .cache/ci/plugins/bash-completion/bash_completion --nvm .cache/ci/plugins/nvm/nvm.sh --output .cache/ci/evidence/plugin-compatibility.json 2>&1 | tee .cache/ci/evidence/ecosystem.log
+      - name: Retain ecosystem evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ecosystem-${{ matrix.os }}-bash-${{ matrix.bash.version }}
+          path: .cache/ci/evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+  native-abi:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc cmake libncurses-dev
+      - name: Check both ABI mismatch directions
+        run: |
+          mkdir -p .cache/ci/abi
+          set -o pipefail
+          {
+            for version in 5.2 5.3; do
+              python3 scripts/ci_bash.py "$version" "$PWD/.cache/ci/abi/bash-$version"
+              if [[ $version == 5.2 ]]; then source_version=5.2.15; else source_version=5.3; fi
+              cmake -S native -B ".cache/ci/abi/module-$version" -DBASH_INCLUDE_DIR="$PWD/.cache/ci/abi/bash-$version/install/include/bash" -DREADLINE_INCLUDE_DIR="$PWD/.cache/ci/abi/bash-$version/bash-$source_version/lib"
+              cmake --build ".cache/ci/abi/module-$version" --parallel 2
+            done
+            python3 scripts/check_native_abi.py .cache/ci/abi/module-5.2/binit_complete.so .cache/ci/abi/bash-5.3/install/bin/bash
+            python3 scripts/check_native_abi.py .cache/ci/abi/module-5.3/binit_complete.so .cache/ci/abi/bash-5.2/install/bin/bash
+          } 2>&1 | tee .cache/ci/abi/check.log
+      - name: Retain ABI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-abi-${{ matrix.os }}
+          path: .cache/ci/abi/check.log
+          retention-days: 14
+
+  native-sanitizers:
+    strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
@@ -20,16 +197,29 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Prepare evidence directory
+        run: mkdir -p .cache/ci/sanitizers
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck cmake gcc bash-builtins libreadline-dev python3-venv
-          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-          rustup default stable
-          python3 -m venv .venv
-          .venv/bin/pip install -r requirements-dev.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-      - name: Fetch locked dependencies
-        run: cargo fetch --locked
-      - name: Verify
-        run: bash scripts/verify.bash
+          sudo apt-get install -y cmake clang bash-builtins libreadline-dev
+      - name: Run isolated native tests under sanitizers
+        env:
+          CC: clang
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          set -o pipefail
+          {
+            cmake -S native -B .cache/ci/sanitizers/build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+            cmake --build .cache/ci/sanitizers/build --parallel 2
+            ctest --test-dir .cache/ci/sanitizers/build --output-on-failure
+          } 2>&1 | tee .cache/ci/sanitizers/check.log
+      - name: Retain sanitizer evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: isolated-native-sanitizers-${{ matrix.os }}
+          path: .cache/ci/sanitizers/check.log
+          if-no-files-found: warn
+          retention-days: 14

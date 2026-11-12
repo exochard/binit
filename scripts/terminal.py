@@ -16,9 +16,10 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target/release/binit"
-if not BINARY.exists():
+BINARY = Path(os.environ.get("BINIT_TEST_BINARY", ROOT / "target/release/binit"))
+if "BINIT_TEST_BINARY" not in os.environ and not BINARY.exists():
     BINARY = ROOT / "target/debug/binit"
+BASH = os.environ.get("BINIT_BASH", "bash")
 PROMPT = b"READY> "
 
 
@@ -39,10 +40,10 @@ class Terminal:
             env.pop("ENV", None)
             if demo:
                 env['BINIT_DEMO_STATE'] = str(state)
-                os.execvpe("bash", ["bash", str(ROOT / 'scripts/demo.bash')], env)
+                os.execvpe(BASH, [BASH, str(ROOT / 'scripts/demo.bash')], env)
             if state is not None:
                 os.execvpe(str(BINARY), [str(BINARY), 'shell', '--state', str(state)], env)
-            os.execvpe("bash", ["bash", "--noprofile", "--rcfile", str(rcfile), "-i"], env)
+            os.execvpe(BASH, [BASH, "--noprofile", "--rcfile", str(rcfile), "-i"], env)
         self.transcript = bytearray()
         self.prompt = (b'# ' if os.geteuid() == 0 else b'$ ') if demo else PROMPT
         try:

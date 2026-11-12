@@ -16,6 +16,7 @@
 #include "execute_cmd.h"
 #include "common.h"
 #include "shell.h"
+#include "version.h"
 #include "unwind_prot.h"
 #include "xmalloc.h"
 #include "quit.h"
@@ -548,6 +549,11 @@ static void restore_readline_signals(void *ignored)
     rl_set_signals();
 }
 
+static void restore_wait_parser(void *state)
+{
+    restore_parser_state(state);
+}
+
 /*
  * Readline calls the pre-input hook after the prompt is drawn and before it
  * reads a key. The dispatch runs only for the top-level command reader: `read
@@ -563,13 +569,23 @@ static void run_wait_dispatch(void)
     begin_unwind_frame("binit-wait");
     save_parser_state(&state);
     rl_clear_signals();
-    add_unwind_protect(uw_restore_parser_state, &state);
+    add_unwind_protect(free, saved);
+    add_unwind_protect(restore_wait_parser, &state);
     add_unwind_protect(restore_readline_signals, NULL);
-    parse_and_execute(savestring("__binit_wait_dispatch"), "binit_wait", SEVAL_NOTIFY | SEVAL_NOHIST);
+#ifdef SEVAL_NOTIFY
+    int flags = SEVAL_NOTIFY | SEVAL_NOHIST;
+#else
+    /* Bash 5.2 uses this combination for Readline's bind -x callbacks. */
+    int flags = SEVAL_NONINT | SEVAL_NOHIST | SEVAL_NOOPTIMIZE;
+#endif
+    parse_and_execute(savestring("__binit_wait_dispatch"), "binit_wait", flags);
     rl_set_signals();
     restore_parser_state(&state);
     discard_unwind_frame("binit-wait");
-    if (saved) bind_lastarg(saved);
+    if (saved) {
+        SHELL_VAR *lastarg = bind_variable("_", saved, 0);
+        if (lastarg) VUNSETATTR(lastarg, att_exported);
+    }
     free(saved);
     last_command_exit_value = status;
     /* Output may have moved the cursor; forced redisplay assumes a fresh line. */
@@ -582,7 +598,7 @@ static int wait_hook(void)
     if (previous_pre_input && previous_pre_input != wait_hook) previous_pre_input();
     if (!wait_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level) return 0;
     SHELL_VAR *pending = find_variable("__binit_wait_pending");
-    if (!pending || !value_cell(pending) || atoi(value_cell(pending)) == 0) return 0;
+    if (!pending || !value_cell(pending) || strcmp(value_cell(pending), "1") != 0) return 0;
     run_wait_dispatch();
     return 0;
 }
@@ -669,6 +685,11 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
 EXPORT int binit_complete_builtin_load(char *name)
 {
     (void)name;
+    /* Parser structs and Readline callbacks cross the host's internal ABI. */
+    if (strcmp(dist_version, DISTVERSION) != 0 || rl_readline_version != RL_READLINE_VERSION) {
+        builtin_error("native module requires Bash %s and Readline %d.%d", DISTVERSION, RL_VERSION_MAJOR, RL_VERSION_MINOR);
+        return 0;
+    }
     Dl_info info;
     if (dladdr(&binit_complete_struct, &info) == 0) return 0;
     /* Readline can retain user-created callback bindings after builtin removal. */

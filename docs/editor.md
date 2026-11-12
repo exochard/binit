@@ -10,7 +10,9 @@ insert the whole suggestion in Emacs mode and in vi insert mode; Ctrl-E does in
 Emacs mode too. Binit takes a key only while it has its standard binding:
 forward-char, end-of-line, or the self-insert that vi insert mode gives Ctrl-F.
 Without a suggestion the key keeps that action. Custom bindings take
-precedence, and vi command mode shows no suggestion. When a line is accepted or
+precedence, and vi command mode shows no suggestion. While suggestions are on,
+`bind -p` does not list the keys Binit has taken, because their functions have
+no Readline name. When a line is accepted or
 interrupted, the suggestion is erased, so scrollback shows only the command
 that ran.
 

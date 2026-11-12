@@ -1,6 +1,10 @@
-import unittest
+import fcntl
 import os
 import re
+import signal
+import struct
+import termios
+import unittest
 
 from test_completion import MODULE, Session
 
@@ -483,3 +487,67 @@ class AcceptKeyTests(unittest.TestCase):
             with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
                 session.send(b'abc\x1b[C')
                 self.assertEqual(session.capture(), (2, 'abc'))
+
+    def resize(self, session, rows, columns):
+        session.screen.resize(rows, columns)
+        fcntl.ioctl(session.terminal.fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+        os.kill(session.terminal.pid, signal.SIGWINCH)
+        session.pump(.3)
+
+    def test_resizing_keeps_a_single_prompt(self):
+        extra = SUGGEST + "binit_complete editor suggestions on\n"
+        for line in ('', 'echo sam'):
+            with self.subTest(line=line), Session(extra=extra) as session:
+                settle(session)
+                session.send(line)
+                session.wait(lambda: typed(session) == line)
+                for columns in (60, 70):
+                    self.resize(session, 24, columns)
+                    row = session.screen.display[prompt_row(session)]
+                    self.assertEqual(row.count(PROMPT), 1, row)
+                    self.assertEqual(typed(session), line)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_term_assignment_keeps_wrapped_input_aligned(self):
+        extra = 'binit_complete editor highlighting on\nbinit_complete editor suggestions on\n'
+        with Session(extra=extra, columns=40) as session:
+            settle(session)
+            session.send('TERM=xterm-256color\n')
+            session.pump(.3)
+            start = prompt_row(session)
+            session.send(WRAPPED)
+            session.wait(lambda: typed(session) == WRAPPED)
+            session.send(b'\x01X')
+            session.pump(.3)
+            rows = session.screen.display
+            self.assertEqual(rows[start], (PROMPT + 'X' + WRAPPED)[:40])
+            self.assertEqual(rows[start + 1].rstrip(), (PROMPT + 'X' + WRAPPED)[40:])
+            self.assertEqual(session.capture(), (1, 'X' + WRAPPED))
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_horizontal_scroll_mode_leaves_long_lines_to_readline(self):
+        extra = "bind 'set horizontal-scroll-mode on'\nbinit_complete editor highlighting on\n"
+        with Session(extra=extra, columns=40) as session:
+            settle(session)
+            start = prompt_row(session)
+            session.send(WRAPPED)
+            session.pump(.3)
+            session.send(b'\x01')
+            session.pump(.3)
+            rows = session.screen.display
+            self.assertEqual(rows[start + 1].strip(), '')
+            self.assertEqual(session.screen.cursor.y, start)
+            self.assertEqual(session.capture(), (0, WRAPPED))
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_edited_history_line_keeps_its_mark_and_alignment(self):
+        extra = "bind 'set mark-modified-lines on'\nhistory -s 'echo ab'\nbinit_complete editor highlighting on\n"
+        with Session(extra=extra) as session:
+            session.send(b'\x1b[A')
+            session.wait(lambda: 'echo ab' in session.text)
+            session.send('cdefg')
+            session.wait(lambda: 'abcdefg' in session.text)
+            session.pump(.2)
+            row = session.screen.display[session.screen.cursor.y]
+            self.assertEqual(row.rstrip(), '*READY> echo abcdefg')
+            self.assertEqual(session.screen.cursor.x, len('*READY> echo abcdefg'))

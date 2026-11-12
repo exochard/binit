@@ -38,6 +38,7 @@ static int test_builtin(WORD_LIST *args)
         previous_deprep = rl_deprep_term_function;
         rl_deprep_term_function = foreign_deprep;
     }
+    else if (!strcmp(args->word->word, "deprep-off")) rl_deprep_term_function = previous_deprep;
     else if (!strcmp(args->word->word, "on")) {
         previous = rl_redisplay_function;
         rl_redisplay_function = foreign_redisplay;

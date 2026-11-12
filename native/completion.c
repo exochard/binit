@@ -148,11 +148,17 @@ static int mode_cells(void)
 /* Where Readline has drawn the line, or false when the overlays cannot be placed with confidence. */
 static bool current_layout(struct binit_layout *layout, int *rows, int *columns)
 {
-    if (!rl_line_buffer || !rl_instream) return false;
+    const char *up = rl_get_termcap("up");
+    if (!rl_line_buffer || !rl_instream || !up || !*up) return false;
     rl_get_screen_size(rows, columns); /* Readline wraps at its own idea of the width */
     int prompt = binit_prompt_cells(rl_display_prompt ? rl_display_prompt : ""), mode = mode_cells();
-    return prompt >= 0 && mode >= 0 && binit_layout(prompt + mode, *columns, rl_line_buffer, (size_t)rl_end, (size_t)rl_point, layout) &&
-           layout->rows <= *rows - 1;
+    if (prompt < 0 || mode < 0) return false;
+    // Readline marks an edited history line with '*' before the prompt.
+    if (option("mark-modified-lines") && current_history() && rl_undo_list) ++prompt;
+    if (!binit_layout(prompt + mode, *columns, rl_line_buffer, (size_t)rl_end, (size_t)rl_point, layout) || layout->rows > *rows - 1)
+        return false;
+    // In horizontal-scroll mode Readline scrolls a long line instead of wrapping it.
+    return !option("horizontal-scroll-mode") || (layout->rows == 1 && layout->end.column < *columns - 1);
 }
 
 /* The overlays are drawn after Readline's redisplay and only ever move relative to Readline's cursor:
@@ -202,7 +208,7 @@ static bool draw_ghost(const char *suffix, int available)
     size_t length = strnlen(suffix, 1025);
     int used;
     size_t size = binit_fit(suffix, length, available, &used);
-    bool ellipsis = size < length && MB_CUR_MAX > 1 && available > 0;
+    bool ellipsis = size < length && available > 0 && binit_cells("\xe2\x80\xa6", 3) == 1;
     if (ellipsis) size = binit_fit(suffix, length, available - 1, &used);
     if (!size && !ellipsis) return false;
     fprintf(rl_outstream, "\033[2m%.*s%s\033[0m", (int)size, suffix, ellipsis ? "\xe2\x80\xa6" : "");
@@ -220,9 +226,43 @@ static void reset_display(void)
     colors_painted = suggestion_visible = history_painted = false;
 }
 
+/* With a redisplay hook installed Readline changes two behaviors: a TERM assignment re-initializes it
+   without terminal capabilities, and a resize gets a forced update from wherever the cursor is. */
+static void prepare_redisplay(void)
+{
+    static char reinitialized[256];
+    const char *term = get_string_value("TERM"), *up = rl_get_termcap("up");
+    if ((!up || !*up) && term && *term && strcmp(term, "dumb") != 0 && strlen(term) < sizeof reinitialized &&
+        strcmp(term, reinitialized) != 0) {
+        snprintf(reinitialized, sizeof reinitialized, "%s", term);
+        rl_voidfunc_t *custom = rl_redisplay_function;
+        rl_redisplay_function = rl_redisplay;
+        rl_reset_terminal(NULL);
+        rl_redisplay_function = custom;
+    }
+    // Readline forces the update only when its screen size changed; an interrupt also redisplays from the
+    // signal handler (clearing a message) and must not be treated as a resize.
+    static int seen_rows, seen_columns;
+    int rows, columns;
+    rl_get_screen_size(&rows, &columns);
+    bool resized = seen_columns && (rows != seen_rows || columns != seen_columns);
+    seen_rows = rows;
+    seen_columns = columns;
+    if (!resized || !RL_ISSTATE(RL_STATE_SIGHANDLER) || !rl_outstream) return;
+    // Return to the start of the prompt and clear below, as Readline's own resize handling does, so the
+    // forced update replaces the old lines.  Terminals reflow wrapped input, so the new width places it.
+    struct binit_layout layout;
+    int lines = current_layout(&layout, &rows, &columns) ? layout.cursor.row : 0;
+    for (const char *p = rl_display_prompt; p && *p; ++p) lines += *p == '\n';
+    if (lines > 0) fprintf(rl_outstream, "\033[%dA", lines);
+    fputs("\r\033[J", rl_outstream);
+    colors_painted = suggestion_visible = history_painted = false;
+}
+
 static void suggestion_redisplay(void)
 {
     if (redisplay_running) {rl_redisplay(); return;}
+    prepare_redisplay();
     redisplay_running = true;
     if (previous_redisplay && previous_redisplay != suggestion_redisplay) previous_redisplay();
     else rl_redisplay();
@@ -753,7 +793,8 @@ static size_t history_panel(const char **items, const struct binit_layout *layou
 static void history_draw(const char **items, size_t count, int columns, int *row)
 {
     char text[4097];
-    fputs("\r\n\033[2K\033[2mHistory  Tab focus  Ctrl-R search\033[0m", rl_outstream);
+    binit_text(text, sizeof text, "History  Tab focus  Ctrl-R search", columns - 1);
+    fprintf(rl_outstream, "\r\n\033[2K\033[2m%s\033[0m", text);
     for (size_t i = 0; i < count; ++i) {
         binit_text(text, sizeof text, items[i], columns - 3);
         fprintf(rl_outstream, "\r\n\033[2K  %s", text);
@@ -855,7 +896,8 @@ static void deprep_install(void)
 {
     if (history_deprep_active) return;
     if (!history_deprep_detached) history_base_deprep = rl_deprep_term_function;
-    history_previous_deprep = rl_deprep_term_function;
+    // A foreign hook that unwound itself can leave this hook installed while it was detached.
+    history_previous_deprep = rl_deprep_term_function == history_deprep ? history_base_deprep : rl_deprep_term_function;
     rl_deprep_term_function = history_deprep;
     history_deprep_detached = false;
     history_deprep_active = true;

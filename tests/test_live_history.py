@@ -375,3 +375,36 @@ class LivePanelLayoutTests(unittest.TestCase):
             session.send('echo x')
             session.wait(lambda: headers(session) == [prompt_row(session) + 1])
             self.assertEqual(typed(session), 'echo x')
+
+    def test_narrow_terminal_keeps_the_cursor_on_the_input(self):
+        extra = "history -s 'echo hello-world'\nbinit_complete editor history on\n"
+        for columns in (20, 24, 32):
+            with self.subTest(columns=columns), Session(extra=extra, columns=columns) as session:
+                settle(session)
+                session.send('echo hel')
+                session.wait(lambda: headers_prefix(session))
+                session.send('lo\x7f')
+                session.wait(lambda: typed(session) == 'echo hell')
+                start = prompt_row(session)
+                self.assertEqual(session.screen.cursor.y, start)
+                self.assertEqual(headers_prefix(session), [start + 1])
+
+    def test_reenabled_history_restores_the_terminal_after_a_foreign_hook_unwinds(self):
+        fixture = MODULE.parent / 'binit_redisplay_test.so'
+        if not fixture.is_file():
+            self.skipTest('native redisplay fixture not built')
+        extra = (f"enable -f '{fixture}' binit_redisplay_test\n"
+                 "binit_complete editor history on\n"
+                 "binit_redisplay_test deprep\n"
+                 "binit_complete editor history off\n"
+                 "binit_redisplay_test deprep-off\n"
+                 "binit_complete editor history on\n")
+        with Session(extra=extra) as session:
+            session.send("stty -a | grep -o -- '-*icanon' | sed 's/^/MODE:/'\n")
+            session.wait(lambda: 'MODE:' in session.text.replace("'MODE:", ''))
+            modes = [row.strip() for row in session.screen.display if row.strip().startswith('MODE:')]
+            self.assertEqual(modes, ['MODE:icanon'])
+
+
+def headers_prefix(session):
+    return [y for y, row in enumerate(session.screen.display) if row.startswith('History')]

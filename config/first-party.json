@@ -12,9 +12,9 @@
     {
       "id": "directory-jump",
       "repository": "directory-jump",
-      "commit": "4b9e95a0c583ac047357b54f32f7b7e937540840",
-      "artifact": "directory-jump-4b9e95a0c583.tar.gz",
-      "sha256": "b6f797a13b8d18154d4b50670636068bed58ff7a4cff9860ee836d7d74c784c2",
+      "commit": "3c407a5f9b7a6dcd5a31237c1f87950a4b5a3234",
+      "artifact": "directory-jump-3c407a5f9b7a.tar.gz",
+      "sha256": "824fe831a1ab1e127f1d2f919095d4f7419fad19f18eb97e096fc510c2c7c5a6",
       "publication": "local-candidate"
     },
     {
@@ -36,9 +36,9 @@
     {
       "id": "history-search",
       "repository": "history-search",
-      "commit": "98e10709e1170142b97f31397de8f66258dcab3a",
-      "artifact": "history-search-98e10709e117.tar.gz",
-      "sha256": "3b70312f9faabcfab9d06300227e590e32792786776c37c0a0d69a0f311f385a",
+      "commit": "b0e906b9931c6d6fc22ef725b02905c0cc627684",
+      "artifact": "history-search-b0e906b9931c.tar.gz",
+      "sha256": "c02a1068ee87da4315274333e908bc1f44f808d8566e9c16572dba4cbacb47cd",
       "publication": "local-candidate"
     },
     {

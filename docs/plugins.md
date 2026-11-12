@@ -29,7 +29,8 @@ When lines and generation differ, the first prompt prints `binit: N plugin lines
 
 `files=` accepts bounded `*` and `?` patterns within a path component. Matches
 are sorted; duplicate or empty selections fail. Scans visit at most 8,192
-entries and select at most 125 files. Paths and symlinks retain the normal
+entries and select at most 125 files; each pattern is limited to 1,024 bytes.
+Paths and symlinks retain the normal
 package restrictions.
 
 ## Commands on PATH
@@ -107,7 +108,10 @@ published digests; it does not change a pin. `--platform` also accepts
 
 `binit sync --jobs N` and `binit update --jobs N` bound independent Git acquisition
 to 1–8 workers (default 4). SSH acquisitions remain serial and foreground for
-authentication. Preparation hooks and generation publication remain ordered.
+authentication. Foreground SSH cleanup stops the direct Git process; its
+descendants may outlive timeout or abrupt manager termination. Other Git
+transports use owned process-group cleanup. Preparation hooks and generation
+publication remain ordered.
 
 ## Git sources
 

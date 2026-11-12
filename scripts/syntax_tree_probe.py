@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import statistics
 import subprocess
@@ -21,14 +22,21 @@ def build(destination, source):
         verify_editor_source(source)
     if destination.exists():
         raise ValueError('incremental experiment requires a fresh destination')
-    subprocess.run(['cmake', '-S', str(PROBE), '-B', str(destination), f'-DTREE_SITTER_GRAMMAR={source}'], check=True)
+    configure = ['cmake', '-S', str(PROBE), '-B', str(destination), f'-DTREE_SITTER_GRAMMAR={source}']
+    for variable, option in [('BINIT_BASH_INCLUDE', 'BASH_INCLUDE_DIR'),
+                             ('BINIT_READLINE_INCLUDE', 'READLINE_INCLUDE_DIR')]:
+        if os.environ.get(variable):
+            configure.append(f'-D{option}={os.environ[variable]}')
+    subprocess.run(configure, check=True)
     subprocess.run(['cmake', '--build', str(destination), '--parallel', '2'], check=True)
+    runtime = os.environ.get('BINIT_SYNTAX_RUNTIME')
+    runtime_version = '0.25.10 (pinned static)' if runtime else subprocess.check_output(['pkg-config', '--modversion', 'tree-sitter'], text=True).strip()
     metadata = {'source': manifest, 'source_parser_sha256': digest(source / 'src/parser.c'),
                 'probe_sha256': digest(PROBE / 'tree_probe.c'),
                 'driver_sha256': digest(Path(__file__)), 'corpus_sha256': digest(CORPUS),
                 'binary_sha256': digest(destination / 'binit_tree_probe'),
                 'grammar_sha256': digest(destination / 'libbash_grammar.so'),
-                'tree_sitter_version': subprocess.check_output(['pkg-config', '--modversion', 'tree-sitter'], text=True).strip(),
+                'tree_sitter_version': runtime_version,
                 'release_qualified': False}
     (destination / 'build.json').write_text(json.dumps(metadata, indent=2) + '\n')
 

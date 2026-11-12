@@ -114,16 +114,20 @@ int main(int argc, char **argv)
     if (argc == 4) {
         const char *equals = strchr(argv[3], '=');
         size_t name_length = equals ? (size_t)(equals - argv[3]) : 0;
-        if (name_length && name_length <= new_size && !strncmp(argv[2], argv[3], name_length) &&
-            (name_length == new_size || strchr(" \t\n;|&()<>", argv[2][name_length]))) {
+        if (name_length && name_length <= 4096 && name_length <= new_size &&
+            name_length == strcspn(argv[2], " \t\n;|&()<>") && !strncmp(argv[2], argv[3], name_length)) {
             const char *value = equals + 1;
-            size_t value_length = strlen(value), remaining = new_size - name_length;
-            char *logical = malloc(value_length + remaining + 1);
-            if (!logical) {ts_tree_delete(fresh); ts_tree_delete(incremental); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
-            memcpy(logical, value, value_length);
-            memcpy(logical + value_length, argv[2] + name_length, remaining + 1);
+            size_t value_length = strnlen(value, 4097), remaining = new_size - name_length;
+            if (value_length > 4096 || remaining > 65536) {ts_tree_delete(fresh); ts_tree_delete(incremental); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
+            char logical[65536 + 4096 + 1];
+            const char *tail = argv[2];
+            for (size_t i = 0; i < name_length; ++i) {
+                if (*tail == '\0') {ts_tree_delete(fresh); ts_tree_delete(incremental); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
+                ++tail;
+            }
+            int written = snprintf(logical, sizeof(logical), "%s%s", value, tail);
+            if (written < 0 || (size_t)written >= sizeof(logical)) {ts_tree_delete(fresh); ts_tree_delete(incremental); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
             TSTree *expanded = ts_parser_parse_string(parser, NULL, logical, (uint32_t)(value_length + remaining));
-            free(logical);
             if (!expanded) {ts_tree_delete(fresh); ts_tree_delete(incremental); ts_tree_delete(old); ts_parser_delete(parser); return 2;}
             parsed = !ts_node_has_error(ts_tree_root_node(expanded));
             alias_applied = true;

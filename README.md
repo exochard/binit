@@ -75,14 +75,16 @@ Source builds require Linux, Rust and Cargo, a C compiler, and Bash/Readline
 development headers. The runtime targets Bash 5.2+; local verification uses
 Bash 5.3.20. Bundled Git features use Git and GNU `timeout`.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the test environment and direct
-commands for containers. The Make targets use a systemd user manager.
+commands for containers. The Make targets run directly.
 
 ```bash
 make build
 make demo
 ```
 
-Builds use the local Cargo cache. Run `cargo fetch --locked` first on a machine without the dependencies. Build and verification scopes cap memory at 3 GiB, disable swap, and limit CPU use to two cores.
+Builds use the local Cargo cache. Run `cargo fetch --locked` first on a machine
+without the dependencies. Make disables inherited Rust compiler wrappers;
+`make build RUSTC_WRAPPER=/path/to/sccache` selects a working cache explicitly.
 
 The demo opens a separate Bash with state under `.local-demo/`. It preserves installed plugins between runs. Try `git status --sho` followed by Tab; branch completion also works in repositories with branches. Inside the shell, run:
 

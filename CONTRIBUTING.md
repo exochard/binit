@@ -27,10 +27,10 @@ bash scripts/demo.bash
 The demo opens a separate shell. `exit` returns to the parent. It writes its
 state under `.local-demo/`; it leaves startup files alone.
 
-On a desktop with a systemd user manager, `make build` and `make verify` run
-the same work in scopes with a 3 GiB memory limit and two CPUs. Direct commands
-above also work in CI and containers. Choose resource limits appropriate to
-the machine before running a full build.
+`make build`, `make verify` and `make bench` run their tools directly. The Make
+targets disable inherited Rust compiler wrappers by default. To select a working
+cache explicitly, use `make build RUSTC_WRAPPER=/path/to/sccache`. Global Cargo
+settings remain unchanged.
 
 The verification script checks formatting and ShellCheck, then runs Clippy,
 Rust integration tests, Python tests, and real terminal smoke tests. Keep

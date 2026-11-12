@@ -484,6 +484,8 @@ fn publish(
             ));
         }
     }
+    // Startup plugins may initialize editor capabilities before prompt hooks run.
+    init.push_str("if [[ ${BINIT_COMPLETION_MENU-1} == 1 ]]; then __binit_load_completion >/dev/null 2>&1 || :; fi\n");
     if !activate.is_empty() {
         init.push_str(&format!(
             "__binit_activate_plugins {}\n",

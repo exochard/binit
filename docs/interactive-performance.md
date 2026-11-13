@@ -92,3 +92,26 @@ Bare Bash's incremental history search and Binit's history panel provide
 different interfaces, so their search timings describe their respective
 response costs. These local measurements do not qualify other terminals or
 architectures.
+
+## Editor repair measurement, 2026-11-13
+
+The [repair receipt](../benchmarks/results/interactive-editor-repair-x86_64.json)
+records 20 alternating rounds after the wrapped-input and suggestion repairs,
+including the fixes in `8197f99`. The workload is unchanged. Each configuration
+has 220 matching character samples and 320 no-match samples.
+
+| Metric | Bare Bash | Empty Binit | Seven plugins |
+| --- | ---: | ---: | ---: |
+| Usable startup, median | 10.862 ms | 14.638 ms | 23.111 ms |
+| Matching typing, p95 | 0.059 ms | 0.049 ms | 0.926 ms |
+| No-match typing, p95 | 0.064 ms | 0.049 ms | 0.149 ms |
+| First history search, median | 0.077 ms | 0.076 ms | 1.930 ms |
+| Unique file completion, median | 2.134 ms | 2.152 ms | 2.371 ms |
+| First Git completion, median | — | — | 31.610 ms |
+| Warm Git completion, median | — | — | 2.626 ms |
+
+Matching typing remains below the 8 ms p95 budget in this workload. First Git
+completion reaches 36.004 ms at p95; warm completion reaches 2.904 ms. This
+run compares the repaired binary with bare Bash and an empty configuration.
+It does not establish a paired change against the earlier binary. The same
+shared-host and terminal-emulator limits apply.

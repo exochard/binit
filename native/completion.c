@@ -239,6 +239,9 @@ static void prepare_redisplay(void)
         rl_redisplay_function = rl_redisplay;
         rl_reset_terminal(NULL);
         rl_redisplay_function = custom;
+        up = rl_get_termcap("up");
+        // Only cache failed resets: a later TERM assignment can drop capabilities again.
+        if (up && *up) reinitialized[0] = '\0';
     }
     // Readline forces the update only when its screen size changed; an interrupt also redisplays from the
     // signal handler (clearing a message) and must not be treated as a resize.
@@ -303,7 +306,7 @@ static void suggestion_redisplay(void)
 /* Inserts the whole suggestion when one is shown at the end of the input; otherwise the key keeps its meaning. */
 static int accept_or(rl_command_func_t *fallback, int count, int key)
 {
-    const char *suffix = history_suggestion();
+    const char *suffix = suggestion_visible ? history_suggestion() : NULL;
     if (suffix) return rl_insert_text(suffix) < 0 ? 1 : 0;
     return fallback(count, key);
 }

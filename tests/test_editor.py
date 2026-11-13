@@ -265,6 +265,44 @@ class EditorTests(unittest.TestCase):
                              session.screen.display[start + row][column:].rstrip() == ghost)
                 self.assertEqual(typed(session), entry[:length])
 
+    def test_suggestion_keys_keep_their_action_when_the_margin_hides_the_ghost(self):
+        prefix = 'echo ' + 'x' * 27
+        extra = f"history -s '{prefix} hidden'\nbinit_complete editor suggestions on\n"
+        for mode in ('emacs', 'vi'):
+            for key in (b'\x1b[C', b'\x1b[F'):
+                with self.subTest(mode=mode, key=key), Session(extra=extra, mode=mode, columns=40) as session:
+                    settle(session)
+                    session.send(prefix)
+                    session.wait(lambda: typed(session) == prefix)
+                    self.assertEqual(session.screen.display[session.screen.cursor.y][39:], ' ')
+                    session.send(key)
+                    self.assertEqual(session.capture(), (len(prefix), prefix))
+
+    def test_suggestion_keys_keep_their_action_when_the_input_exceeds_the_screen(self):
+        prefix = 'echo ' + 'x' * 100
+        extra = f"history -s '{prefix} hidden'\nbinit_complete editor suggestions on\n"
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode, rows=3, columns=40) as session:
+                settle(session)
+                session.send(prefix)
+                session.pump(.2)
+                self.assertNotIn('hidden', session.text)
+                session.send(b'\x1b[C')
+                self.assertEqual(session.capture(), (len(prefix), prefix))
+
+    def test_repeated_term_assignment_keeps_suggestions_visible(self):
+        extra = "history -s 'echo sample-suggestion'\nbinit_complete editor suggestions on\n"
+        with Session(extra=extra) as session:
+            settle(session)
+            for attempt in range(2):
+                with self.subTest(attempt=attempt):
+                    session.send('TERM=xterm-256color\n')
+                    session.pump(.2)
+                    session.send('echo sam')
+                    session.wait(lambda: 'echo sample-suggestion' in session.screen.display[prompt_row(session)])
+                    session.send(b'\x03')
+                    session.pump(.2)
+
     def test_multiline_prompt_shows_the_suggestion(self):
         with Session(extra="history -s 'echo sample-suggestion'\nbinit_complete editor suggestions on\n") as session:
             settle(session)

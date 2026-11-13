@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "command_repetitions": 1000,
+  "cases": [
+    {"id": "eager-0", "load": "startup", "plugins": 0, "functions_per_plugin": 4},
+    {"id": "eager-10", "load": "startup", "plugins": 10, "functions_per_plugin": 4},
+    {"id": "eager-50", "load": "startup", "plugins": 50, "functions_per_plugin": 4},
+    {"id": "eager-64", "load": "startup", "plugins": 64, "functions_per_plugin": 4},
+    {"id": "lazy-32", "load": "command", "plugins": 1, "functions_per_plugin": 32},
+    {"id": "lazy-512", "load": "command", "plugins": 1, "functions_per_plugin": 512}
+  ]
+}

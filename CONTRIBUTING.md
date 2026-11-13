@@ -94,6 +94,13 @@ handling need a failure case that proves the previous state remains usable.
 configurations in a real PTY. See [interactive performance](docs/interactive-performance.md)
 for timing boundaries and same-run binary comparisons.
 
+`make bench-lifecycle` adds 0/10/50/64-plugin activation, local generation
+preparation, lazy first/warm commands and owned unload. It uses two 20-round
+runs and preserves a new receipt at `.cache/lifecycle-benchmark.json`.
+See the [performance program](docs/performance-program.md) for the broader
+goals, unsupported measurements and explicit case/previous-binary selection.
+Use a new output filename when repeating the runner.
+
 Read [the benchmark procedure](docs/benchmarks.md) before changing an engine
 or validation script. It explains how to build the pinned GNU Bash sources
 and run the fixed suite. Compiler training uses separate code. A short trial

@@ -192,7 +192,7 @@ Git completion requires a readable script at `/usr/share/git/completion/git-comp
 
 ## Inspect and recover
 
-`binit profile` reports per-plugin load time and cumulative hook time in microseconds. `make bench` compares a clean Bash with the three-plugin environment using a real PTY. It covers startup and command execution separately, including builtin loops and process creation. Results go to `evidence/bench.json`. See [performance scope](docs/performance.md) for what these measurements establish.
+`binit profile` reports per-plugin load time and cumulative hook time in microseconds. `make bench` compares a clean Bash with the three-plugin environment using a real PTY. It covers startup and command execution separately, including builtin loops and process creation. Results go to `evidence/bench.json`. `make bench-lifecycle` measures local preparation, activation at different plugin counts, lazy commands and owned unload. See the [performance program](docs/performance-program.md) for its broader targets and the [performance scope](docs/performance.md) for measurement limits.
 
 ```bash
 target/release/binit status --state .local-demo

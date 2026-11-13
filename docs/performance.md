@@ -2,7 +2,11 @@
 
 Binit measures Bash execution separately from the time spent opening a shell. A prompt becoming ready sooner does not establish that Bash scripts run faster.
 
-The first targets are long scripts and loops. For interactive work, measure parsing and word expansion, command lookup, process launch, and the return to the prompt; a tool such as Git also has its own running time. Record that separately. Compare everyday workloads before claiming a general improvement.
+The [performance program](performance-program.md) covers startup and readiness,
+scheduling, first-use activation and steady-state hooks. It also sets goals for
+completion, editing and catalog scaling, with resource and recovery measurements.
+Interpreter work retains its separate execution targets. A tool such as Git
+has its own running time; record that separately from manager overhead.
 
 `make bench` runs 20 pairs of clean Bash and Binit sessions, alternating their order. Both use the installed Bash executable and a real PTY. The Binit path includes manager verification before entering the shell. The filesystem cache is warm; timings include host scheduling noise.
 

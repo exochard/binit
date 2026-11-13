@@ -45,6 +45,9 @@ class Terminal:
                 os.execvpe(str(BINARY), [str(BINARY), 'shell', '--state', str(state)], env)
             os.execvpe(BASH, [BASH, "--noprofile", "--rcfile", str(rcfile), "-i"], env)
         self.transcript = bytearray()
+        self.exit_status = None
+        self.forced_exit = False
+        self.output_truncated = False
         self.prompt = (b'# ' if os.geteuid() == 0 else b'$ ') if demo else PROMPT
         try:
             self.read_until(self.prompt)
@@ -76,35 +79,61 @@ class Terminal:
         os.write(self.fd, command.encode() + b"\n")
         return self.read_until(self.prompt)
 
+    def _drain_exited(self):
+        # A descendant can keep writing after the shell exits; keep close bounded.
+        deadline = time.monotonic() + .5
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([self.fd], [], [], remaining)[0]:
+                self.output_truncated = True
+                break
+            try:
+                chunk = os.read(self.fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            self.transcript.extend(chunk)
+
     def close(self):
         if self.fd is None:
             return
         try:
-            done, _ = os.waitpid(self.pid, os.WNOHANG)
+            done, status = os.waitpid(self.pid, os.WNOHANG)
             if done:
+                self.exit_status = os.waitstatus_to_exitcode(status)
+                self._drain_exited()
                 return
-            os.write(self.fd, b"\x03")
+            try:
+                os.write(self.fd, b"\x03")
+            except OSError:
+                pass
             try:
                 self.read_until(self.prompt, seconds=.5)
             except (AssertionError, OSError):
                 pass
             try:
-                os.write(self.fd, b"exit\n")
+                os.write(self.fd, b"exit 0\n")
             except OSError:
                 pass
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
-                done, _ = os.waitpid(self.pid, os.WNOHANG)
+                done, status = os.waitpid(self.pid, os.WNOHANG)
                 if done:
+                    self.exit_status = os.waitstatus_to_exitcode(status)
+                    self._drain_exited()
                     return
                 if select.select([self.fd], [], [], 0.05)[0]:
                     try:
-                        os.read(self.fd, 65536)
+                        self.transcript.extend(os.read(self.fd, 65536))
                     except OSError:
                         pass
             # Interactive Bash ignores SIGTERM; this is only the helper's child.
+            self.forced_exit = True
             os.kill(self.pid, signal.SIGKILL)
-            os.waitpid(self.pid, 0)
+            _, status = os.waitpid(self.pid, 0)
+            self.exit_status = os.waitstatus_to_exitcode(status)
+            self._drain_exited()
         except ChildProcessError:
             pass
         finally:

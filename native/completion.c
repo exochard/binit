@@ -55,6 +55,7 @@ struct context {
     int row, column, rows, columns, height, cells, cell_width;
     int input[INPUT_LIMIT];
     size_t input_count, input_index;
+    long input_deadline;
     char sequence[32];
     size_t sequence_length;
     struct binit_menu menu;
@@ -415,7 +416,14 @@ static void terminal_size(int *rows, int *columns)
 static int timed_getc(FILE *stream)
 {
     struct pollfd fd = {.fd = fileno(stream), .events = POLLIN};
-    int ready = poll(&fd, 1, 50);
+    int timeout = 50;
+    if (active && active->input_deadline) {
+        long now = milliseconds();
+        if (!now || now >= active->input_deadline) return READERR;
+        long remaining = active->input_deadline - now;
+        if (remaining < timeout) timeout = (int)remaining;
+    }
+    int ready = poll(&fd, 1, timeout);
     if (ready <= 0) {
         if (active) active->interrupted = ready < 0 && errno == EINTR;
         return READERR;
@@ -465,13 +473,18 @@ static bool cursor_position(struct context *ctx, int *row, int *column)
 {
     char reply[32] = {0};
     size_t length = 0;
+    long now = milliseconds();
+    if (!now) return false;
+    ctx->input_deadline = now + 120;
     fputs("\033[6n", rl_outstream);
     fflush(rl_outstream);
-    long deadline = milliseconds() + 120;
     bool valid = false;
-    while (milliseconds() < deadline && ctx->input_count + length < INPUT_LIMIT - 8) {
+    while ((now = milliseconds()) > 0 && now < ctx->input_deadline && ctx->input_count + length < INPUT_LIMIT - 8) {
         int key = read_timed(ctx);
-        if (key < 0) break;
+        if (key < 0) {
+            if (key == READERR && !ctx->interrupted && !interrupt_state && !terminating_signal) continue;
+            break;
+        }
         if (key == 27 && length) {
             for (size_t i = 0; i < length; ++i) ctx->input[ctx->input_count++] = (unsigned char)reply[i];
             length = 0;
@@ -487,6 +500,7 @@ static bool cursor_position(struct context *ctx, int *row, int *column)
             }
         }
     }
+    ctx->input_deadline = 0;
     for (size_t i = 0; i < length; ++i) ctx->input[ctx->input_count++] = (unsigned char)reply[i];
     return valid;
 }

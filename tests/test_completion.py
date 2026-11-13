@@ -125,6 +125,17 @@ complete -F __lazy lazy_cmd
 
 
 class CompletionTests(unittest.TestCase):
+    def test_cursor_reply_within_probe_deadline_opens_menu_without_leaking_input(self):
+        with Session(replies=False) as session:
+            def delayed_reply(text):
+                time.sleep(.08)
+                os.write(session.terminal.fd, text.encode())
+            session.screen.write_process_input = delayed_reply
+            session.open('demo_cmd v')
+            session.send(b'\x1b')
+            session.wait(lambda: not session.panel)
+            self.assertEqual(session.capture(), (len('demo_cmd v'), 'demo_cmd v'))
+
     def test_debug_stdout_does_not_hide_the_native_builtin(self):
         with Session(framework=True, extra="set -T\ntrap 'printf \"TRACE:%s\\n\" \"$BASH_COMMAND\"' DEBUG\n") as session:
             session.send("binit completion\n")

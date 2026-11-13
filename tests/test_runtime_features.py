@@ -54,6 +54,24 @@ class RuntimeFeatures(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ['before:sample', 'plugin', 'after:sample:loaded', 'greet:ok'])
 
+    @unittest.skipIf(os.environ.get('BINIT_NATIVE') == '0', 'native module required')
+    def test_completion_status_stays_in_the_calling_shell_with_a_shadowing_function(self):
+        self.sync()
+        pids = self.root / 'completion-pids'
+        script = (f'pids={shlex.quote(str(pids))}\n'
+                  'parent_pid=$BASHPID\n'
+                  'binit_complete() { printf shadowed; return 99; }\n'
+                  'set -T\n'
+                  "trap 'printf \"%s\\n\" \"$BASHPID\" >> \"$pids\"' DEBUG\n"
+                  'binit completion status\n'
+                  'trap - DEBUG\n'
+                  "printf 'root:%s\\n' \"$parent_pid\"\n")
+        result = self.shell(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('shadowed', result.stdout)
+        parent = next(line.removeprefix('root:') for line in result.stdout.splitlines() if line.startswith('root:'))
+        self.assertEqual(set(pids.read_text().splitlines()), {parent})
+
     def test_callback_arguments_match_phase(self):
         self.plugin('sample', 'greet() { :; }\n', 'load=command', 'commands=greet')
         self.sync()

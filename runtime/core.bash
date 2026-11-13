@@ -81,20 +81,22 @@ __binit_record_effects() {
     local __binit_record_id=$1 __binit_record_name __binit_record_def __binit_record_key __binit_record_owned
     local -n __binit_record_before_functions=$2 __binit_record_before_aliases=$3
     local -A __binit_record_functions=() __binit_record_aliases=()
-    __binit_capture_names __binit_record_functions function
     __binit_capture_names __binit_record_aliases alias
-    for __binit_record_name in "${!__binit_record_functions[@]}"; do
-        [[ -v __binit_record_before_functions[$__binit_record_name] ]] && continue
-        __binit_record_owned=0
-        for __binit_record_key in "${!__binit_owned_functions[@]}"; do
-            [[ ${__binit_record_key#*:} != "$__binit_record_name" ]] || __binit_record_owned=1
+    if ! builtin binit_complete effects record-functions "$__binit_record_id" "$2" __binit_owned_functions 2>/dev/null; then
+        __binit_capture_names __binit_record_functions function
+        for __binit_record_name in "${!__binit_record_functions[@]}"; do
+            [[ -v __binit_record_before_functions[$__binit_record_name] ]] && continue
+            __binit_record_owned=0
+            for __binit_record_key in "${!__binit_owned_functions[@]}"; do
+                [[ ${__binit_record_key#*:} != "$__binit_record_name" ]] || __binit_record_owned=1
+            done
+            (( __binit_record_owned )) && continue
+            if ! builtin binit_complete effects function "$__binit_record_name" __binit_record_def 2>/dev/null; then
+                __binit_record_def=$( { builtin declare -f -- "$__binit_record_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+            fi
+            [[ -n $__binit_record_def ]] && __binit_owned_functions["$__binit_record_id:$__binit_record_name"]=$__binit_record_def
         done
-        (( __binit_record_owned )) && continue
-        if ! builtin binit_complete effects function "$__binit_record_name" __binit_record_def 2>/dev/null; then
-            __binit_record_def=$( { builtin declare -f -- "$__binit_record_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
-        fi
-        [[ -n $__binit_record_def ]] && __binit_owned_functions["$__binit_record_id:$__binit_record_name"]=$__binit_record_def
-    done
+    fi
     for __binit_record_name in "${!__binit_record_aliases[@]}"; do
         [[ -v __binit_record_before_aliases[$__binit_record_name] ]] && continue
         __binit_record_owned=0
@@ -524,7 +526,7 @@ __binit_complete() {
 }
 
 __binit_has_completion() {
-    [[ $( { builtin type -a -t binit_complete 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) == *builtin* ]]
+    builtin binit_complete status >/dev/null 2>&1
 }
 
 __binit_load_completion() {

@@ -143,6 +143,14 @@ measurement, not this entire program.
 
 ## Implementation sequence
 
+The [owned-unload treatment](owned-unload-performance.md) closes the first
+substantial lifecycle target against `3005de3`: about 99% lower paired elapsed
+time for 512-function native unload, with p95 below 4 ms in both runs.
+Preparation improves by about 63% for ten eager plugins and 72% for fifty or
+sixty-four. Its complete comparison preserves the earlier failed treatments
+and has no repeated regression above 5% in another median or p95. These local
+results leave the other workstreams and release qualification open.
+
 The [initial x86_64 receipt](../benchmarks/results/lifecycle-x86_64.json)
 contains two 20-round runs on Bash 5.3.20 with the native module available.
 It has 1,440 validated records across six cases and the direct-Bash control.
@@ -160,11 +168,11 @@ optimization. It establishes no new speedup.
 | 512-function plugin, 1,000 warm calls | 7.099 ms | 12.504 ms | 6.075 ms | 6.981 ms |
 | 512-function owned unload | 208.630 ms | 949.846 ms | 193.640 ms | 235.771 ms |
 
-Owned unload misses its new 50 ms p95 goal in both runs. Its current Bash
-path captures each definition and its attributes in child shells before
-removal (`runtime/core.bash`, `__binit_unload`). That gives the first larger
-treatment a concrete source mechanism to profile. The first run has much
-slower tails; both are retained under the shared-host evidence limits.
+Owned unload missed its new 50 ms p95 goal in both baseline runs. The Bash
+fallback captures each definition and its attributes in child shells before
+removal (`runtime/core.bash`, `__binit_unload`). The native treatment checks
+those functions in the calling shell. The first baseline run has much
+slower tails; both remain under the shared-host evidence limits.
 
 1. Establish lifecycle/scaling baselines, then complete readiness and resource
    fixtures. Retain per-case results rather than a single package count score.

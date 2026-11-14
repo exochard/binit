@@ -11,7 +11,7 @@ generation before sourcing code or loading the module. Updates produce a new
 generation; existing shells keep their current code.
 
 Generation preparation creates and checks shared directories before starting
-up to four file writers. Each writer exclusively creates its destinations,
+up to eight file writers. Each writer exclusively creates its destinations,
 sets their permissions and syncs their contents. All writers finish before
 the manager writes and syncs the lock metadata. A failed writer leaves the
 selected generation usable; it prevents installation of the new generation.

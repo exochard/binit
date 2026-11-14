@@ -54,8 +54,8 @@ pub(super) fn write_staging(
         }
     }
 
-    // Four writers overlap file syncs without growing threads with catalog size.
-    let count = entries.len().min(4);
+    // Bound file-sync concurrency independently of catalog size.
+    let count = entries.len().min(8);
     let result: std::result::Result<(), String> = std::thread::scope(|scope| {
         let mut handles = Vec::new();
         let mut failure = None;

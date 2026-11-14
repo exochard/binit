@@ -30,6 +30,7 @@
 #include "menu.h"
 #include "effects.h"
 #include "layout.h"
+#include "worker.h"
 #ifdef BINIT_HIGHLIGHT
 #include "highlight.h"
 #endif
@@ -1306,6 +1307,7 @@ static int enable_menu(void)
 EXPORT int binit_complete_builtin(WORD_LIST *arguments)
 {
     const char *action = arguments ? arguments->word->word : "status";
+    if (strcmp(action, "request") == 0) return binit_worker_request(arguments->next);
     if (strcmp(action, "effects") == 0) return binit_effects(arguments->next);
     if (strcmp(action, "editor") == 0) {
         WORD_LIST *feature = arguments->next;

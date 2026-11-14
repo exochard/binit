@@ -9,6 +9,7 @@ use std::path::{Component, Path, PathBuf};
 mod acquire;
 mod candidate;
 mod checks;
+mod completion_worker;
 mod diagnose;
 mod engine;
 mod extensions;
@@ -837,6 +838,12 @@ fn default_state() -> Result<PathBuf> {
 
 fn run() -> Result<()> {
     let raw_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "__completion-worker")
+    {
+        return completion_worker::run(&raw_args[1..]);
+    }
     if raw_args.first().is_some_and(|arg| arg == "run") {
         return engine::run(&raw_args[1..]);
     }

@@ -121,6 +121,47 @@ python3 scripts/probe_eligible_completion.py \
   --work tmp/eligible-completion/run --output tmp/eligible-completion/receipt.json
 ```
 
-The next implementation must resolve enforced process containment before
-exposing arbitrary executables as eligible providers. The native wait seam
-is feasible; the complete bounded-execution capability remains open.
+## Implementation boundary under qualification
+
+The native request launches the Binit helper with an absolute executable
+path supplied by the runtime. The runtime registration API must supply that
+path itself. Accepting a caller-selected helper as a public option would let
+it bypass the helper's limits.
+
+The boundary begins before helper execution. The native launcher omits
+`LD_*`, `DYLD_*`, `GLIBC_TUNABLES` and `GCONV_PATH` from the worker environment.
+An independently reviewed constructor regression demonstrates why: loader
+code can create processes before a helper reaches its own entry point.
+Those settings are omitted for the provider too. Other exported variables
+are included within the combined 64 KiB context budget. The interactive
+shell's environment remains intact.
+
+The helper applies a 256 MiB address-space limit, two CPU seconds and 32 open
+descriptors. Existing lower limits remain lower. Core dumps are disabled.
+It closes inherited descriptors above stderr and arranges SIGKILL when the
+expected parent exits. A Linux syscall filter blocks process and thread
+creation, including alternate x86 syscall conventions. Providers cannot
+replace the resource limits or clear the parent-exit signal. This makes
+single-process executables eligible; programs that require subprocesses or
+threads need their ordinary execution path.
+
+The [kernel's seccomp documentation](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html),
+checked on 2026-11-14, requires checking syscall architecture and enabling
+`no_new_privs` before unprivileged filter installation. The helper does both.
+The provider retains filesystem and network access as the current user.
+This is an operational resource boundary for reviewed providers.
+
+The native side accepts complete NUL-delimited output after successful exit,
+with a 1 MiB total limit and at most 4,096 candidates of at most 4,096 bytes
+each. It discards partial results on failure. Pending input, timeout or a
+poll interruption cancels the owned process. Before updating `COMPREPLY`,
+it rechecks the line, cursor and directory identity, along with the current
+generation. Existing Readline quoting and menu insertion handle the result.
+
+The implementation currently requires Linux `close_range` support and the
+GNU spawn close-from operation. Unsupported platforms fail closed. ARM64
+execution evidence remains open. The private helper and request dispatch
+are under qualification; public registration and private transport of
+completion context are still required. Full matching native/fallback gates
+and quantitative cancellation measurements must pass before this capability
+lands as a qualified product feature.

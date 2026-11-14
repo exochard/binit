@@ -13,6 +13,7 @@ mod git;
 mod hooks;
 mod manager;
 mod package;
+mod publication;
 mod releases;
 mod remote;
 
@@ -523,15 +524,7 @@ fn publish(
                 .join("generations")
                 .join(format!(".staging-{}-{}", std::process::id(), unique()));
         private_dir(&staging)?;
-        for (name, bytes) in packages {
-            let mode = if name.starts_with("bin/") {
-                0o700
-            } else {
-                0o600
-            };
-            atomic_write_mode(&staging.join(name), &bytes, mode)?;
-        }
-        atomic_write(&staging.join("lock.toml"), &lock_bytes)?;
+        publication::write_staging(&staging, packages, &lock_bytes)?;
         fs::rename(staging, &destination)?;
     }
     verify_generation(&state, &generation)?;

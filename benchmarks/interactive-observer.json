@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "status": "frozen before full-corpus controlled observer runs",
+  "scope": "Observer cleanup correction for the unchanged interactive preservation corpus; not a new25percent workload target",
+  "workload": {
+    "path": "scripts/bench_interactive.py",
+    "sha256": "dd0e24bf66b02975926db8af78905f8f693a859e2ca98700edf7ef05c045e607"
+  },
+  "runs": 2,
+  "rounds_per_run": 100,
+  "required_comparisons": [
+    "identical candidate binary on both labels before product comparison",
+    "candidate versus preservedc80d4df reference"
+  ],
+  "preservation": {
+    "repeated_ratio_max": 1.05,
+    "statistics": [
+      "median",
+      "p95"
+    ],
+    "typing_additional_statistic": "p99",
+    "typing_p95_ms_max": 8,
+    "behavior_effects": "unchanged frozen corpus and complete sample counts"
+  },
+  "observer_policy": {
+    "automatic_gc_during_benchmark": false,
+    "explicit_collection": "after each original Shell.close has completed and once after benchmark teardown",
+    "timed_methods": "inherit original Shell.__init__, read, settled, command, until and cancel unchanged",
+    "measurement_boundaries": "unchanged, including the existing two-millisecond quiet interval exclusion",
+    "cleanup_evidence": "record collection counts and duration outside timed fields",
+    "caller_state": "restore original Shell class and previous garbage-collector enabled state on success or failure",
+    "memory_lifetime": "collect closed-shell cycles after each profile; no retained unbounded shell cache"
+  },
+  "integrity": [
+    "keep original benchmark and original interpreter/interactive/lifecycle suites unchanged",
+    "bind binary, reference, interpreter, Python, workload, observer and plugin input identities before execution and recheck after",
+    "refuse existing output destinations and retain incomplete/error receipts",
+    "keep instrumented diagnostic timing separate from qualification timing",
+    "keep all original failed measurements visible; controlled A/A must pass before actual A/B can qualify"
+  ],
+  "motivation": {
+    "identical_payload_uncontrolled_p95_ratio": 1.2036079760776741,
+    "instrumented_identical_payload_gc_rows": {
+      "candidate_label": 44,
+      "reference_label": 3
+    },
+    "instrumented_wire_p95_ms": {
+      "candidate_label": 0.902749,
+      "reference_label": 0.877019
+    },
+    "controlled_identical_payload_p95_ratio": 0.979861181944313,
+    "qualification": "diagnostic evidence only; these reduced runs do not qualify preservation"
+  }
+}

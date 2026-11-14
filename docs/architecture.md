@@ -36,6 +36,19 @@ Callback code stays mapped for
 the shell's lifetime because Readline can retain user-created bindings after
 the builtin is removed.
 
+## Plugin ownership checks
+
+The native module records function definitions with Bash's own serializer.
+Unload uses the same serializer to check the plugin's complete owned-function
+set in one calling-shell pass, including readonly attributes. This preflight
+only reads definitions and ownership metadata. Alias, segment and completion
+checks still finish before removal begins.
+
+An unavailable native action or a failed check runs the original Bash
+preflight. That path supplies the existing conflict diagnostic and remains
+the fallback when the module is disabled or removed. Both paths preserve
+foreign definitions and refuse changed or readonly functions.
+
 ## Deferred plugin loading
 
 `load=wait` plugins load after the first prompt is drawn. When the runtime

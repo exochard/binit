@@ -244,6 +244,64 @@ class RuntimeFeatures(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ['greet-gone', 'other-gone', 'alias-gone'])
 
+    @unittest.skipIf(os.environ.get('BINIT_NATIVE') == '0', 'native module required')
+    def test_native_unload_preflight_stays_in_the_calling_shell(self):
+        self.plugin('sample', '\n'.join(f'owned_{number}() {{ :; }}' for number in range(32)), 'load=startup')
+        self.sync()
+        pids = self.root / 'unload-pids'
+        script = (f'pids={shlex.quote(str(pids))}\n'
+                  'parent_pid=$BASHPID\n'
+                  'binit_complete() { printf shadowed; return 99; }\n'
+                  'set -T\n'
+                  "trap 'printf \"%s\\n\" \"$BASHPID\" >> \"$pids\"' DEBUG\n"
+                  'binit unload sample || exit 41\n'
+                  'trap - DEBUG\n'
+                  "printf 'root:%s\\n' \"$parent_pid\"\n"
+                  'if declare -F owned_0 owned_31 >/dev/null; then exit 42; fi\n')
+        result = self.shell(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('shadowed', result.stdout)
+        parent = next(line.removeprefix('root:') for line in result.stdout.splitlines() if line.startswith('root:'))
+        self.assertEqual(set(pids.read_text().splitlines()), {parent})
+
+    def test_readonly_unload_refusal_preserves_all_owned_effects(self):
+        self.plugin('sample', "greet() { :; }\nother_new() { :; }\nalias sample_alias='printf sample'\n", 'load=command', 'commands=greet')
+        self.sync()
+        result = self.shell("greet; readonly -f other_new; if binit unload sample; then exit 41; fi; "
+                            "declare -F greet other_new >/dev/null || exit 42; "
+                            "alias sample_alias >/dev/null || exit 43; "
+                            "[[ ${__binit_state[sample]} == loaded ]] || exit 44")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('readonly function: other_new', result.stderr)
+
+    def test_alias_unload_refusal_preserves_validated_functions(self):
+        self.plugin('sample', "greet() { :; }\nother_new() { :; }\nalias sample_alias='printf sample'\n", 'load=command', 'commands=greet')
+        self.sync()
+        result = self.shell("greet; alias sample_alias='printf user'; if binit unload sample; then exit 41; fi; "
+                            "declare -F greet other_new >/dev/null || exit 42; "
+                            "[[ ${__binit_state[sample]} == loaded ]] || exit 43")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('alias changed: sample_alias', result.stderr)
+
+    def test_unload_dependency_refusal_preserves_both_plugins(self):
+        self.plugin('parent', 'parent_function() { :; }\n', 'load=startup')
+        self.plugin('child', 'child_function() { :; }\n', 'load=startup', 'depends=parent')
+        self.sync()
+        result = self.shell("if binit unload parent; then exit 41; fi; "
+                            "declare -F parent_function child_function >/dev/null || exit 42; "
+                            "[[ ${__binit_state[parent]} == loaded && ${__binit_state[child]} == loaded ]] || exit 43")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('required by child', result.stderr)
+
+    @unittest.skipIf(os.environ.get('BINIT_NATIVE') == '0', 'native module required')
+    def test_unload_falls_back_after_native_module_is_removed(self):
+        self.plugin('sample', 'greet() { :; }\nother_new() { :; }\n', 'load=command', 'commands=greet')
+        self.sync()
+        result = self.shell("greet; builtin enable -d binit_complete || exit 41; "
+                            "binit unload sample || exit 42; "
+                            "if declare -F greet other_new >/dev/null; then exit 43; fi")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_unload_keeps_preexisting_definition_that_plugin_replaced(self):
         self.plugin('sample', "greet() { :; }\nexisting() { printf replaced; }\nnew_function() { :; }\n", 'load=command', 'commands=greet')
         self.sync()

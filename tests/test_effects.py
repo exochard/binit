@@ -21,6 +21,60 @@ class EffectsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(result.stdout, '')
 
+    def test_check_functions_preserves_definitions_metadata_and_missing_entries(self):
+        self.shell(r'''
+first() { printf '%s\n' 'literal $(must-not-run)'; }
+hello-world() { cat <<'EOF'
+}
+literal $(must-not-run)
+EOF
+}
+redirected() { printf must-not-run; } > >(printf must-not-run)
+foreign() { : untouched; }
+declare -A owned=()
+for name in first hello-world redirected; do
+    owned["sample:$name"]=$(declare -f -- "$name")
+done
+owned[sample:missing]='old definition'
+owned[other:first]='foreign ownership'
+declare -r owned
+snapshot=$(declare -p owned)
+binit_complete effects check-functions sample owned || exit 1
+[[ $(declare -p owned) == "$snapshot" ]] || exit 2
+for name in first hello-world redirected foreign; do declare -F "$name" >/dev/null || exit 3; done
+''')
+
+    def test_check_functions_refuses_changed_and_readonly_without_removal(self):
+        self.shell(r'''
+first() { : original; }
+last() { : original; }
+declare -A owned=([sample:first]="$(declare -f first)" [sample:last]="$(declare -f last)")
+last() { : replaced; }
+if binit_complete effects check-functions sample owned; then exit 1; fi
+declare -F first last >/dev/null || exit 2
+owned[sample:last]=$(declare -f last)
+readonly -f last
+if binit_complete effects check-functions sample owned; then exit 3; fi
+declare -F first last >/dev/null || exit 4
+''')
+
+    def test_check_functions_rejects_unsafe_inputs_without_evaluation(self):
+        self.shell(r'''
+safe() { :; }
+declare -A owned=([sample:safe]="$(declare -f safe)")
+declare -n reference=owned
+declare -a indexed=(value)
+for source in reference indexed BASH_ALIASES; do
+    if binit_complete effects check-functions sample "$source"; then exit 1; fi
+done
+for id in '' 'sample:other' 'bad/id' '1bad'; do
+    if binit_complete effects check-functions "$id" owned; then exit 2; fi
+done
+owned[sample:__binit_hidden]='anything'
+if binit_complete effects check-functions sample owned; then exit 3; fi
+declare -F safe >/dev/null || exit 4
+''')
+
     def test_names_match_filtered_bash_compgen_and_clear_previous_snapshot(self):
         self.shell(r'''
 hello-world() { :; }

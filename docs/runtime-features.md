@@ -46,8 +46,8 @@ marks the load failed. Previously sourced shell effects may remain on failure.
 `binit report ID` lists new simple-named functions and aliases observed during
 the source call, and owned Binit prompt segments. It does not claim replacements of definitions that existed
 before loading. `binit unload ID` first checks the recorded definitions and
-declared completion specifications. It refuses a changed definition or a
-loaded dependant before removing anything. Unchanged recorded functions,
+declared completion specifications. It refuses a changed definition, a readonly
+function or a loaded dependant before removing anything. Unchanged recorded functions,
 aliases, owned prompt segments, declared completions and Binit prompt/directory subscriptions are
 removed. A later `binit load ID` explicitly reloads an unloaded plugin.
 

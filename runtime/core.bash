@@ -203,14 +203,16 @@ __binit_unload() {
             [[ $__binit_unload_dep != "$__binit_unload_id" ]] || { printf 'binit: %s: required by %s\n' "$__binit_unload_id" "$__binit_unload_other" >&2; return 1; }
         done
     done
-    for __binit_unload_key in "${!__binit_owned_functions[@]}"; do
-        [[ $__binit_unload_key == "$__binit_unload_id:"* ]] || continue
-        __binit_unload_name=${__binit_unload_key#*:}
-        __binit_unload_current=$( { builtin declare -f -- "$__binit_unload_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_unload_current=''
-        [[ -z $__binit_unload_current || $__binit_unload_current == "${__binit_owned_functions[$__binit_unload_key]}" ]] || { printf 'binit: %s: function changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2; return 1; }
-        __binit_unload_attrs=$( { builtin declare -pf -- "$__binit_unload_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || :
-        [[ ! $__binit_unload_attrs =~ $__binit_unload_readonly_re ]] || { printf 'binit: %s: readonly function: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2; return 1; }
-    done
+    if ! builtin binit_complete effects check-functions "$__binit_unload_id" __binit_owned_functions 2>/dev/null; then
+        for __binit_unload_key in "${!__binit_owned_functions[@]}"; do
+            [[ $__binit_unload_key == "$__binit_unload_id:"* ]] || continue
+            __binit_unload_name=${__binit_unload_key#*:}
+            __binit_unload_current=$( { builtin declare -f -- "$__binit_unload_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_unload_current=''
+            [[ -z $__binit_unload_current || $__binit_unload_current == "${__binit_owned_functions[$__binit_unload_key]}" ]] || { printf 'binit: %s: function changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2; return 1; }
+            __binit_unload_attrs=$( { builtin declare -pf -- "$__binit_unload_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || :
+            [[ ! $__binit_unload_attrs =~ $__binit_unload_readonly_re ]] || { printf 'binit: %s: readonly function: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2; return 1; }
+        done
+    fi
     for __binit_unload_key in "${!__binit_owned_aliases[@]}"; do
         [[ $__binit_unload_key == "$__binit_unload_id:"* ]] || continue
         __binit_unload_name=${__binit_unload_key#*:}

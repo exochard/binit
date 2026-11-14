@@ -102,10 +102,42 @@ static int record_functions(WORD_LIST *args)
     return EXECUTION_SUCCESS;
 }
 
+static int check_functions(WORD_LIST *args)
+{
+    if (!args || !args->next || args->next->next) return EX_USAGE;
+    const char *id = args->word->word;
+    const char *source_name = args->next->word->word;
+    if (!valid_id(id) || !simple_name(source_name, false)) return EXECUTION_FAILURE;
+    /* Raw lookup rejects namerefs and dynamic arrays without invoking them. */
+    SHELL_VAR *source = var_lookup(source_name, shell_variables);
+    if (!source || !assoc_p(source) || invisible_p(source) || nameref_p(source) ||
+        source->dynamic_value || source->assign_func)
+        return EXECUTION_FAILURE;
+    HASH_TABLE *owners = assoc_cell(source);
+    if (!owners) return EXECUTION_FAILURE;
+    const size_t id_length = strlen(id);
+    for (int bucket = 0; bucket < owners->nbuckets; ++bucket) {
+        for (BUCKET_CONTENTS *entry = owners->bucket_array[bucket]; entry; entry = entry->next) {
+            if (strncmp(entry->key, id, id_length) != 0 || entry->key[id_length] != ':') continue;
+            const char *name = entry->key + id_length + 1;
+            if (!tracked(name) || !entry->data) return EXECUTION_FAILURE;
+            SHELL_VAR *function = find_function(name);
+            if (!function) continue;
+            if (readonly_p(function)) return EXECUTION_FAILURE;
+            char *definition = named_function_string((char *)name, function_cell(function),
+                                                     FUNC_MULTILINE | FUNC_EXTERNAL);
+            if (!definition || strcmp(definition, (char *)entry->data) != 0) return EXECUTION_FAILURE;
+        }
+    }
+    return EXECUTION_SUCCESS;
+}
+
 int binit_effects(WORD_LIST *args)
 {
     if (args && !strcmp(args->word->word, "record-functions"))
         return record_functions(args->next);
+    if (args && !strcmp(args->word->word, "check-functions"))
+        return check_functions(args->next);
     if (!args || !args->next || !args->next->next || args->next->next->next) return EX_USAGE;
     const char *kind = args->word->word;
     const char *name = args->next->word->word;

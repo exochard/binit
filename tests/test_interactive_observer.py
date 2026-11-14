@@ -208,3 +208,24 @@ class ObserverEvidenceTests(unittest.TestCase):
                 with self.assertRaises(FileExistsError):
                     observer.main()
                 self.assertEqual(output.read_bytes(), original)
+
+    def test_cli_retains_raw_evidence_when_post_run_identity_changes(self):
+        scratch = observer.ROOT / 'tmp'
+        scratch.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch, prefix='observer-drift-test-') as directory:
+            output = Path(directory) / 'receipt.json'
+            argv = ['observer', '--plugin-root', directory, '--binary', 'candidate',
+                    '--compare-binary', 'candidate', '--output', str(output)]
+            identity = dict(binary='candidate', reference='candidate', workload=self.policy['workload']['sha256'])
+            original_shell = observer.workload.Shell
+            was_enabled = gc.isenabled()
+            with patch.object(sys, 'argv', argv), patch.object(observer, 'inputs', side_effect=[identity, dict(identity, binary='changed')]), patch.object(observer.workload, 'benchmark', return_value=dict(raw={'retained': [1.0]})):
+                with self.assertRaisesRegex(ValueError, 'inputs changed during'):
+                    observer.main()
+            receipt = json.loads(output.read_text())
+            self.assertFalse(receipt['complete'])
+            self.assertFalse(receipt.get('identities_unchanged', False))
+            self.assertEqual(receipt['raw'], {'retained': [1.0]})
+            self.assertEqual(receipt['observer_cleanup'][0]['event'], 'teardown')
+            self.assertIs(observer.workload.Shell, original_shell)
+            self.assertEqual(gc.isenabled(), was_enabled)

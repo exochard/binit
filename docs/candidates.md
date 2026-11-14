@@ -24,3 +24,13 @@ of the [modern Binit milestone](modern-binit-milestone.md). A prepared candidate
 has not passed those checks. These commands do not yet offer candidate
 selection. Existing `prepare`, `apply`, `update` and rollback retain their
 documented selection behavior.
+
+The [foundation receipt](../benchmarks/results/candidate-preparation-x86_64.json)
+records matching generation IDs, file contents and modes across the previous
+preparation path, the refactored path and candidate preparation at identical
+paths. Two complete 20-pair runs of the unchanged lifecycle suite show no
+repeated regression above 5% in another median or p95. This is a preservation
+check; it claims no new performance gain and does not close the broader milestone.
+The 32-function unload p95 rises 5.5% in the first run and falls 5.5% in the
+second. Both remain in the raw data. The runner times the existing lifecycle
+commands; candidate-specific check latency needs separate workloads.

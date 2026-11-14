@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "status": "frozen before implementation; feasibility probe only",
+  "reference": "a0e3c75",
+  "measurement_revision": 2,
+  "measurement_correction": "Require pinned worker identity, successful spawn and SIGKILL/reap receipts. Prior runs without these receipts are insufficient evidence.",
+  "scope": "Explicitly opted-in isolated completion; ordinary stateful Bash providers remain synchronous and unchanged.",
+  "cancellation": {
+    "p95_ms_max": 16,
+    "measurement": "Input write through observable Readline line capture, including worker termination and reaping",
+    "samples_per_case_per_interpreter": 40,
+    "interpreters": ["5.2", "5.3"],
+    "cases": ["typed suffix", "bracketed paste", "cursor movement", "coalesced Tab and suffix"],
+    "lost_input_max": 0,
+    "stale_insertions_max": 0
+  },
+  "control_p95_ms_min": 150,
+  "proposed_product_bounds": {
+    "active_direct_workers": 1,
+    "retained_idle_workers": 0,
+    "captured_output_bytes": 1048576,
+    "candidate_count": 4096,
+    "candidate_bytes": 4096,
+    "context_bytes": 65536,
+    "wall_timeout_ms": 2000,
+    "owned_parent_descriptors": 2,
+    "worker_address_space_bytes": 268435456,
+    "worker_cpu_seconds": 2,
+    "worker_open_descriptors": 32,
+    "process_scope": "Direct worker count is enforced. Eligibility must forbid detached descendants. Arbitrary subprocess-tree counts are not bounded by a process group; this remains a design gate."
+  },
+  "required_before_product_qualification": [
+    "complete NUL-delimited output only; reject truncation, errors and overflow without partial insertion",
+    "cancel on input, context change, deadline, signal, disable and teardown",
+    "ordinary providers preserve globals, arrays, cwd, aliases and return-124 retry",
+    "no stale insertion after line, cursor, directory or generation changes",
+    "repeated cleanup evidence including children, descendants, descriptors and zombies",
+    "argument privacy and explicit environment/context contract",
+    "matching Bash 5.2 and 5.3 native and fallback gates",
+    "independent process-lifetime and input-correctness review"
+  ],
+  "exclusions": [
+    "This probe does not qualify the product capability.",
+    "These synthetic delays are not either of the two new 25 percent workload targets.",
+    "Universal stateful-provider responsiveness remains a separate open gate."
+  ]
+}

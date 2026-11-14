@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -34,7 +35,8 @@ struct request {
     int input, output;
     sigset_t previous_mask;
     char **arguments, **environment;
-    char *data, *line, *generation;
+    char *data, *line, *generation, *context;
+    size_t context_size;
 };
 
 static bool busy;
@@ -60,14 +62,48 @@ static void cleanup(void *opaque)
     free(request->data);
     free(request->line);
     free(request->generation);
+    free(request->context);
     busy = false;
     (void)pthread_sigmask(SIG_SETMASK, &request->previous_mask, NULL);
 }
 
-static bool loader_setting(const char *value)
+static bool excluded_environment(const char *value)
 {
     return strncmp(value, "LD_", 3) == 0 || strncmp(value, "DYLD_", 5) == 0 ||
-        strncmp(value, "GLIBC_TUNABLES=", 15) == 0 || strncmp(value, "GCONV_PATH=", 11) == 0;
+        strncmp(value, "GLIBC_TUNABLES=", 15) == 0 || strncmp(value, "GCONV_PATH=", 11) == 0 ||
+        strncmp(value, "COMP_", 5) == 0;
+}
+
+static bool context_field(struct request *request, const char *value)
+{
+    if (!value) value = "";
+    size_t length = strlen(value) + 1;
+    if (length > CONTEXT_LIMIT || request->context_size > CONTEXT_LIMIT - length) return false;
+    memcpy(request->context + request->context_size, value, length);
+    request->context_size += length;
+    return true;
+}
+
+static bool completion_context(struct request *request)
+{
+    SHELL_VAR *variable = find_variable_noref("COMP_WORDS");
+    if (!variable || !array_p(variable)) return false;
+    ARRAY *words = array_cell(variable);
+    arrayind_t count = array_num_elements(words);
+    if (count < 0 || count > CONTEXT_LIMIT || (count && array_max_index(words) != count - 1)) return false;
+    request->context = malloc(CONTEXT_LIMIT);
+    if (!request->context || !context_field(request, "binit-completion-v1")) return false;
+    const char *names[] = {"COMP_LINE", "COMP_POINT", "COMP_CWORD", "COMP_TYPE", "COMP_KEY", "COMP_WORDBREAKS"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (!context_field(request, get_string_value(names[i]))) return false;
+    char number[32];
+    snprintf(number, sizeof(number), "%jd", (intmax_t)count);
+    if (!context_field(request, number)) return false;
+    for (arrayind_t i = 0; i < count; ++i) {
+        const char *word = array_reference(words, i);
+        if (!word || !context_field(request, word)) return false;
+    }
+    return true;
 }
 
 static bool pending_input(void)
@@ -117,6 +153,8 @@ int binit_worker_request(WORD_LIST *arguments)
     request.data = malloc(OUTPUT_LIMIT + 1u);
     if (!request.line || !request.generation || !request.data) goto done;
     size_t count = 0, context = strlen(request.line) + strlen(request.generation);
+    if (!completion_context(&request) || context > CONTEXT_LIMIT - request.context_size) goto done;
+    context += request.context_size;
     for (WORD_LIST *word = arguments; word; word = word->next) {
         size_t length = strlen(word->word->word) + 1;
         if (length > CONTEXT_LIMIT || context > CONTEXT_LIMIT - length || ++count > CANDIDATE_LIMIT) goto done;
@@ -135,7 +173,7 @@ int binit_worker_request(WORD_LIST *arguments)
     maybe_make_export_env();
     count = 0;
     for (char **entry = export_env; entry && *entry; ++entry) {
-        if (loader_setting(*entry)) continue;
+        if (excluded_environment(*entry)) continue;
         size_t length = strlen(*entry) + 1;
         if (length > CONTEXT_LIMIT || context > CONTEXT_LIMIT - length) goto done;
         context += length;
@@ -145,13 +183,13 @@ int binit_worker_request(WORD_LIST *arguments)
     if (!request.environment) goto done;
     index = 0;
     for (char **entry = export_env; entry && *entry; ++entry) {
-        if (!loader_setting(*entry)) {
+        if (!excluded_environment(*entry)) {
             if (index >= count) goto done;
             request.environment[index++] = *entry;
         }
     }
     int pipe_fds[2];
-    if (pipe2(pipe_fds, O_CLOEXEC) != 0) goto done;
+    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pipe_fds) != 0) goto done;
     request.input = pipe_fds[0];
     request.output = pipe_fds[1];
     int *descriptors[] = {&request.input, &request.output};
@@ -173,7 +211,7 @@ int binit_worker_request(WORD_LIST *arguments)
     }
     int error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGMASK);
     if (!error) error = posix_spawnattr_setsigmask(&attributes, &request.previous_mask);
-    if (!error) error = posix_spawn_file_actions_addopen(&files, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    if (!error) error = posix_spawn_file_actions_adddup2(&files, request.output, STDIN_FILENO);
     if (!error) error = posix_spawn_file_actions_adddup2(&files, request.output, STDOUT_FILENO);
     if (!error) error = posix_spawn_file_actions_addopen(&files, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
     if (!error) error = posix_spawn_file_actions_addclosefrom_np(&files, 3);
@@ -186,18 +224,27 @@ int binit_worker_request(WORD_LIST *arguments)
     request.pid = child;
     close(request.output);
     request.output = -1;
-    size_t used = 0;
+    size_t used = 0, sent = 0;
     bool eof = false, successful = false;
     while (!eof || request.pid > 0) {
         QUIT;
         int64_t now = milliseconds();
         if (now < 0 || now - started >= TIMEOUT_MS || pending_input()) goto done;
         struct pollfd events[] = {{.fd = fileno(rl_instream), .events = POLLIN},
-                                 {.fd = request.input, .events = POLLIN}};
+                                 {.fd = request.input, .events = (short)(POLLIN | (sent < request.context_size ? POLLOUT : 0))}};
         int ready = poll(events, 2, 1);
         if (ready < 0) goto done;
         if (events[0].revents) goto done;
-        if (!eof && events[1].revents) {
+        unsigned returned = (unsigned short)events[1].revents;
+        if (request.input >= 0 && sent < request.context_size && (returned & POLLOUT)) {
+            ssize_t bytes = send(request.input, request.context + sent, request.context_size - sent, MSG_NOSIGNAL);
+            if (bytes > 0) {
+                sent += (size_t)bytes;
+                if (sent == request.context_size && shutdown(request.input, SHUT_WR) != 0) goto done;
+            } else if (bytes < 0 && errno != EAGAIN && errno != EINTR) goto done;
+        }
+        const unsigned readable = (unsigned)POLLIN | (unsigned)POLLHUP | (unsigned)POLLERR | (unsigned)POLLNVAL;
+        if (request.input >= 0 && !eof && (returned & readable)) {
             ssize_t bytes = read(request.input, request.data + used, OUTPUT_LIMIT + 1u - used);
             if (bytes > 0) {
                 used += (size_t)bytes;
@@ -219,7 +266,7 @@ int binit_worker_request(WORD_LIST *arguments)
             }
         }
     }
-    if (!successful || (used && request.data[used - 1] != '\0')) goto done;
+    if (!successful || sent != request.context_size || (used && request.data[used - 1] != '\0')) goto done;
     count = 0;
     size_t offset = 0;
     while (offset < used) {

@@ -9,7 +9,8 @@ use std::ffi::OsString;
 ))]
 mod linux {
     use super::OsString;
-    use std::io;
+    use std::io::{self, Read, Seek, SeekFrom, Write};
+    use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::process::CommandExt;
     use std::path::Path;
@@ -40,6 +41,36 @@ mod linux {
                 },
             ))
         }
+    }
+
+    fn stage_context() -> crate::Result<()> {
+        let mut context = Vec::new();
+        io::stdin().lock().take(65537).read_to_end(&mut context)?;
+        if context.len() > 65536 {
+            return Err("completion worker context exceeds its limit".into());
+        }
+        // Anonymous sealed input keeps completion words out of argv and named files.
+        let descriptor = unsafe {
+            libc::memfd_create(
+                c"binit-completion".as_ptr(),
+                libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+            )
+        };
+        if descriptor < 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        let mut input = unsafe { std::fs::File::from_raw_fd(descriptor) };
+        input.write_all(&context)?;
+        input.seek(SeekFrom::Start(0))?;
+        unsafe {
+            checked(libc::fcntl(
+                input.as_raw_fd(),
+                libc::F_ADD_SEALS,
+                libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE,
+            ))?;
+            checked(libc::dup2(input.as_raw_fd(), libc::STDIN_FILENO))?;
+        }
+        Ok(())
     }
 
     fn statement(code: u32, value: u32) -> libc::sock_filter {
@@ -178,6 +209,7 @@ mod linux {
         limit(libc::RLIMIT_CPU, 2)?;
         limit(libc::RLIMIT_NOFILE, 32)?;
         limit(libc::RLIMIT_CORE, 0)?;
+        stage_context()?;
         filter()?;
         Err(Command::new(&arguments[1])
             .args(&arguments[2..])

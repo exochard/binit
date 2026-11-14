@@ -7,10 +7,11 @@ bytes for Readline. This boundary costs a process per request and requires
 providers to accept explicit context. Worker-local changes stay in the worker.
 
 The frozen [experiment](../benchmarks/eligible-completion.json) measures the
-input-to-line-update interval, including termination and reaping. A passing
-probe establishes a usable boundary; output parsing and resource enforcement
-still need implementation and qualification. Ordinary completion functions
-retain their calling-shell behavior.
+input-to-line-update interval, including termination and reaping. The probe
+establishes a usable boundary. The implementation below adds output parsing,
+resource enforcement and public registration; production qualification is
+recorded separately. Ordinary completion functions retain their calling-shell
+behavior.
 
 ## Architecture choice
 
@@ -161,7 +162,42 @@ generation. Existing Readline quoting and menu insertion handle the result.
 The implementation currently requires Linux `close_range` support and the
 GNU spawn close-from operation. Unsupported platforms fail closed. ARM64
 execution evidence remains open. The private helper and request dispatch
-are under qualification; public registration and private transport of
-completion context are still required. Full matching native/fallback gates
+are under qualification. The [registration API](completion-providers.md)
+now selects the runtime's manager path. Completion context travels through a
+bounded socketpair and becomes sealed anonymous stdin before provider exec;
+exported `COMP_*` fields are excluded. Full matching native/fallback gates
 and quantitative cancellation measurements must pass before this capability
 lands as a qualified product feature.
+
+## Measure the public API
+
+`scripts/bench_completion_provider.py` exercises `binit completions register`
+in initialized shells. Each interpreter gets two complete 20-pair runs of
+the four frozen input cases. Pair order alternates between an isolated
+provider and a synchronous control that performs the same 200 ms delay.
+The control discards output; the isolated provider would return stale
+candidates if allowed to finish. This measures input response, not useful
+completion throughput or either new 25% workload target.
+
+Each run first requires a successful public completion. For ordinary input
+cases, timing starts only after the provider acknowledges its PID and the
+controller verifies it is Bash's sole direct child. Coalesced Tab and suffix
+can prevent launch; those rows establish input handling and idle cleanup,
+not termination of an acknowledged worker. Every row records the resulting
+line and cursor, child cleanup and parent descriptor count. Active workers
+also report their resource limits. The controller checks artifact identities
+before and after each run and refuses optimized Python execution, which
+would remove its qualification assertions.
+
+Use the matching release binary and native module from verification:
+
+```bash
+python3 scripts/bench_completion_provider.py --bash /path/to/bash \
+  --binary target/release/binit --module target/native-check/binit_complete.so \
+  --work tmp/provider-measurement --output tmp/provider-measurement.json
+```
+
+The output must be new. Incomplete runs retain their records and failure.
+Smaller `--pairs` or `--runs` values are smoke checks and carry an explicit
+unqualified sample-count field. Apply the existing 16 ms p95 response limit,
+zero lost input or stale insertion, and resource bounds to each full run.

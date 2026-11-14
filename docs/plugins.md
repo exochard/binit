@@ -153,6 +153,11 @@ depends = []
 
 An existing completion specification blocks the corresponding completion plugin, including when another plugin depends on it. Dependants become unavailable. Plugins must use unique function names and respect the runtime's `__binit_` namespace.
 
+Explicitly isolated providers can use `binit completions register NAME PROGRAM
+[ARG...]`. The runtime supplies the worker helper and tracks the registration
+for owned unload. See the [provider protocol](completion-providers.md) for
+private stdin context, resource limits and the current qualification status.
+
 Package files must be regular files. Symlinks are rejected. Limits are 128 files and 2 MiB per package, with directory nesting capped at 16 levels. The entry path must stay inside the package. Unknown manifest fields fail validation with an error.
 
 ## Existing Bash scripts

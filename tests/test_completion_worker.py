@@ -27,8 +27,26 @@ class CompletionWorkerTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
 
     def worker(self, program, *arguments, parent=None, **kwargs):
+        kwargs.setdefault("input", b"")
         return subprocess.run([str(BINARY), "__completion-worker", str(parent or os.getpid()),
                                str(program), *arguments], capture_output=True, timeout=8, **kwargs)
+
+    def test_context_stdin_is_complete_and_sealed(self):
+        payload = b"private context\0" * 2000
+        result = self.python("""import errno,os,sys
+data=sys.stdin.buffer.read()
+try: os.write(0,b'x')
+except OSError as e: assert e.errno == errno.EPERM, e
+else: raise AssertionError('context remained writable')
+sys.stdout.buffer.write(data)
+""", input=payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, payload)
+
+    def test_closed_inherited_stdin_becomes_sealed_empty_input(self):
+        result = self.python("import fcntl,sys; assert fcntl.fcntl(0,fcntl.F_GET_SEALS) == 15; assert sys.stdin.buffer.read() == b''",
+                             preexec_fn=lambda: os.close(0))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def python(self, code, **kwargs):
         return self.worker(sys.executable, "-c", code, **kwargs)

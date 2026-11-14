@@ -29,18 +29,37 @@ class EligibleCompletionTests(unittest.TestCase):
         self.root_patch.start()
         self.addCleanup(self.root_patch.stop)
         self.reply = self.root / "reply"
+        self.expected_context = self.root / "context"
 
     def session(self, code, extra=""):
         request = shlex.join([str(BINARY), sys.executable, "-c", code])
         setup = f"""{extra}
 __eligible() {{
     COMPREPLY=()
+    printf '%s\\0' binit-completion-v1 "$COMP_LINE" "$COMP_POINT" "$COMP_CWORD" "$COMP_TYPE" "${{COMP_KEY-}}" "$COMP_WORDBREAKS" "${{#COMP_WORDS[@]}}" "${{COMP_WORDS[@]}}" > {shlex.quote(str(self.expected_context))}
     builtin binit_complete request {request}
     printf '%s\\0' "$?" "${{COMPREPLY[@]}}" > {shlex.quote(str(self.reply))}
 }}
 complete -o filenames -F __eligible probe_cmd
 """
         return completion.Session(extra=setup, values=0)
+
+    def test_private_context_matches_bash_and_stays_out_of_argv(self):
+        received = self.root / "received"
+        code = f"""import os,sys
+data=sys.stdin.buffer.read()
+open({str(received)!r},'wb').write(data)
+fields=data.split(b'\\0')
+assert fields[0] == b'binit-completion-v1'
+private=fields[1].split()[1]
+assert private not in open('/proc/self/cmdline','rb').read()
+assert not any(key.startswith('COMP_') for key in os.environ)
+os.write(1,b'alpha one\\0alpha two\\0')
+"""
+        with self.session(code, extra="export COMP_LINE COMP_POINT COMP_CWORD") as session:
+            session.open("probe_cmd private_fixture_argument al")
+            self.assertEqual(received.read_bytes(), self.expected_context.read_bytes())
+            session.send(b"\x1b")
 
     def reply_values(self, session):
         session.wait(lambda: self.reply.exists() and self.reply.stat().st_size > 1)
@@ -86,7 +105,7 @@ complete -o filenames -F __eligible probe_cmd
                         str(ROOT / "tests/fixtures/worker_constructor.c"), "-o", str(library)], check=True)
         environment = dict(os.environ, LD_PRELOAD=str(library), BINIT_WORKER_CONSTRUCTOR_MARKER=str(marker))
         control = subprocess.run([str(BINARY), "__completion-worker", str(os.getpid()), sys.executable,
-                                  "-c", "pass"], env=environment, capture_output=True, timeout=5)
+                                  "-c", "pass"], env=environment, capture_output=True, input=b"", timeout=5)
         self.assertEqual(control.returncode, 0, control.stderr)
         self.assertTrue(marker.exists(), "control must prove a constructor runs before helper main")
         marker.unlink()

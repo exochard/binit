@@ -1,0 +1,6 @@
+schema = 1
+id = "npm-tasks"
+entry = "plugin.bash"
+load = "completion"
+completions = ["npm"]
+requires = ["python3"]

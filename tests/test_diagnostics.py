@@ -151,6 +151,27 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn('public-stdout', receipt['samples'][0]['stdout_preview'])
         self.assertIn('public-stderr', receipt['samples'][0]['stderr_preview'])
 
+    def test_untraced_diagnosis_runs_identical_effect_checks_without_sidecars(self):
+        _, _, plan, state = self.prepare()
+        before = self.preserved(state)
+        result = self.command(state, 'diagnose', str(plan), '--json', '--no-trace')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload['passed'])
+        self.assertEqual(payload['diagnostics'], [])
+        self.assertFalse(payload['receipt']['context']['diagnostic'])
+        sample = payload['receipt']['samples'][0]
+        self.assertNotIn('diagnostic', sample)
+        self.assertEqual(sample['check_return'], 0)
+        self.assertGreaterEqual(sample['elapsed_ms'], 200)
+        self.assertEqual(self.preserved(state), before)
+        run = state / 'diagnoses' / payload['run']
+        self.assertEqual(list(run.rglob('namespace.bin')), [])
+        (self.root / 'check.bash').write_text('return 23\n')
+        failed = self.command(state, 'diagnose', str(plan), '--no-trace')
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('Tracing: off', failed.stdout)
+
     def test_sample_receipts_account_for_both_sidecars(self):
         _, _, plan, state = self.prepare()
         plan.write_text(plan.read_text() + 'samples=2\n')

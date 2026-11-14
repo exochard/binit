@@ -311,10 +311,17 @@ fn print_report(report: &serde_json::Value) {
 }
 
 pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
-    let (plan, json) = match args {
-        [plan] => (Path::new(plan), false),
-        [plan, option] if option == "--json" => (Path::new(plan), true),
-        _ => return Err("usage: binit diagnose PLAN [--json]".into()),
+    let (plan, json, trace) = match args {
+        [plan] => (Path::new(plan), false, true),
+        [plan, option] if option == "--json" => (Path::new(plan), true, true),
+        [plan, option] if option == "--no-trace" => (Path::new(plan), false, false),
+        [plan, first, second]
+            if (first == "--json" && second == "--no-trace")
+                || (first == "--no-trace" && second == "--json") =>
+        {
+            (Path::new(plan), true, false)
+        }
+        _ => return Err("usage: binit diagnose PLAN [--json] [--no-trace]".into()),
     };
     if std::env::var_os("__binit_in_check").is_some() {
         return Err("diagnostic checks cannot be nested".into());
@@ -334,7 +341,7 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
     let id = hash(&unique().to_le_bytes());
     let root = parent.join(&id);
     fs::DirBuilder::new().mode(0o700).create(&root)?;
-    let receipt = checks::run(&subject, &state, plan, &root, true)?;
+    let receipt = checks::run(&subject, &state, plan, &root, trace)?;
     let reports = reports(&root)?;
     if json {
         println!(
@@ -353,6 +360,9 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
             }
         );
         println!("Generation: {generation}");
+        if !trace {
+            println!("Tracing: off");
+        }
         for report in &reports {
             print_report(report);
         }

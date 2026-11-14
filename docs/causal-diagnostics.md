@@ -8,6 +8,11 @@ and input bindings. Keep the selected generation and candidate record intact.
 This is an explicit reproduction; it does not replay private history or
 attach to an existing shell. `binit profile` and `binit report` stay supported.
 
+`binit diagnose PLAN --no-trace` runs the same checks without observation or
+diagnostic sidecars. It preserves the selected generation and reports check
+success or failure. Add `--json` for the receipt. This mode supplies the
+uninstrumented reference when measuring whole-command observer cost.
+
 The report must identify slow source locations and function calls across
 plugin loading, lifecycle callbacks and Bash function completion providers.
 It must show exclusive time separately from inclusive time. A caller's total
@@ -113,6 +118,18 @@ Measure observed and unobserved whole-command elapsed time in two complete
 primary case. Record wall time and kernel-reported resource use separately.
 These measurements do not count as the broader milestone's two new 25%
 performance gains.
+
+The observer runner is `scripts/bench_diagnostics.py`. It uses `diagnose --json`
+for both modes, adding `--no-trace` to the reference. Each run balances and
+randomizes which mode goes first in a pair. Both the nearest-rank p95 of paired
+elapsed ratios and the ratio of elapsed p95 values must remain at most 1.2.
+Kernel `wait4` resource values are separate from parent-measured elapsed time;
+maximum resident memory is not an aggregate process-tree peak.
+
+The initial runner proposal used `candidate check` as the reference. Source
+review rejected it before timing: candidate verification and extra candidate
+record writes would inflate the reference cost. No qualification result is
+drawn from that unequal comparison.
 
 Public checks must exercise normal success and failed fixtures. Include
 changed inputs, argument privacy, bounded overflow, timeout/interruption,

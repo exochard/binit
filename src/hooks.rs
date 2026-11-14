@@ -1,73 +1,12 @@
 use super::*;
-use std::io::Read;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::{Duration, Instant};
-
-const OUTPUT_LIMIT: usize = 32 * 1024;
-static SIGNAL_LOCK: Mutex<()> = Mutex::new(());
-static INTERRUPTED: AtomicI32 = AtomicI32::new(0);
-
-extern "C" fn capture_signal(signal: libc::c_int) {
-    INTERRUPTED.store(signal, Ordering::Relaxed);
-}
-
-struct SignalGuard {
-    int: libc::sigaction,
-    term: libc::sigaction,
-}
-
-impl SignalGuard {
-    fn install() -> Result<Self> {
-        // sigaction and the lock-free integer store are signal-safe on the
-        // supported Linux targets. The manager serializes hook executions.
-        unsafe {
-            let mut action: libc::sigaction = std::mem::zeroed();
-            let mut int: libc::sigaction = std::mem::zeroed();
-            let mut term: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = capture_signal as *const () as usize;
-            libc::sigemptyset(&mut action.sa_mask);
-            INTERRUPTED.store(0, Ordering::Relaxed);
-            if libc::sigaction(libc::SIGINT, &action, &mut int) != 0 {
-                return Err(std::io::Error::last_os_error().into());
-            }
-            if libc::sigaction(libc::SIGTERM, &action, &mut term) != 0 {
-                libc::sigaction(libc::SIGINT, &int, std::ptr::null_mut());
-                return Err(std::io::Error::last_os_error().into());
-            }
-            Ok(Self { int, term })
-        }
-    }
-}
-
-impl Drop for SignalGuard {
-    fn drop(&mut self) {
-        unsafe {
-            libc::sigaction(libc::SIGINT, &self.int, std::ptr::null_mut());
-            libc::sigaction(libc::SIGTERM, &self.term, std::ptr::null_mut());
-        }
-    }
-}
-
-struct HookGroup(Option<libc::pid_t>);
-
-impl HookGroup {
-    fn stop(&mut self) {
-        if let Some(group) = self.0.take() {
-            unsafe {
-                libc::kill(-group, libc::SIGKILL);
-            }
-        }
-    }
-}
-
-impl Drop for HookGroup {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
+#[cfg(test)]
+use crate::process::OUTPUT_LIMIT;
+use std::process::Command;
+#[cfg(test)]
+use std::process::Stdio;
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 fn selected_bash(value: Option<std::ffi::OsString>) -> Result<std::ffi::OsString> {
     match value {
@@ -75,23 +14,6 @@ fn selected_bash(value: Option<std::ffi::OsString>) -> Result<std::ffi::OsString
         Some(_) => Err("BINIT_BASH must be an absolute executable path".into()),
         None => Ok("/bin/bash".into()),
     }
-}
-
-fn drain(mut input: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let mut buf = [0; 4096];
-        while let Ok(n) = input.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            let remaining = OUTPUT_LIMIT.saturating_sub(output.len());
-            output.extend_from_slice(&buf[..n.min(remaining)]);
-        }
-        let _ = sender.send(output);
-    });
-    receiver
 }
 
 pub(super) fn run(script: &str, directory: &Path, id: &str, event: &str) -> Result<()> {
@@ -106,11 +28,6 @@ fn run_with_timeout(
     timeout: Duration,
 ) -> Result<()> {
     let bash = selected_bash(std::env::var_os("BINIT_BASH"))?;
-    let _lock = SIGNAL_LOCK
-        .lock()
-        .map_err(|_| "hook signal lock is poisoned")?;
-    let signals = SignalGuard::install()?;
-    let parent = unsafe { libc::getpid() };
     let mut command = Command::new(bash);
     for (name, _) in
         std::env::vars_os().filter(|(name, _)| name.as_encoded_bytes().starts_with(b"GIT_"))
@@ -129,70 +46,24 @@ fn run_with_timeout(
         .env(
             "GIT_CEILING_DIRECTORIES",
             directory.parent().ok_or("hook staging parent missing")?,
-        )
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    // The child is owned by this manager; terminate it if the manager exits.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != parent {
-                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-            }
-            Ok(())
-        });
+        );
+    let result = crate::process::run(&mut command, timeout)
+        .map_err(|error| format!("{id}: {event} could not start: {error}"))?;
+    if result.interrupted != 0 {
+        return Err(format!("{id}: {event} interrupted by signal {}", result.interrupted).into());
     }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("{id}: {event} could not start: {e}"))?;
-    let pgid = child.id() as libc::pid_t;
-    let mut group = HookGroup(Some(pgid));
-    let out = drain(child.stdout.take().ok_or("hook stdout unavailable")?);
-    let err = drain(child.stderr.take().ok_or("hook stderr unavailable")?);
-    let started = Instant::now();
-    let (status, timed_out, interrupted) = loop {
-        let signal = INTERRUPTED.load(Ordering::Relaxed);
-        if signal != 0 {
-            group.stop();
-            break (child.wait()?, false, signal);
-        }
-        if let Some(status) = child.try_wait()? {
-            break (status, false, 0);
-        }
-        if started.elapsed() >= timeout {
-            group.stop();
-            break (child.wait()?, true, 0);
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    // Reap any ordinary background children from this hook's process group.
-    group.stop();
-    // A process that deliberately leaves the group can retain a pipe. It must
-    // not prevent the manager from returning after the owned group is stopped.
-    let stdout = out
-        .recv_timeout(Duration::from_millis(200))
-        .unwrap_or_default();
-    let stderr = err
-        .recv_timeout(Duration::from_millis(200))
-        .unwrap_or_default();
-    // Restore the manager's handlers before the final check: a later signal
-    // then has its ordinary effect instead of being swallowed after success.
-    drop(signals);
-    let signal = interrupted.max(INTERRUPTED.load(Ordering::Relaxed));
-    if signal != 0 {
-        return Err(format!("{id}: {event} interrupted by signal {signal}").into());
-    }
-    if timed_out {
+    if result.timed_out {
         return Err(format!("{id}: {event} timed out after {}s", timeout.as_secs()).into());
     }
-    if !status.success() {
-        let output = if stderr.is_empty() { &stdout } else { &stderr };
+    if !result.status.success() {
+        let output = if result.stderr.bytes.is_empty() {
+            &result.stdout.bytes
+        } else {
+            &result.stderr.bytes
+        };
         return Err(format!(
-            "{id}: {event} failed ({status}): {}",
+            "{id}: {event} failed ({}): {}",
+            result.status,
             String::from_utf8_lossy(output)
         )
         .into());

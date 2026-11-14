@@ -30,8 +30,8 @@ Path(os.environ['BINIT_VERIFY_EVIDENCE'], 'environment.json').write_text(json.du
 }, indent=2) + '\n')
 PY
 cargo fmt --all -- --check
-shellcheck -S warning runtime/core.bash plugins/*/plugin.bash examples/plugins/*/plugin.bash scripts/*.bash benchmarks/scripts/*.bash engines/bash/*.bash
-for script in runtime/core.bash plugins/*/plugin.bash examples/plugins/*/plugin.bash scripts/*.bash benchmarks/scripts/*.bash engines/bash/*.bash; do "$BINIT_BASH" -O extglob -n "$script"; done
+shellcheck -S warning runtime/*.bash plugins/*/plugin.bash examples/plugins/*/plugin.bash scripts/*.bash benchmarks/scripts/*.bash engines/bash/*.bash
+for script in runtime/*.bash plugins/*/plugin.bash examples/plugins/*/plugin.bash scripts/*.bash benchmarks/scripts/*.bash engines/bash/*.bash; do "$BINIT_BASH" -O extglob -n "$script"; done
 cargo clippy --locked --offline "${verify_features[@]}" --all-targets -- -D warnings
 cargo test --locked --offline "${verify_features[@]}" -- --test-threads=2
 cargo build --release --locked --offline "${verify_features[@]}"

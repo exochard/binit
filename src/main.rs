@@ -8,12 +8,14 @@ use std::path::{Component, Path, PathBuf};
 
 mod acquire;
 mod candidate;
+mod checks;
 mod engine;
 mod extensions;
 mod git;
 mod hooks;
 mod manager;
 mod package;
+mod process;
 mod publication;
 mod releases;
 mod remote;
@@ -134,7 +136,7 @@ fn read_regular_limit(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn snapshot_file(root: &Path, file: &str, lock: &Lock) -> Result<Vec<u8>> {
+fn snapshot_limit(file: &str, lock: &Lock) -> u64 {
     let program = file
         .strip_prefix("bin/")
         .is_some_and(|name| lock.bin.contains_key(name))
@@ -147,14 +149,51 @@ fn snapshot_file(root: &Path, file: &str, lock: &Lock) -> Result<Vec<u8>> {
                         .any(|item| split_bin(item).is_some_and(|(entry, _)| entry == path))
                 })
         });
-    read_regular_limit(
-        &root.join(file),
-        if program {
-            acquire::MAX_PROGRAM_BYTES
-        } else {
-            MAX_BYTES
-        },
-    )
+    if program {
+        acquire::MAX_PROGRAM_BYTES
+    } else {
+        MAX_BYTES
+    }
+}
+fn snapshot_file(root: &Path, file: &str, lock: &Lock) -> Result<Vec<u8>> {
+    read_regular_limit(&root.join(file), snapshot_limit(file, lock))
+}
+fn snapshot_hash(root: &Path, file: &str, lock: &Lock) -> Result<String> {
+    let limit = snapshot_limit(file, lock);
+    let path = root.join(file);
+    let meta = fs::symlink_metadata(&path)?;
+    if !meta.is_file() || meta.len() > limit {
+        return Err(format!(
+            "expected a regular file of at most {} MiB: {}",
+            limit / (1024 * 1024),
+            path.display()
+        )
+        .into());
+    }
+    let mut input = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?
+        .take(limit + 1);
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 16384];
+    let mut total = 0u64;
+    loop {
+        let count = match input.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if count == 0 {
+            break;
+        }
+        total += count as u64;
+        if total > limit {
+            return Err("file exceeds size limit".into());
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 fn private_dir(path: &Path) -> Result<()> {
     if !path.exists() {
@@ -454,7 +493,7 @@ fn install_generation(
     let state = fs::canonicalize(state)?;
     let executable = std::env::current_exe()?;
     let mut init = format!(
-        "# Generated initialization plan; changes require prepare.\n[[ $- == *i* && ${{BINIT_SAFE-0}} != 1 ]] || return 0\n[[ ${{__binit_active-0}} != 1 ]] || return 0\nBINIT_STATE_DIR={}\n__binit_manager={}\n__binit_generation_dir=${{BASH_SOURCE[0]%/*}}\nsource \"$__binit_generation_dir/runtime.bash\" || return\n",
+        "# Generated initialization plan; changes require prepare.\n[[ $- == *i* && ${{BINIT_SAFE-0}} != 1 ]] || return 0\n[[ ${{__binit_active-0}} != 1 ]] || return 0\nBINIT_STATE_DIR={}\nif [[ -n ${{__binit_check_state-}} ]]; then BINIT_STATE_DIR=$__binit_check_state; fi\n__binit_manager={}\n__binit_generation_dir=${{BASH_SOURCE[0]%/*}}\nsource \"$__binit_generation_dir/runtime.bash\" || return\n",
         quote(state.to_str().ok_or("state path must be UTF-8")?),
         quote(executable.to_str().ok_or("binary path must be UTF-8")?)
     );
@@ -623,7 +662,7 @@ fn verify_generation(state: &Path, id: &str) -> Result<Lock> {
         if meta.uid() != unsafe { libc::geteuid() } || !mode_ok {
             return Err(format!("unexpected owner or mode: {file}").into());
         }
-        if hash(&snapshot_file(&root, file, &lock)?) != *expected {
+        if snapshot_hash(&root, file, &lock)? != *expected {
             return Err(format!("content changed: {file}").into());
         }
         if let Some(name) = program {
@@ -805,7 +844,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver now names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver now names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select           Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }

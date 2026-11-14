@@ -24,7 +24,7 @@ pub(super) fn manager_identity() -> Result<FileIdentity> {
 pub(super) struct Subject {
     pub generation: String,
     pub base_generation: Option<String>,
-    pub config: FileIdentity,
+    pub config: Option<FileIdentity>,
     pub manager: FileIdentity,
 }
 
@@ -91,6 +91,8 @@ struct ReadInputs {
 struct Context {
     binding: Binding,
     runtime: runtime::RuntimeIdentity,
+    #[serde(default)]
+    diagnostic: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -100,6 +102,8 @@ pub(super) struct Sample {
     sample: u32,
     phase: String,
     check_return: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diagnostic: Option<crate::diagnose::Summary>,
     elapsed_ms: f64,
     code: Option<i32>,
     signal: Option<i32>,
@@ -280,6 +284,8 @@ struct SampleContext<'a> {
     run: &'a Path,
     runtime: &'a runtime::RuntimeIdentity,
     budget: u64,
+    diagnostic: bool,
+    report_budget: u64,
 }
 
 fn run_sample(
@@ -294,6 +300,8 @@ fn run_sample(
         run,
         runtime,
         budget,
+        diagnostic,
+        report_budget,
     } = context;
     let root = run.join("samples").join(format!("{index:04}"));
     private_dir(&root)?;
@@ -335,8 +343,23 @@ fn run_sample(
             .arg(&phase)
             .arg(&view)
             .arg(&generation)
-            .arg(if runtime.native { "1" } else { "0" });
-        let output = crate::process::run(&mut command, Duration::from_millis(spec.timeout_ms))?;
+            .arg(if runtime.native { "1" } else { "0" })
+            .arg(if *diagnostic {
+                root.join("namespace.bin")
+            } else {
+                PathBuf::new()
+            });
+        let output = if *diagnostic {
+            crate::process::run_with_trace(command, Duration::from_millis(spec.timeout_ms))?
+        } else {
+            crate::process::run(&mut command, Duration::from_millis(spec.timeout_ms))?
+        };
+        let diagnostic_summary = if let Some(trace) = output.trace {
+            let report = crate::trace::analyze(trace, output.pid, &generation, &inputs);
+            Some(crate::diagnose::save_report(&root, report, *report_budget)?)
+        } else {
+            None
+        };
         let phase = String::from_utf8_lossy(&read_regular_limit(&phase, 32).unwrap_or_default())
             .trim()
             .to_owned();
@@ -354,6 +377,7 @@ fn run_sample(
             sample,
             phase,
             check_return,
+            diagnostic: diagnostic_summary,
             elapsed_ms: output.wall_ms,
             code: output.status.code(),
             signal: output.status.signal(),
@@ -398,6 +422,12 @@ impl Receipt {
                     Some("left incomplete output capture")
                 } else if !result.generation_unchanged {
                     Some("changed its generation copy")
+                } else if result
+                    .diagnostic
+                    .as_ref()
+                    .is_some_and(|report| !report.complete)
+                {
+                    Some("left incomplete diagnostic evidence")
                 } else if context.binding.plan.checks.iter().any(|spec| {
                     spec.id == result.check
                         && spec
@@ -449,6 +479,11 @@ impl Receipt {
                         && result.interrupted == 0
                         && result.output_complete
                         && result.generation_unchanged
+                        && result
+                            .diagnostic
+                            .as_ref()
+                            .is_none_or(|report| report.complete)
+                        && (!context.diagnostic || result.diagnostic.is_some())
                         && result.elapsed_ms.is_finite()
                         && result.elapsed_ms > 0.0
                         && spec
@@ -466,7 +501,9 @@ impl Receipt {
             .as_ref()
             .ok_or("candidate check has no complete context")?;
         if bind(&context.binding.plan_file.path)?.binding != context.binding
-            || runtime::file_identity(&subject.config.path)? != subject.config
+            || subject.config.as_ref().is_some_and(|config| {
+                !runtime::file_identity(&config.path).is_ok_and(|current| current == *config)
+            })
             || manager_identity()? != subject.manager
             || runtime::bash_invocation()? != context.runtime.bash_invocation
             || runtime::file_identity(&context.runtime.bash_invocation)? != context.runtime.bash
@@ -501,7 +538,13 @@ impl Receipt {
     }
 }
 
-pub(super) fn run(subject: &Subject, state: &Path, plan: &Path, root: &Path) -> Result<Receipt> {
+pub(super) fn run(
+    subject: &Subject,
+    state: &Path,
+    plan: &Path,
+    root: &Path,
+    diagnostic: bool,
+) -> Result<Receipt> {
     let mut receipt = Receipt {
         schema: 1,
         subject: subject.clone(),
@@ -515,8 +558,10 @@ pub(super) fn run(subject: &Subject, state: &Path, plan: &Path, root: &Path) -> 
         &serde_json::to_vec_pretty(&receipt)?,
     )?;
     let execute = (|| -> Result<()> {
-        if runtime::file_identity(&subject.config.path)? != subject.config {
-            return Err("candidate configuration changed; prepare it again".into());
+        if let Some(config) = &subject.config {
+            if runtime::file_identity(&config.path)? != *config {
+                return Err("candidate configuration changed; prepare it again".into());
+            }
         }
         let inputs = bind(plan)?;
         let lock = verify_generation(state, &subject.generation)?;
@@ -534,20 +579,26 @@ pub(super) fn run(subject: &Subject, state: &Path, plan: &Path, root: &Path) -> 
         receipt.context = Some(Context {
             binding: inputs.binding.clone(),
             runtime: runtime.clone(),
+            diagnostic,
         });
         atomic_write(
             &root.join("progress.json"),
             &serde_json::to_vec_pretty(&receipt)?,
         )?;
-        let samples = SampleContext {
+        let mut samples = SampleContext {
             subject,
             state,
             run: root,
             runtime: &runtime,
             budget: inputs.binding.plan.max_generation_bytes,
+            diagnostic,
+            report_budget: crate::diagnose::MAX_RUN_REPORT_BYTES,
         };
         for spec in &inputs.binding.plan.checks {
             for sample in 0..spec.samples {
+                if diagnostic && samples.report_budget < 4096 {
+                    return Err("diagnostic run reached its retained-report budget".into());
+                }
                 let result = run_sample(&samples, receipt.samples.len(), spec, sample)?;
                 let interrupted = result.interrupted;
                 atomic_write(
@@ -557,6 +608,9 @@ pub(super) fn run(subject: &Subject, state: &Path, plan: &Path, root: &Path) -> 
                         .join("result.json"),
                     &serde_json::to_vec_pretty(&result)?,
                 )?;
+                if let Some(report) = &result.diagnostic {
+                    samples.report_budget = samples.report_budget.saturating_sub(report.bytes);
+                }
                 receipt.samples.push(result);
                 if interrupted != 0 {
                     return Err(
@@ -567,6 +621,7 @@ pub(super) fn run(subject: &Subject, state: &Path, plan: &Path, root: &Path) -> 
             }
         }
         receipt.inputs_current(subject)?;
+        verify_generation(state, &subject.generation)?;
         if runtime::probe(subject, state, native, root)? != runtime {
             return Err("runtime changed during checks".into());
         }

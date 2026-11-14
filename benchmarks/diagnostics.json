@@ -1,0 +1,154 @@
+{
+  "schema": 1,
+  "frozen_before_treatment": true,
+  "reference_commit": "c80d4dfafaf74fbafefcf32626e1e22b22c67a90",
+  "workflow_reference_commit": "f90f58cdcfcfddfab4c87eb48d48b7db9f576f6f",
+  "clock": "Bash EPOCHREALTIME microseconds; process wall and resource use recorded separately",
+  "target": {
+    "minimum_attribution_fraction": 0.95,
+    "maximum_exclusive_overcount_us": 1,
+    "observer_maximum_p95_ratio": 1.2,
+    "runs": 2,
+    "pairs_per_run": 20,
+    "ordinary_lifecycle_maximum_repeated_regression_ratio": 1.05
+  },
+  "bounds": {
+    "trace_records_per_sample": 8192,
+    "metadata_prefix_bytes": 4096,
+    "trace_ingress_bytes": 67108864,
+    "function_depth": 64,
+    "sidecar_bytes": 16777216,
+    "run_sidecars_bytes": 134217728
+  },
+  "cases": [
+    {
+      "id": "nested-load",
+      "primary": true,
+      "expected_success": true,
+      "minimum_window_ms": 200,
+      "plugins": [
+        {
+          "id": "child",
+          "load": "event",
+          "event": "child-manual",
+          "entry": "fixture_child() { sleep .12; DIAG_CHILD=loaded; }; fixture_child\n"
+        },
+        {
+          "id": "parent",
+          "load": "event",
+          "event": "parent-manual",
+          "depends": [
+            "child"
+          ],
+          "entry": "fixture_parent() { sleep .12; DIAG_PARENT=loaded; }; fixture_parent\n"
+        }
+      ],
+      "setup": "fixture_before() { sleep .08; DIAG_BEFORE=called; }\n",
+      "script": "binit on before-load parent fixture_before || return 91\nbinit load parent || return 92\n[[ ${DIAG_CHILD-} == loaded && ${DIAG_PARENT-} == loaded && ${DIAG_BEFORE-} == called ]]\n",
+      "expected_causes": [
+        {
+          "function": "fixture_child",
+          "plugin": "child",
+          "minimum_exclusive_ms": 110
+        },
+        {
+          "function": "fixture_parent",
+          "plugin": "parent",
+          "minimum_exclusive_ms": 110
+        },
+        {
+          "function": "fixture_before",
+          "plugin": null,
+          "minimum_exclusive_ms": 70
+        }
+      ],
+      "expected_phase": "check"
+    },
+    {
+      "id": "hook-provider",
+      "primary": true,
+      "expected_success": true,
+      "minimum_window_ms": 200,
+      "plugins": [
+        {
+          "id": "interactive",
+          "load": "completion",
+          "completions": [
+            "diagcmd"
+          ],
+          "entry": "fixture_hook() { [[ ${DIAG_HOOK_ARMED-0} == 1 ]] || return 0; sleep .12; DIAG_HOOK=called; }\nfixture_provider() { sleep .18; DIAG_PROVIDER=called; DIAG_ARRAY=(one \"two three\"); COMPREPLY=(\"result one\" \"result two\"); : diagnostic_argument_marker_must_not_be_retained; }\nbinit_on prompt fixture_hook\ncomplete -F fixture_provider diagcmd\n"
+        }
+      ],
+      "setup": "",
+      "script": "binit load interactive || return 90\nDIAG_HOOK_ARMED=1\nfor fixture_prompt in \"${PROMPT_COMMAND[@]}\"; do eval \"$fixture_prompt\"; done\nCOMP_WORDS=(diagcmd \"\"); COMP_CWORD=1; COMP_LINE=\"diagcmd \"; COMP_POINT=8\ncompgen -F fixture_provider -- \"\" > \"$BINIT_CHECK_WORK/replies\"\n[[ ${DIAG_HOOK-} == called && ${DIAG_PROVIDER-} == called && ${DIAG_ARRAY[1]-} == \"two three\" && -s $BINIT_CHECK_WORK/replies ]]\n",
+      "expected_causes": [
+        {
+          "function": "fixture_hook",
+          "plugin": "interactive",
+          "minimum_exclusive_ms": 110
+        },
+        {
+          "function": "fixture_provider",
+          "plugin": "interactive",
+          "minimum_exclusive_ms": 170
+        }
+      ],
+      "expected_phase": "check"
+    },
+    {
+      "id": "blocked-command",
+      "primary": false,
+      "expected_success": false,
+      "minimum_window_ms": 200,
+      "plugins": [
+        {
+          "id": "existing",
+          "load": "startup",
+          "entry": "fixture_existing() { sleep .25; }; fixture_existing\noccupied() { : existing; }\n"
+        },
+        {
+          "id": "late",
+          "load": "command",
+          "commands": [
+            "occupied"
+          ],
+          "entry": "occupied() { : late; }\n"
+        }
+      ],
+      "setup": "",
+      "script": "return 99\n",
+      "expected_causes": [
+        {
+          "function": "fixture_existing",
+          "plugin": "existing",
+          "minimum_exclusive_ms": 240
+        }
+      ],
+      "expected_phase": "init",
+      "expected_conflict": {
+        "plugin": "late",
+        "symbol": "occupied",
+        "existing_owner": "existing"
+      }
+    },
+    {
+      "id": "subshell-overlap",
+      "primary": false,
+      "expected_success": true,
+      "minimum_window_ms": 200,
+      "plugins": [],
+      "setup": "fixture_subshell() { sleep .25; printf child-result; }\n",
+      "script": ": root-before-substitution\nDIAG_VALUE=$(fixture_subshell)\n[[ $DIAG_VALUE == child-result ]]\n",
+      "expected_causes": [
+        {
+          "function": "fixture_subshell",
+          "plugin": null,
+          "minimum_exclusive_ms": 240,
+          "child_process": true
+        }
+      ],
+      "expected_phase": "check",
+      "require_opaque_child_time": true
+    }
+  ]
+}

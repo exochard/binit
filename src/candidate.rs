@@ -111,10 +111,10 @@ fn subject(candidate: &Candidate) -> Result<checks::Subject> {
     Ok(checks::Subject {
         generation: candidate.generation.clone(),
         base_generation: candidate.base_generation.clone(),
-        config: checks::FileIdentity {
+        config: Some(checks::FileIdentity {
             path: candidate.config.clone(),
             sha256: candidate.config_sha256.clone(),
-        },
+        }),
         manager: candidate
             .prepared_by
             .clone()
@@ -212,7 +212,7 @@ fn check_candidate(state: &Path, plan: &Path) -> Result<()> {
         receipt_sha256: None,
     });
     save(&state, &candidate)?;
-    let checked = checks::run(&subject, &state, plan, &root)?;
+    let checked = checks::run(&subject, &state, plan, &root, false)?;
     let bytes = read_regular_limit(&root.join("receipt.json"), checks::MAX_RECEIPT_BYTES)?;
     candidate
         .check

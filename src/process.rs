@@ -1,9 +1,11 @@
 use crate::Result;
 use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub(super) const OUTPUT_LIMIT: usize = 32 * 1024;
@@ -21,12 +23,89 @@ pub(super) struct Capture {
 }
 
 pub(super) struct Output {
+    pub pid: u32,
     pub status: ExitStatus,
     pub timed_out: bool,
     pub interrupted: i32,
     pub wall_ms: f64,
     pub stdout: Capture,
     pub stderr: Capture,
+    pub trace: Option<crate::trace::Capture>,
+}
+
+struct TracePipe {
+    input: UnixStream,
+    output: OwnedFd,
+    finished: Arc<AtomicBool>,
+}
+
+struct TraceFinished(Arc<AtomicBool>);
+
+impl Drop for TraceFinished {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+struct TraceInput {
+    stream: UnixStream,
+    finished: Arc<AtomicBool>,
+}
+
+impl Read for TraceInput {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.stream.read(buffer) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    if self.finished.load(Ordering::Relaxed) {
+                        return Err(std::io::Error::other(
+                            "trace writer outlived the owned process group",
+                        ));
+                    }
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+pub(super) fn run_with_trace(mut command: Command, timeout: Duration) -> Result<Output> {
+    let (input, output) = UnixStream::pair()?;
+    input.set_read_timeout(Some(Duration::from_millis(20)))?;
+    // Keep the writer above stdio without choosing a number that could collide
+    // with Command's private exec-error descriptor.
+    let duplicated = unsafe { libc::fcntl(output.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicated < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let owned_output = unsafe { OwnedFd::from_raw_fd(duplicated) };
+    drop(output);
+    let output = owned_output;
+    let writer = output.as_raw_fd();
+    command.env("__binit_trace_fd", writer.to_string());
+    unsafe {
+        command.pre_exec(move || {
+            let flags = libc::fcntl(writer, libc::F_GETFD);
+            if flags < 0 || libc::fcntl(writer, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    run_inner(
+        &mut command,
+        timeout,
+        Some(TracePipe {
+            input,
+            output,
+            finished: Arc::new(AtomicBool::new(false)),
+        }),
+    )
 }
 
 struct SignalGuard {
@@ -113,6 +192,10 @@ fn drain(mut input: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Cap
 }
 
 pub(super) fn run(command: &mut Command, timeout: Duration) -> Result<Output> {
+    run_inner(command, timeout, None)
+}
+
+fn run_inner(command: &mut Command, timeout: Duration, trace: Option<TracePipe>) -> Result<Output> {
     let _lock = SIGNAL_LOCK
         .lock()
         .map_err(|_| "process signal lock is poisoned")?;
@@ -141,6 +224,15 @@ pub(super) fn run(command: &mut Command, timeout: Duration) -> Result<Output> {
     let mut group = OwnedGroup(Some(pgid));
     let out = drain(child.stdout.take().ok_or("hook stdout unavailable")?);
     let err = drain(child.stderr.take().ok_or("hook stderr unavailable")?);
+    let trace = trace.map(|pipe| {
+        let guard = TraceFinished(pipe.finished.clone());
+        let input = TraceInput {
+            stream: pipe.input,
+            finished: pipe.finished,
+        };
+        drop(pipe.output);
+        (crate::trace::drain(input), guard)
+    });
     let started = Instant::now();
     let (status, timed_out, interrupted) = loop {
         let signal = INTERRUPTED.load(Ordering::Relaxed);
@@ -159,6 +251,9 @@ pub(super) fn run(command: &mut Command, timeout: Duration) -> Result<Output> {
     };
     // Stop ordinary background children in this owned process group.
     group.stop();
+    if let Some((_, guard)) = &trace {
+        guard.0.store(true, Ordering::Relaxed);
+    }
     // A process that deliberately leaves the group can retain a pipe. It must
     // not prevent the manager from returning after the owned group is stopped.
     let stdout = out
@@ -167,17 +262,24 @@ pub(super) fn run(command: &mut Command, timeout: Duration) -> Result<Output> {
     let stderr = err
         .recv_timeout(Duration::from_millis(200))
         .unwrap_or_default();
+    let trace = trace.map(|(receiver, _guard)| {
+        receiver
+            .recv_timeout(Duration::from_millis(200))
+            .unwrap_or_default()
+    });
     // Restore the manager's handlers before the final check: a later signal
     // then has its ordinary effect instead of being swallowed after success.
     drop(signals);
     let signal = interrupted.max(INTERRUPTED.load(Ordering::Relaxed));
     Ok(Output {
+        pid: pgid as u32,
         status,
         timed_out,
         interrupted: signal,
         wall_ms: wall_started.elapsed().as_secs_f64() * 1000.0,
         stdout,
         stderr,
+        trace,
     })
 }
 

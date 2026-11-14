@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess
 import sys
 
@@ -65,18 +66,15 @@ def prepare():
     subprocess.run([str(binary), 'prepare', str(config), '--state', str(state)],
                    capture_output=True, text=True, check=True)
     history = state / 'history'
-    if not history.exists():
-        original = Path.home() / '.bash_history'
-        data = b'git status --short\nprintf "hello from binit\\n"\n'
-        if original.is_file():
-            with original.open('rb') as stream:
-                size = original.stat().st_size
-                stream.seek(max(0, size - 512 * 1024))
-                candidate = stream.read(512 * 1024)
-            if candidate.strip():
-                data = candidate.split(b'\n', 1)[-1] if size > 512 * 1024 else candidate
-        history.write_bytes(data)
-        history.chmod(0o600)
+    try:
+        history_info = history.lstat()
+    except FileNotFoundError:
+        descriptor = os.open(history, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(b'git status --short\nprintf "hello from binit\\n"\n')
+    else:
+        if not stat.S_ISREG(history_info.st_mode) or history_info.st_nlink != 1:
+            raise ValueError('demo history must be a regular file with one link')
     mode = os.environ.get('BINIT_DEMO_EDITING', 'vi')
     if mode not in ('vi', 'emacs'):
         raise ValueError('BINIT_DEMO_EDITING must be vi or emacs')

@@ -40,6 +40,7 @@ def package(source, output):
     commit = git_read(source, ["rev-parse", "HEAD"], 128).decode().strip()
     entries = git_read(source, ["ls-tree", "-rz", "--full-tree", commit], 1024 * 1024).split(b"\0")
     files = {}
+    modes = {}
     total = 0
     for raw in entries:
         if not raw:
@@ -58,6 +59,7 @@ def package(source, output):
         if len(files) >= 128 or total > 2 * 1024 * 1024:
             raise ValueError("plugin exceeds the source package limits")
         files[name] = git_read(source, ["cat-file", "blob", object_id], size)
+        modes[name] = int(mode, 8) & 0o777
     manifest = tomllib.loads(files["plugin.toml"].decode())
     identifier = manifest["id"]
     if not identifier or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in identifier):
@@ -70,7 +72,7 @@ def package(source, output):
             for name, data in sorted(files.items()):
                 item = tarfile.TarInfo(name)
                 item.size = len(data)
-                item.mode = 0o644
+                item.mode = modes[name]
                 item.mtime = 0
                 archive.addfile(item, io.BytesIO(data))
     output.mkdir(parents=True, exist_ok=True)
@@ -80,6 +82,7 @@ def package(source, output):
         stream.write(data)
     receipt = {"id": identifier, "commit": commit, "artifact": artifact.name,
                "sha256": hashlib.sha256(data).hexdigest(),
+               "modes": dict(sorted(modes.items())),
                "files": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
     with artifact.with_suffix(".json").open("x") as stream:
         stream.write(json.dumps(receipt, indent=2) + "\n")

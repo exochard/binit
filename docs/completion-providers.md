@@ -4,8 +4,8 @@ An isolated provider runs outside the interactive Bash process. Typing cancels
 its request and keeps the input on the command line. Bash retains ordinary
 completion functions for providers that change calling-shell state.
 
-This interface is under qualification. The matching interpreter gates and
-production cancellation measurements are recorded separately in
+This interface is qualified on x86_64 with matching Bash 5.2 and 5.3.
+Correctness, cancellation measurements and preservation limits are recorded in
 [the qualification evidence](completion-provider-evidence.md).
 
 ## Register a provider

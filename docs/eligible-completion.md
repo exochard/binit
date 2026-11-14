@@ -122,7 +122,7 @@ python3 scripts/probe_eligible_completion.py \
   --work tmp/eligible-completion/run --output tmp/eligible-completion/receipt.json
 ```
 
-## Implementation boundary under qualification
+## Qualified implementation boundary
 
 The native request launches the Binit helper with an absolute executable
 path supplied by the runtime. The runtime registration API must supply that
@@ -161,13 +161,13 @@ generation. Existing Readline quoting and menu insertion handle the result.
 
 The implementation currently requires Linux `close_range` support and the
 GNU spawn close-from operation. Unsupported platforms fail closed. ARM64
-execution evidence remains open. The private helper and request dispatch
-are under qualification. The [registration API](completion-providers.md)
-now selects the runtime's manager path. Completion context travels through a
+execution evidence remains open. The [registration API](completion-providers.md)
+selects the runtime's manager path. Completion context travels through a
 bounded socketpair and becomes sealed anonymous stdin before provider exec;
-exported `COMP_*` fields are excluded. Full matching native/fallback gates
-and quantitative cancellation measurements must pass before this capability
-lands as a qualified product feature.
+exported `COMP_*` fields are excluded. Matching native/fallback gates and
+quantitative cancellation measurements pass on x86_64, with lifecycle and
+interactive preservation. The [qualification evidence](completion-provider-evidence.md)
+records the scopes, observer correction and retained single-run regressions.
 
 ## Measure the public API
 

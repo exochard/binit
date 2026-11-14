@@ -109,12 +109,142 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertTrue(payload['diagnostics'][0]['trace']['limit_reached'])
         self.assertFalse(payload['diagnostics'][0]['complete'])
 
+    def test_redirected_trace_arguments_do_not_enter_output_previews(self):
+        _, _, plan, state = self.prepare()
+        marker = 'private_redirected_trace_argument'
+        for redirect in ('unset BASH_XTRACEFD', 'BASH_XTRACEFD=1'):
+            with self.subTest(redirect=redirect):
+                (self.root / 'check.bash').write_text(
+                    f"PS4='+ '\n{redirect}\n: {marker}\n")
+                result = self.command(state, 'diagnose', str(plan), '--json')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(marker, result.stdout + result.stderr)
+                payload = json.loads(result.stdout)
+                for artifact in (state / 'diagnoses' / payload['run']).rglob('*'):
+                    if artifact.is_file() and artifact.name in (
+                            'result.json', 'progress.json', 'receipt.json',
+                            'diagnostic.json', 'namespace.bin'):
+                        self.assertNotIn(marker.encode(), artifact.read_bytes())
+
+    def test_namespace_oversized_fields_are_rejected_before_writing(self):
+        _, _, plan, state = self.prepare()
+        (self.root / 'check.bash').write_text(
+            "printf -v '__binit_reason[parent]' '%2048s' ''\n")
+        result = self.command(state, 'diagnose', str(plan), '--json')
+        self.assertNotEqual(result.returncode, 0)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload['diagnostics'][0]['namespace']['complete'])
+        for artifact in (state / 'diagnoses' / payload['run']).rglob('namespace.bin'):
+            self.assertLess(artifact.stat().st_size, 1024)
+
+    def test_candidate_checks_keep_their_output_previews(self):
+        _, config, plan, state = self.prepare()
+        (self.root / 'check.bash').write_text(
+            "printf public-stdout\nprintf public-stderr >&2\n")
+        prepared = self.command(state, 'candidate', 'prepare', str(config))
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        checked = self.command(state, 'candidate', 'check', str(plan))
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        candidate = json.loads((state / 'candidate.json').read_text())
+        receipt = json.loads((state / 'check-runs' / candidate['check']['id'] /
+                              'receipt.json').read_text())
+        self.assertIn('public-stdout', receipt['samples'][0]['stdout_preview'])
+        self.assertIn('public-stderr', receipt['samples'][0]['stderr_preview'])
+
+    def test_sample_receipts_account_for_both_sidecars(self):
+        _, _, plan, state = self.prepare()
+        plan.write_text(plan.read_text() + 'samples=2\n')
+        result = self.command(state, 'diagnose', str(plan), '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        samples = payload['receipt']['samples']
+        self.assertEqual(len(samples), 2)
+        for index, sample in enumerate(samples):
+            directory = state / 'diagnoses' / payload['run'] / 'samples' / f'{index:04d}'
+            self.assertEqual(sample['diagnostic']['bytes'],
+                             (directory / 'diagnostic.json').stat().st_size)
+            self.assertEqual(sample['diagnostic']['namespace_bytes'],
+                             (directory / 'namespace.bin').stat().st_size)
+            self.assertGreater(sample['diagnostic']['namespace_bytes'], 0)
+
+    def test_real_pty_completion_is_attributed_without_losing_shell_effects(self):
+        _, _, plan, state = self.prepare()
+        script = r'''export BINIT_PTY_PS4="$PS4" BINIT_PTY_BASH="$BASH"
+python3 - <<'PY'
+import os, pathlib, select, subprocess, time
+work = pathlib.Path(os.environ['BINIT_CHECK_WORK'])
+rc = work / 'pty.bash'
+rc.write_text("""PS1='DIAG_READY> '
+PROMPT_COMMAND=()
+HISTFILE=/dev/null
+fixture_pty_provider() { sleep .25; DIAG_PTY=changed; cd "$BINIT_CHECK_WORK"; COMPREPLY=(finished); }
+complete -F fixture_pty_provider diagcmd
+BASH_XTRACEFD=$__binit_trace_fd
+PS4=$BINIT_PTY_PS4
+__binit_check_phase=check
+set -x
+""")
+master, slave = os.openpty()
+child = subprocess.Popen([os.environ['BINIT_PTY_BASH'], '--noprofile',
+                          '--rcfile', str(rc), '-i'], stdin=slave, stdout=slave,
+                         stderr=slave, pass_fds=(int(os.environ['__binit_trace_fd']),),
+                         env=dict(os.environ, INPUTRC='/dev/null', TERM='dumb'))
+os.close(slave)
+pending = bytearray()
+def expect(value):
+    end = time.monotonic() + 2
+    while value not in pending:
+        assert time.monotonic() < end, 'PTY did not reach the expected state'
+        if select.select([master], [], [], .02)[0]:
+            pending.extend(os.read(master, 8192))
+    del pending[:pending.index(value) + len(value)]
+try:
+    expect(b'DIAG_READY> ')
+    os.write(master, b'diagcmd \t')
+    expect(b'finished')
+    os.write(master, b'\x15printf "EFFECT:%s:%s\\n" "$DIAG_PTY" "${PWD##*/}"\n')
+    expect(b'EFFECT:changed:work')
+    expect(b'DIAG_READY> ')
+    os.write(master, b'exit\n')
+    assert child.wait(timeout=2) == 0
+finally:
+    if child.poll() is None:
+        child.terminate()
+        child.wait(timeout=2)
+    os.close(master)
+PY
+'''
+        (self.root / 'check.bash').write_text(script)
+        result = self.command(state, 'diagnose', str(plan), '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)['diagnostics'][0]
+        self.assertTrue(report['complete'])
+        causes = [cause for cause in report['trace']['causes']
+                  if cause['function'] == 'fixture_pty_provider' and cause['process'] > 0]
+        self.assertGreaterEqual(sum(cause['exclusive_us'] for cause in causes), 240000)
+
     def test_fixture_disabling_trace_is_reported_incomplete(self):
         _, _, plan, state = self.prepare()
         (self.root / 'check.bash').write_text('set +x\n: silent\n')
         result = self.command(state, 'diagnose', str(plan), '--json')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(json.loads(result.stdout)['diagnostics'][0]['complete'])
+
+    def test_fixture_restoring_trace_does_not_hide_unobserved_work(self):
+        _, _, plan, state = self.prepare()
+        for disable, restore in [('set +x', 'set -x'), ('set -', 'set -x'),
+                                 ('declare PS4=x', 'PS4=$saved'),
+                                 ('printf -v PS4 x', 'PS4=$saved')]:
+            with self.subTest(disable=disable):
+                (self.root / 'check.bash').write_text(
+                    f'saved=$PS4\n{disable}\nsleep .25\n{restore}\n: restored\n')
+                result = self.command(state, 'diagnose', str(plan), '--json')
+                self.assertNotEqual(result.returncode, 0)
+                report = json.loads(result.stdout)['diagnostics'][0]
+                self.assertFalse(report['complete'])
+                phase = next(p for p in report['trace']['phases']
+                             if p['process'] == 0 and p['name'] == 'check')
+                self.assertGreaterEqual(phase['unattributed_us'], 200000)
 
     def test_timeout_stops_owned_background_work_and_preserves_selection(self):
         _, _, plan, state = self.prepare()

@@ -348,7 +348,13 @@ fn run_sample(
                 root.join("namespace.bin")
             } else {
                 PathBuf::new()
-            });
+            })
+            .arg(
+                report_budget
+                    .saturating_sub(4096)
+                    .min(16 * 1024 * 1024)
+                    .to_string(),
+            );
         let output = if *diagnostic {
             crate::process::run_with_trace(command, Duration::from_millis(spec.timeout_ms))?
         } else {
@@ -558,10 +564,10 @@ pub(super) fn run(
         &serde_json::to_vec_pretty(&receipt)?,
     )?;
     let execute = (|| -> Result<()> {
-        if let Some(config) = &subject.config {
-            if runtime::file_identity(&config.path)? != *config {
-                return Err("candidate configuration changed; prepare it again".into());
-            }
+        if let Some(config) = &subject.config
+            && runtime::file_identity(&config.path)? != *config
+        {
+            return Err("candidate configuration changed; prepare it again".into());
         }
         let inputs = bind(plan)?;
         let lock = verify_generation(state, &subject.generation)?;
@@ -609,7 +615,9 @@ pub(super) fn run(
                     &serde_json::to_vec_pretty(&result)?,
                 )?;
                 if let Some(report) = &result.diagnostic {
-                    samples.report_budget = samples.report_budget.saturating_sub(report.bytes);
+                    samples.report_budget = samples
+                        .report_budget
+                        .saturating_sub(report.bytes + report.namespace_bytes);
                 }
                 receipt.samples.push(result);
                 if interrupted != 0 {

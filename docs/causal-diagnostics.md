@@ -32,17 +32,24 @@ effects and the cancelled input line.
 Only the explicit fixture child enables xtrace. Normal shell startup and
 completion acquire no tracing wrappers or global DEBUG/RETURN traps. The
 collector receives a dedicated inherited descriptor. It retains metadata
-before the final tab and immediately discards the command text after it.
+before the final tab. A bounded streaming classifier matches fixed tracing
+control words after that tab, discarding each command byte without retaining
+argument text. Observed xtrace disabling, PS4 or BASH_XTRACEFD changes and
+`exec` make the capture incomplete; their following intervals stay opaque.
+`exec` is conservative because its redirections can close the trace descriptor.
 Never write a raw xtrace stream to disk.
 
 The PS4 prefix starts with `+__BINIT_DIAG__` and has these tab-separated fields:
 
 ```text
-timestamp_us pid subshell_depth function_depth function source line phase
+timestamp_us pid subshell_depth source_depth function source line phase
 ```
 
 Use `${EPOCHREALTIME/./}`, `${BASHPID}`, `${BASH_SUBSHELL}` and
-`${#FUNCNAME[@]}`. Emit only `${FUNCNAME[0]-}`; joining the stack would depend
+`${#BASH_SOURCE[@]}`. Source depth includes sourced files even outside a
+function. Bash leaves `FUNCNAME` empty there, then exposes the pending source
+frames when a function starts; its length cannot measure contiguous ancestry.
+Emit only `${FUNCNAME[0]-}`; joining the stack would depend
 on the fixture's IFS. `source` comes from `${BASH_SOURCE[0]-}`. `phase` is
 `setup`, `init`, `check` or `metadata`. The command text follows the final tab.
 Repeated leading plus signs are allowed. None of these fields contains
@@ -53,10 +60,14 @@ Bound each sample to 8,192 retained records, 4 KiB per metadata prefix,
 so a writer cannot block the manager. Mark the capture incomplete on limits,
 malformed prefixes or read failure. Partial evidence remains inspectable.
 Each diagnostic sidecar is at most 16 MiB; retained sidecars total at most
-128 MiB per run. Exceeding either budget fails the diagnostic run.
+128 MiB per run, including namespace metadata. The namespace writer checks
+field lengths before writing and reserves room for its header and trailer.
+Exceeding either budget fails the diagnostic run.
 
-Use the existing owned-process timeout and interruption handling. Keep
-unmodified stdout/stderr capture separate. Only the dedicated writer's
+Use the existing owned-process timeout and interruption handling. Drain
+stdout/stderr without retaining diagnostic previews: a fixture can redirect
+raw xtrace onto either stream. Ordinary candidate checks retain their output
+previews. Only the dedicated writer's
 close-on-exec flag is cleared in the child; do not overwrite an arbitrary
 descriptor that might belong to process launch machinery.
 
@@ -80,8 +91,13 @@ ownership keys, without definition bodies. Report a declared-command conflict
 with its blocked plugin and the known existing owner; use unknown when no
 owner is established. Do not infer every possible namespace conflict.
 
-An interrupted shell or one that replaces tracing control may leave incomplete
-metadata. Return failure and retain that evidence. Trusted fixtures have the
+An interrupted shell or an observed tracing-control change leaves incomplete
+evidence. Return failure and retain that evidence. A final-state check alone
+cannot prove uninterrupted tracing, and the fixed-word classifier cannot
+establish continuity against arbitrary shell code or descriptor manipulation.
+The attribution contract requires reviewed fixtures that preserve the tracing
+channel; completeness describes the observed protocol under that assumption.
+Trusted fixtures have the
 user's authority; this is not a security sandbox or a hostile-code attestation.
 
 ## Verification frozen before implementation

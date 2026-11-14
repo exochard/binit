@@ -163,7 +163,10 @@ impl Drop for OwnedGroup {
     }
 }
 
-fn drain(mut input: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Capture> {
+fn drain(
+    mut input: impl Read + Send + 'static,
+    limit: usize,
+) -> std::sync::mpsc::Receiver<Capture> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut output = Vec::new();
@@ -178,7 +181,7 @@ fn drain(mut input: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Cap
             if n == 0 {
                 break true;
             }
-            let remaining = OUTPUT_LIMIT.saturating_sub(output.len());
+            let remaining = limit.saturating_sub(output.len());
             truncated |= n > remaining;
             output.extend_from_slice(&buf[..n.min(remaining)]);
         };
@@ -222,8 +225,17 @@ fn run_inner(command: &mut Command, timeout: Duration, trace: Option<TracePipe>)
     let mut child = command.spawn()?;
     let pgid = child.id() as libc::pid_t;
     let mut group = OwnedGroup(Some(pgid));
-    let out = drain(child.stdout.take().ok_or("hook stdout unavailable")?);
-    let err = drain(child.stderr.take().ok_or("hook stderr unavailable")?);
+    // A fixture can redirect xtrace onto either stream. Diagnostic runs drain
+    // them without retaining previews, even when the trace channel is lost.
+    let output_limit = if trace.is_some() { 0 } else { OUTPUT_LIMIT };
+    let out = drain(
+        child.stdout.take().ok_or("hook stdout unavailable")?,
+        output_limit,
+    );
+    let err = drain(
+        child.stderr.take().ok_or("hook stderr unavailable")?,
+        output_limit,
+    );
     let trace = trace.map(|pipe| {
         let guard = TraceFinished(pipe.finished.clone());
         let input = TraceInput {
@@ -295,7 +307,7 @@ mod tests {
                 Err(std::io::Error::other("capture failed"))
             }
         }
-        let capture = drain(BrokenPipe)
+        let capture = drain(BrokenPipe, OUTPUT_LIMIT)
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
         assert!(!capture.complete);

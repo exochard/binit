@@ -19,6 +19,134 @@ struct Record {
     source: String,
     line: u32,
     phase: String,
+    control_change: bool,
+}
+
+// Match only fixed control words while discarding command bytes. No argument
+// text or argument-derived identifier survives this streaming classifier.
+#[derive(Default)]
+struct ControlScan {
+    mode: u8,
+    length: usize,
+    matches: u32,
+    plus: bool,
+    minus: bool,
+    has_x: bool,
+    changed: bool,
+}
+
+impl ControlScan {
+    const WORDS: [&'static [u8]; 21] = [
+        b"set",
+        b"builtin",
+        b"command",
+        b"+o",
+        b"xtrace",
+        b"--",
+        b"unset",
+        b"PS4",
+        b"BASH_XTRACEFD",
+        b"exec",
+        b"-p",
+        b"declare",
+        b"local",
+        b"typeset",
+        b"readonly",
+        b"export",
+        b"printf",
+        b"read",
+        b"-v",
+        b"-",
+        b"-o",
+    ];
+
+    fn byte(&mut self, byte: u8) {
+        if self.mode == 4 || self.changed {
+            return;
+        }
+        if byte.is_ascii_whitespace() {
+            self.end_word();
+            return;
+        }
+        if self.length == 0 {
+            if self.mode == 3 && matches!(byte, b'\'' | b'"') {
+                return;
+            }
+            self.matches = (1 << Self::WORDS.len()) - 1;
+            self.plus = byte == b'+';
+            self.minus = byte == b'-';
+            self.has_x = false;
+        }
+        if matches!(self.mode, 0 | 3) && byte == b'=' && (self.word(7) || self.word(8)) {
+            self.changed = true;
+        }
+        for (i, word) in Self::WORDS.iter().enumerate() {
+            if word.get(self.length) != Some(&byte) {
+                self.matches &= !(1 << i);
+            }
+        }
+        self.has_x |= byte == b'x';
+        self.length = self.length.saturating_add(1);
+    }
+
+    fn word(&self, index: usize) -> bool {
+        self.matches & (1 << index) != 0 && self.length == Self::WORDS[index].len()
+    }
+
+    fn end_word(&mut self) {
+        if self.length == 0 {
+            return;
+        }
+        match self.mode {
+            0 => {
+                if self.word(0) {
+                    self.mode = 1;
+                } else if self.word(6) || (11..=15).any(|index| self.word(index)) || self.word(17) {
+                    self.mode = 3;
+                } else if self.word(16) {
+                    self.mode = 5;
+                } else if self.word(9) {
+                    self.changed = true;
+                    self.mode = 4;
+                } else if !(self.word(1) || self.word(2) || self.word(5) || self.word(10)) {
+                    self.mode = 4;
+                }
+            }
+            1 => {
+                if self.word(5) {
+                    self.mode = 4;
+                } else if self.word(19) {
+                    self.changed = true;
+                    self.mode = 4;
+                } else if self.word(20) {
+                    self.mode = 7;
+                } else if self.word(3) {
+                    self.mode = 2;
+                } else if self.plus && self.has_x {
+                    self.changed = true;
+                } else if !self.plus && !self.minus {
+                    self.mode = 4;
+                }
+            }
+            2 => {
+                self.changed |= self.word(4);
+                self.mode = 1;
+            }
+            3 => {
+                self.changed |= self.word(7) || self.word(8);
+            }
+            5 => {
+                self.mode = if self.word(18) { 6 } else { 4 };
+            }
+            6 => {
+                self.changed |= self.word(7) || self.word(8);
+                self.mode = 4;
+            }
+            7 => self.mode = 1,
+            _ => {}
+        }
+        self.length = 0;
+    }
 }
 
 #[derive(Debug, Default)]
@@ -84,6 +212,8 @@ fn capture(mut input: impl Read) -> Capture {
     let mut discard = false;
     let mut overflow = false;
     let mut traced_line = false;
+    let mut record_index = None;
+    let mut control = ControlScan::default();
     let mut bytes = [0u8; 8192];
     loop {
         let n = match input.read(&mut bytes) {
@@ -103,6 +233,14 @@ fn capture(mut input: impl Read) -> Capture {
                 continue;
             }
             if byte == b'\n' {
+                control.end_word();
+                if let Some(index) = record_index {
+                    let record: &mut Record = &mut result.records[index];
+                    if control.changed && record.phase != "metadata" {
+                        record.control_change = true;
+                        result.complete = false;
+                    }
+                }
                 if !discard && (looks_like_marker(&prefix) || overflow) {
                     result.invalid_records += 1;
                     result.complete = false;
@@ -112,9 +250,14 @@ fn capture(mut input: impl Read) -> Capture {
                 discard = false;
                 overflow = false;
                 traced_line = false;
+                record_index = None;
+                control = ControlScan::default();
                 continue;
             }
             if discard {
+                if record_index.is_some() {
+                    control.byte(byte);
+                }
                 continue;
             }
             if byte == b'\t' {
@@ -125,6 +268,7 @@ fn capture(mut input: impl Read) -> Capture {
                     traced_line = true;
                     match parse_record(&prefix) {
                         Some(record) if result.records.len() < MAX_RECORDS => {
+                            record_index = Some(result.records.len());
                             result.records.push(record)
                         }
                         Some(_) => {
@@ -211,6 +355,7 @@ fn parse_record(prefix: &[u8]) -> Option<Record> {
         source,
         line,
         phase: phase.to_owned(),
+        control_change: false,
     })
 }
 
@@ -223,7 +368,19 @@ struct Frame {
 }
 
 fn normalized(path: &str, generation: &Path, inputs: &Path) -> (String, Option<String>) {
-    let source = Path::new(path);
+    let mut cleaned = std::path::PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            std::path::Component::ParentDir => {
+                if !cleaned.pop() {
+                    return (path.to_owned(), None);
+                }
+            }
+            std::path::Component::CurDir => {}
+            other => cleaned.push(other.as_os_str()),
+        }
+    }
+    let source = cleaned.as_path();
     if let Ok(relative) = source.strip_prefix(generation) {
         let mut parts = relative.components();
         let plugin = match (parts.next(), parts.next()) {
@@ -252,8 +409,17 @@ pub(super) fn analyze(capture: Capture, root_pid: u32, generation: &Path, inputs
         processes: 0,
         phases: Vec::new(),
         causes: Vec::new(),
-        issues: if capture.complete { Vec::new() } else { vec!["trace capture ended incomplete".to_owned()] },
+        issues: if capture.complete {
+            Vec::new()
+        } else {
+            vec!["trace capture ended incomplete".to_owned()]
+        },
     };
+    if capture.records.iter().any(|record| record.control_change) {
+        report
+            .issues
+            .push("tracing control changed; the following interval is unobserved".to_owned());
+    }
     let mut by_pid: BTreeMap<u32, Vec<&Record>> = BTreeMap::new();
     for record in &capture.records {
         by_pid.entry(record.pid).or_default().push(record);
@@ -297,6 +463,7 @@ pub(super) fn analyze(capture: Capture, root_pid: u32, generation: &Path, inputs
                 phase.0 = phase.0.saturating_add(elapsed);
                 let invalid_jump = stack.last().is_some_and(|f| record.depth > f.depth + 1);
                 let opaque = invalid_jump
+                    || prev.control_change
                     || (pid == root_pid
                         && child_windows.iter().any(|&(start, end)| {
                             start <= record.timestamp && end >= prev.timestamp
@@ -325,15 +492,18 @@ pub(super) fn analyze(capture: Capture, root_pid: u32, generation: &Path, inputs
                 stack.pop();
             }
             let new_entry = stack.last().is_none_or(|f| f.depth < record.depth);
-            if let Some(last) = stack.last() {
-                if record.depth > last.depth + 1 {
-                    report.complete = false;
-                    let (source, _) = normalized(&record.source, generation, inputs);
-                    report.issues.push(format!("function depth jumped from {} to {} at {}:{} ({})", last.depth, record.depth, source, record.line, record.function));
-                    stack.clear();
-                    previous = Some(record);
-                    continue;
-                }
+            if let Some(last) = stack.last()
+                && record.depth > last.depth + 1
+            {
+                report.complete = false;
+                let (source, _) = normalized(&record.source, generation, inputs);
+                report.issues.push(format!(
+                    "function depth jumped from {} to {} at {}:{} ({})",
+                    last.depth, record.depth, source, record.line, record.function
+                ));
+                stack.clear();
+                previous = Some(record);
+                continue;
             }
             if new_entry {
                 stack.push(Frame {
@@ -411,6 +581,72 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    #[test]
+    fn restored_tracing_controls_leave_opaque_intervals() {
+        for command in [
+            "set +x",
+            "set -",
+            "builtin set +vx",
+            "command set +o xtrace",
+            "PS4=private-value",
+            "BASH_XTRACEFD=7",
+            "unset PS4",
+            "builtin exec",
+            "declare PS4=private-value",
+            "declare 'PS4=private value'",
+            "local BASH_XTRACEFD=7",
+            "printf -v PS4 private-value",
+            "read -r PS4",
+        ] {
+            let result = report(
+                &[
+                    line(0, 1, 0, "", "check", command),
+                    line(250000, 1, 0, "", "check", ": restored"),
+                ]
+                .concat(),
+            );
+            assert!(!result.complete, "{command}");
+            assert_eq!(result.phases[0].unattributed_us, 250000, "{command}");
+            assert_eq!(result.phases[0].attributed_us, 0);
+        }
+        for command in [
+            "set -e",
+            "set -- +x",
+            "set positional +x",
+            "set -o errexit positional +x",
+            ": 'set +x'",
+            "unset ordinary",
+            "set +o",
+        ] {
+            assert!(
+                report(&line(0, 1, 0, "", "check", command)).complete,
+                "{command}"
+            );
+        }
+        assert!(report(&line(0, 1, 0, "", "metadata", "set +x")).complete);
+    }
+
+    #[test]
+    fn source_ownership_resolves_parent_components() {
+        assert_eq!(
+            normalized(
+                "/g/plugins/p/../q/init.bash",
+                Path::new("/g"),
+                Path::new("/i")
+            ),
+            ("plugins/q/init.bash".to_owned(), Some("q".to_owned()))
+        );
+        assert_eq!(
+            normalized(
+                "/g/plugins/p/../../../outside.bash",
+                Path::new("/g"),
+                Path::new("/i")
+            )
+            .1,
+            None
+        );
+    }
+
     fn line(t: u64, pid: u32, depth: usize, function: &str, phase: &str, command: &str) -> String {
         format!(
             "+__BINIT_DIAG__\t{t}\t{pid}\t0\t{depth}\t{function}\t/g/plugins/p/main.bash\t3\t{phase}\t{command}\n"
@@ -423,6 +659,46 @@ mod tests {
             Path::new("/g"),
             Path::new("/i"),
         )
+    }
+    #[test]
+    fn bash_source_ancestry_is_contiguous() {
+        let directory = tempfile::tempdir().unwrap();
+        let inner = directory.path().join("inner.bash");
+        let outer = directory.path().join("outer.bash");
+        std::fs::write(&inner, "leaf() { : leaf; }; leaf\n").unwrap();
+        std::fs::write(&outer, "source \"$1\"\n: returned\n").unwrap();
+        // Use the production prefix so the regression crosses the Bash/parser seam.
+        let prefix = include_str!("../runtime/check.bash")
+            .lines()
+            .nth(1)
+            .unwrap();
+        let script = format!(
+            "{prefix}\nPS4=$__binit_diag_expected_ps4\nset -x\nsource \"$1\" \"$2\"\n: done\n"
+        );
+        let output = std::process::Command::new(
+            std::env::var("BINIT_BASH").unwrap_or_else(|_| "bash".to_owned()),
+        )
+        .args(["--noprofile", "--norc", "-c", &script, "fixture"])
+        .arg(&outer)
+        .arg(&inner)
+        .env_remove("BASH_ENV")
+        .output()
+        .unwrap();
+        assert!(output.status.success());
+        let captured = capture(Cursor::new(output.stderr));
+        assert!(captured.complete);
+        let pid = captured.records[0].pid;
+        let result = analyze(captured, pid, directory.path(), directory.path());
+        assert!(result.complete, "{:?}", result.issues);
+        assert!(result.causes.iter().any(|cause| cause.function == "leaf"));
+        assert_eq!(
+            result
+                .causes
+                .iter()
+                .map(|cause| cause.exclusive_us)
+                .sum::<u64>(),
+            result.phases.iter().map(|phase| phase.wall_us).sum::<u64>()
+        );
     }
     #[test]
     fn discards_arguments_and_continuations() {

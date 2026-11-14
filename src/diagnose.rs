@@ -3,12 +3,92 @@ use super::*;
 pub(super) const MAX_RUN_REPORT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_REPORT_BYTES: u64 = 16 * 1024 * 1024;
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn namespace_writer_respects_remaining_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let namespace = root.path().join("namespace.bin");
+        let wrapper = include_str!("../runtime/check.bash");
+        let prefix = wrapper.split("builtin printf 'setup\\n'").next().unwrap();
+        let script = format!(
+            "exec 3>/dev/null\n__binit_trace_fd=3\n{prefix}\n\
+            declare -a __binit_ids=()\n\
+            declare -A __binit_state=() __binit_reason=() __binit_owned_functions=()\n\
+            for ((i=0;i<20;i++)); do __binit_ids+=(p$i); __binit_state[p$i]=loaded; __binit_reason[p$i]=reason; done\n\
+            __binit_diag_emit\n"
+        );
+        for budget in [0, 127, 128, 256, 4096] {
+            let result = std::process::Command::new(
+                std::env::var("BINIT_BASH").unwrap_or_else(|_| "bash".to_owned()),
+            )
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                &script,
+                "fixture",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ])
+            .arg(&namespace)
+            .arg(budget.to_string())
+            .env_remove("BASH_ENV")
+            .output()
+            .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(std::fs::metadata(&namespace).unwrap().len() <= budget);
+            assert_eq!(super::namespace(root.path()).complete, budget == 4096);
+        }
+    }
+
+    #[test]
+    fn sidecar_budget_includes_namespace_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let data = b"BINIT_DIAG_META\x001\x001\x00\x00end\x000\x000\x001\x00";
+        std::fs::write(root.path().join("namespace.bin"), data).unwrap();
+        let trace = crate::trace::analyze(Default::default(), 1, root.path(), root.path());
+        let summary = super::save_report(root.path(), trace, 4096).unwrap();
+        let report_bytes = std::fs::metadata(root.path().join("diagnostic.json"))
+            .unwrap()
+            .len();
+        assert_eq!(summary.bytes, report_bytes);
+        assert_eq!(summary.namespace_bytes, data.len() as u64);
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(second.path().join("namespace.bin"), data).unwrap();
+        let trace = crate::trace::analyze(Default::default(), 1, second.path(), second.path());
+        assert!(super::save_report(second.path(), trace, data.len() as u64 + 16).is_err());
+        assert!(!second.path().join("diagnostic.json").exists());
+    }
+
+    #[test]
+    fn namespace_requires_terminal_delimiter() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("namespace.bin");
+        let valid = b"BINIT_DIAG_META\x001\x001\x00\x00end\x000\x000\x001\x00";
+        std::fs::write(&path, valid).unwrap();
+        assert!(super::namespace(root.path()).complete);
+        std::fs::write(&path, &valid[..valid.len() - 1]).unwrap();
+        assert!(!super::namespace(root.path()).complete);
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Summary {
     pub complete: bool,
     pub sha256: String,
     pub bytes: u64,
+    pub namespace_bytes: u64,
 }
 
 #[derive(Default, Serialize)]
@@ -46,9 +126,12 @@ fn valid_callback(name: &str) -> bool {
 
 fn namespace(path: &Path) -> Namespace {
     let mut result = Namespace::default();
-    let Ok(bytes) = read_regular(&path.join("namespace.bin")) else {
+    let Ok(bytes) = read_regular_limit(&path.join("namespace.bin"), MAX_REPORT_BYTES) else {
         return result;
     };
+    if !bytes.ends_with(b"\0") {
+        return result;
+    }
     let Ok(text) = std::str::from_utf8(&bytes) else {
         return result;
     };
@@ -59,7 +142,7 @@ fn namespace(path: &Path) -> Namespace {
     }
     let mut count = 0;
     let mut ended = false;
-    for row in fields[4..].chunks_exact(4) {
+    for row in fields[4..].as_chunks::<4>().0 {
         if ended {
             return Namespace::default();
         }
@@ -98,15 +181,15 @@ fn namespace(path: &Path) -> Namespace {
     }
     result.complete = ended;
     for state in &result.states {
-        if let Some(symbol) = state.reason.strip_prefix("command already defined: ") {
-            if valid_callback(symbol) {
-                result.conflicts.push(Conflict {
-                    plugin: state.plugin.clone(),
-                    symbol: symbol.into(),
-                    existing_owner: result.functions.get(symbol).cloned(),
-                    reason: state.reason.clone(),
-                });
-            }
+        if let Some(symbol) = state.reason.strip_prefix("command already defined: ")
+            && valid_callback(symbol)
+        {
+            result.conflicts.push(Conflict {
+                plugin: state.plugin.clone(),
+                symbol: symbol.into(),
+                existing_owner: result.functions.get(symbol).cloned(),
+                reason: state.reason.clone(),
+            });
         }
     }
     result
@@ -117,9 +200,15 @@ pub(super) fn save_report(
     mut trace: crate::trace::Report,
     budget: u64,
 ) -> Result<Summary> {
+    let namespace_bytes = fs::metadata(root.join("namespace.bin"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if namespace_bytes > MAX_REPORT_BYTES || namespace_bytes > budget {
+        return Err("diagnostic namespace exceeded its retained-byte budget".into());
+    }
     let namespace = namespace(root);
     let mut complete = trace.complete && namespace.complete;
-    let limit = budget.min(MAX_REPORT_BYTES);
+    let limit = budget.saturating_sub(namespace_bytes).min(MAX_REPORT_BYTES);
     let mut value = serde_json::json!({
         "schema": 1,
         "complete": complete,
@@ -142,6 +231,7 @@ pub(super) fn save_report(
         complete,
         sha256: hash(&bytes),
         bytes: bytes.len() as u64,
+        namespace_bytes,
     })
 }
 

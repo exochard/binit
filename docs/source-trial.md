@@ -52,13 +52,14 @@ with the expected value supplied by the sender. Then verify the archives
 and extract the bootstrap verifier from its fixed path:
 
 ```bash
-cd /path/to/source-bundle
-sha256sum sources.json
-python3 -c 'import json; r=json.load(open("sources.json")); [print(p["sha256"]+"  "+p["artifact"]) for p in [r["core"], *r["plugins"]]]' | sha256sum --check
-core_archive=$(python3 -c 'import json; print(json.load(open("sources.json"))["core"]["artifact"])')
-mkdir bootstrap
-tar -xzf "$core_archive" -C bootstrap scripts/unpack_sources.py
-python3 bootstrap/scripts/unpack_sources.py . trial
+cd /path/to/source-bundle &&
+read -r -p 'Expected sources.json SHA256: ' source_manifest_sha &&
+printf '%s  sources.json\n' "$source_manifest_sha" | sha256sum --check &&
+python3 -c 'import json; r=json.load(open("sources.json")); [print(p["sha256"]+"  "+p["artifact"]) for p in [r["core"], *r["plugins"]]]' | sha256sum --check &&
+core_archive=$(python3 -c 'import json; print(json.load(open("sources.json"))["core"]["artifact"])') &&
+mkdir bootstrap &&
+tar -xzf "$core_archive" -C bootstrap scripts/unpack_sources.py &&
+python3 bootstrap/scripts/unpack_sources.py . trial &&
 cd trial/core
 ```
 
@@ -77,17 +78,17 @@ qualification recipe acquires Rust 1.99.1 explicitly into a local tools
 directory. From the received core source tree on x86_64:
 
 ```bash
-mkdir -p tmp/tools
+mkdir -p tmp/tools &&
 curl --fail --location --output tmp/tools/rust.tar.xz \
-  https://static.rust-lang.org/dist/rust-1.99.1-x86_64-unknown-linux-gnu.tar.xz
+  https://static.rust-lang.org/dist/rust-1.99.1-x86_64-unknown-linux-gnu.tar.xz &&
 printf '%s  %s\n' \
   231fcae47ee950621374725b5fc3b5441d2fbda2955ac45dd7dc816d8876cfe7 \
-  tmp/tools/rust.tar.xz | sha256sum --check
-tar -xf tmp/tools/rust.tar.xz -C tmp/tools
+  tmp/tools/rust.tar.xz | sha256sum --check &&
+tar -xf tmp/tools/rust.tar.xz -C tmp/tools &&
 bash tmp/tools/rust-1.99.1-x86_64-unknown-linux-gnu/install.sh \
   --prefix="$PWD/tmp/tools/rust" --disable-ldconfig \
-  --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
-export PATH="$PWD/tmp/tools/rust/bin:$PWD/tmp/tools/tree-sitter/bin:$PATH"
+  --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu &&
+export PATH="$PWD/tmp/tools/rust/bin:$PWD/tmp/tools/tree-sitter/bin:$PATH" &&
 cargo install --locked tree-sitter-cli --version 0.26.9 \
   --root "$PWD/tmp/tools/tree-sitter" --target-dir "$PWD/tmp/tree-sitter-build"
 ```

@@ -16,6 +16,13 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def input_display(screen):
+    rows, cursor = screen.display, screen.cursor
+    start = max((index for index in range(cursor.y + 1)
+                 if 'binit ' in rows[index] and '$ ' in rows[index]), default=cursor.y)
+    return ''.join(row.rstrip() for row in rows[start:cursor.y + 1])
+
+
 def check(trial):
     core, plugins = trial / 'core', trial / 'plugins'
     private = core / 'tmp/source-trial-check'
@@ -91,9 +98,9 @@ def check(trial):
             require('history -s "printf source-trial-suggestion"', 'suggestion history entry')
             capture = private / 'input.txt'
             require('__source_trial_capture() { printf "%s" "$READLINE_LINE" > ' + shlex.quote(str(capture)) +
-                    '; }; bind -m vi-insertion -x ' + shlex.quote('"\\C-x\\C-g":__source_trial_capture'), 'input capture binding')
+                    '; }; bind -m vi-insert -x ' + shlex.quote('"\\C-x\\C-g":__source_trial_capture'), 'input capture binding')
             shell.settled(b'printf source-trial-s')
-            shell.until(lambda: 'printf source-trial-suggestion' in shell.screen.display[shell.screen.cursor.y], seconds=5)
+            shell.until(lambda: 'printf source-trial-suggestion' in input_display(shell.screen), seconds=5)
             frames.append(dict(launch=launch, state='history suggestion', lines=shell.screen.display))
             shell.settled(b'\x18\x07')
             if capture.read_text() != 'printf source-trial-s':
@@ -104,9 +111,12 @@ def check(trial):
                 raise RuntimeError('visible suggestion could not be accepted')
             results.append(dict(launch=launch, check='visible suggestion preserves input until accepted', passed=True))
             shell.cancel()
-            require('binit trust examples/project && cd examples/project && [[ $PROJECT_MODE == development ]] && '
+            require('binit trust examples/project && cd examples/project', 'enter trusted project')
+            require('[[ $PROJECT_MODE == development ]] && '
                     '[[ $PROJECT_MESSAGE == ' + shlex.quote('Literal data: $(printf this-is-not-executed)') + ' ]]', 'trusted project variables remain literal')
-            require('cd ../.. && [[ ! ${PROJECT_MODE+x} ]] && j project && [[ $PWD == */examples/project ]] && cd ../..', 'project restoration and directory jump')
+            require('cd ../..', 'leave trusted project')
+            require('[[ ! ${PROJECT_MODE+x} ]]', 'project variables restored')
+            require('j amples/project && [[ $PWD == */examples/project ]] && cd ../..', 'ranked directory jump')
             require('git init -q --initial-branch=trial-branch tmp/source-trial-check/repo && cd tmp/source-trial-check/repo', 'Git prompt fixture')
             for _ in range(4):
                 shell.command('sleep .6')

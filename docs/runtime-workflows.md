@@ -4,8 +4,9 @@ Freeze two distinct operations against the preserved `c80d4df` executable:
 on-demand Git shortcut activation, and accepted commands while a watched
 toolchain becomes ready. The [contract](../benchmarks/runtime-workflows.json)
 sets their effects and measurement boundaries before production treatment.
-Its validation driver remains to be implemented and frozen. Neither target
-has a qualified improvement yet.
+The [validation receipt](../benchmarks/results/runtime-workflow-driver-x86_64.json)
+freezes the working driver and records its independent review. Neither target
+has a qualified improvement yet. Production treatment has not started.
 
 Untreated discovery found 22–28 ms first use with 64 aliases and 64 functions,
 compared with about 1.3 ms for the functions alone. Twenty explicit dispatches
@@ -35,3 +36,31 @@ metadata remains bounded by the existing 128-path limit. Native and fallback
 behavior must pass matching Bash 5.2/5.3 checks; the
 [milestone](modern-binit-milestone.md) retains its broader correctness and
 independent-review requirements.
+
+Run `scripts/bench_runtime_workflows.py` with explicit candidate, reference,
+interpreter, pinned Git source, fresh work directory and output paths. Work
+and raw receipts belong under `tmp/`. The driver checks exact definitions
+against a direct-source control and retains each failed experiment.
+
+Watch commands retain their exact mutation schedule. A prompt hook placed
+after Binit dispatch reports source count at every command boundary; command
+11 must report one before command 12 is submitted. A separate direct-source
+control checks the same arguments and caller effects. Full caller-state
+audits run outside the 20-command interval. Every paired observation requires
+matching normalized fixture identities, followed by a run-end input audit.
+
+Eight focused tests pass in each native and fallback Bash 5.2/5.3 configuration.
+Six deliberate behavior faults are rejected. The second identical-binary
+control contains 160 checked observations across two complete 20-pair runs.
+Its median and p95 comparisons remain within 5% in each run. The first control
+retains single-run increases, including the watch p95 increase; none repeat
+in the same field.
+
+The full control used the retained driver version in the receipt. The final
+version adds a read-only native-status check before timing and retains closing
+terminal output afterward. Independent AST comparison confirms unchanged
+timed actions, fixtures and golden controls. A short final-version control
+passes all four observations. Primary workload eligibility requires active
+native completion on Bash 5.3; fallback checks establish behavior separately.
+The driver's numerical target flag covers these workloads only. Full product
+qualification still requires the milestone's preservation and review gates.

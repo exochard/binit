@@ -169,9 +169,9 @@ static int record_aliases(WORD_LIST *args)
     char *snapshot = NULL;
     size_t length = 0;
     FILE *stream = open_memstream(&snapshot, &length);
-    if (!stream) { free(values); return EXECUTION_FAILURE; }
+    if (!stream) { free((void *)values); return EXECUTION_FAILURE; }
     for (size_t i = 0; values[i]; ++i) print_alias_definition(stream, values[i]);
-    if (fclose(stream) != 0) { free(snapshot); free(values); return EXECUTION_FAILURE; }
+    if (fclose(stream) != 0) { free(snapshot); free((void *)values); return EXECUTION_FAILURE; }
     const size_t id_length = strlen(id);
     for (size_t i = 0; values[i]; ++i) {
         const char *name = values[i]->name;
@@ -182,10 +182,10 @@ static int record_aliases(WORD_LIST *args)
         if (append_named) {
             definition = NULL;
             FILE *named = open_memstream(&definition, &definition_length);
-            if (!named) { free(snapshot); free(values); return EXECUTION_FAILURE; }
+            if (!named) { free(snapshot); free((void *)values); return EXECUTION_FAILURE; }
             fwrite(snapshot, 1, length, named);
             print_alias_definition(named, values[i]);
-            if (fclose(named) != 0) { free(definition); free(snapshot); free(values); return EXECUTION_FAILURE; }
+            if (fclose(named) != 0) { free(definition); free(snapshot); free((void *)values); return EXECUTION_FAILURE; }
         }
         /* Match command substitution's removal of the final output newline. */
         if (definition_length) definition[definition_length - 1] = '\0';
@@ -198,7 +198,7 @@ static int record_aliases(WORD_LIST *args)
         else if (length) snapshot[length - 1] = '\n';
     }
     free(snapshot);
-    free(values);
+    free((void *)values);
     return EXECUTION_SUCCESS;
 }
 
@@ -226,7 +226,8 @@ static int watch_metadata(const char *path, const char *output)
     /* An external stat may use a different loader context from this shell. */
     for (size_t i = 0; loader_settings[i]; ++i) {
         SHELL_VAR *setting = var_lookup(loader_settings[i], shell_variables);
-        if ((setting && exported_p(setting) && !invisible_p(setting)) || getenv(loader_settings[i]))
+        const char *inherited = getenv(loader_settings[i]); // NOLINT(concurrency-mt-unsafe): Bash builtins run on the interpreter thread.
+        if ((setting && exported_p(setting) && !invisible_p(setting)) || inherited)
             return EXECUTION_FAILURE;
     }
     /* Bash may defer removing TZ from libc's environment after `export -n`.
@@ -235,7 +236,7 @@ static int watch_metadata(const char *path, const char *output)
     if (timezone && (nameref_p(timezone) || array_p(timezone) || assoc_p(timezone) ||
                      timezone->dynamic_value || timezone->assign_func)) return EXECUTION_FAILURE;
     const char *requested_zone = timezone && exported_p(timezone) && !invisible_p(timezone) ? value_cell(timezone) : NULL;
-    const char *current_zone = getenv("TZ");
+    const char *current_zone = getenv("TZ"); // NOLINT(concurrency-mt-unsafe): Bash builtins run on the interpreter thread.
     if ((requested_zone == NULL) != (current_zone == NULL) ||
         (requested_zone && strcmp(requested_zone, current_zone) != 0)) return EXECUTION_FAILURE;
     tzset();

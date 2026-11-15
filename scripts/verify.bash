@@ -13,7 +13,7 @@ case ${BINIT_NATIVE:-1} in
     *) printf 'BINIT_NATIVE must be 0 or 1\n' >&2; exit 2 ;;
 esac
 export BINIT_VERIFY_EVIDENCE=${BINIT_VERIFY_EVIDENCE:-$CARGO_TARGET_DIR/verification}
-mkdir -p "$BINIT_VERIFY_EVIDENCE"
+mkdir -p "$BINIT_VERIFY_EVIDENCE" "$PWD/tmp"
 python3 - <<'PY'
 import json, os, platform, subprocess
 from pathlib import Path

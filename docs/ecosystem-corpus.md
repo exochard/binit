@@ -6,6 +6,12 @@ must pass its effect checks before its timings enter the corpus. The
 defines the wider study; the initial implementation covers eager framework
 loading. Editor and documented-default measurements remain pending.
 
+The [fresh-home framework evidence](ecosystem-framework-evidence.md) retains
+two complete 20-block runs, failed attempts and matching adapter checks.
+This stage has unequal preparation boundaries: Binit's generation is prepared
+before timing, while Zinit initializes its private data during launch.
+Routine configured-startup comparisons still need a primed-private-state track.
+
 The [source lock](../benchmarks/ecosystem.json) pins five public archives,
 including ble.sh's contrib submodule. These are the revisions from the
 existing source studies. They do not represent a claim about the latest

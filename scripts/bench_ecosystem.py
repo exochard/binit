@@ -245,15 +245,19 @@ def observe(subject, interpreter, rc, work, home):
         wait_for_editor(shell)
         ack_started = time.perf_counter_ns()
         shell.settled(b':')
+        echo_quiet = (time.perf_counter_ns() - ack_started) / 1e6
+        # Complete the already-typed ':' and require execution plus a new prompt.
+        # A rendered colon alone did not establish accepted input in Zsh probes.
+        shell.command('')
         acknowledgment = (time.perf_counter_ns() - ack_started) / 1e6
         usable = (time.perf_counter_ns() - started) / 1e6
-        shell.cancel()
         offset = len(shell.raw)
         ready = shell.command('corpus_verify; corpus_status=$?; printf "\\036CORPUS:%s\\036" "$corpus_status"')
         statuses = re.findall(rb'\x1eCORPUS:(\d+)\x1e', shell.raw[offset:])
         if statuses != [b'0']:
             raise RuntimeError(f'{subject}: effects failed: {statuses!r}\n' + '\n'.join(shell.screen.display))
         return {'startup_visible_ms': startup, 'first_input_ack_ms': acknowledgment,
+                'input_echo_quiet_ms': echo_quiet,
                 'startup_usable_ms': usable, 'effect_probe_ms': ready,
                 'required_effects_ms': (time.perf_counter_ns() - started) / 1e6,
                 'resources_at_readiness': resource_sample(shell.pid),

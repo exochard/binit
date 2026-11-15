@@ -23,7 +23,7 @@
     "resource_scope": "shell and live descendants at readiness; instantaneous, not peak",
     "source_cache": "warm filesystem cache, fresh private home for each launch",
     "prompt": "append common sentinel after existing prompt hooks",
-    "input_ack": "after noncanonical editor readiness, first output followed by 2 ms quiet; observer interval included",
+    "input_ack": "after noncanonical readiness, type ':' then require execution acknowledgment and next prompt; includes echo quiet interval of 2 ms",
     "source_preparation": "outside launch timing, reported separately for Binit"
   }
 }

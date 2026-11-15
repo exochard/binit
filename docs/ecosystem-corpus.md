@@ -49,9 +49,10 @@ prompt hooks run before a common prompt suffix is appended.
 
 Visible prompt time and usable input time are distinct. Zsh can print its
 prompt before entering its editor. The harness waits for noncanonical input
-mode before sending the acknowledgment character, so cooked terminal echo
-cannot count as editor readiness. The acknowledgment includes the terminal
-observer's 2 ms quiet interval. A separate command verifies required effects.
+mode, types `:` and completes that harmless command. Usable input requires
+its execution acknowledgment followed by the next prompt. The acknowledgment
+includes the terminal observer's 2 ms echo quiet interval, also recorded
+separately. A separate command verifies required effects.
 
 Readiness resource samples include the owned shell and its live descendants:
 RSS sums, descriptor sums and process counts. These are instantaneous samples.

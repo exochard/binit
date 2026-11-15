@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 import sys
 import tarfile
@@ -98,6 +99,8 @@ class EcosystemIntegrityTests(unittest.TestCase):
             try:
                 corpus.wait_for_editor(shell)
                 self.assertFalse(termios.tcgetattr(shell.fd)[3] & termios.ICANON)
+                shell.settled(b':')
+                shell.command('')
                 offset = len(shell.raw)
                 shell.command('printf "\\036READY:%s\\036" "$EDITOR_READY"')
                 self.assertIn(b'\x1eREADY:yes\x1e', shell.raw[offset:])
@@ -146,4 +149,3 @@ class EcosystemIntegrityTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-import json

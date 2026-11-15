@@ -41,6 +41,12 @@ def check(trial):
         def until(self, predicate, seconds=900):
             return super().until(predicate, seconds)
 
+        def read(self, timeout):
+            try:
+                return super().read(timeout)
+            except OSError as error:
+                raise RuntimeError('trial terminal closed:\n' + self.raw.decode(errors='replace')) from error
+
     results, frames = [], []
     for launch in (1, 2):
         shell = TrialShell('/bin/bash', None, core, environment, command=['make', '--no-print-directory', 'demo'])
@@ -68,7 +74,7 @@ def check(trial):
             shell.settled(b'\x1b')
             shell.settled(b'\x1b')
             shell.cancel()
-            require('hs "hello from binit" | grep -q "hello from binit"', 'seeded history search')
+            require('hs "hello from binit" | grep -Fx ' + shlex.quote('printf "hello from binit\\n"'), 'seeded history search')
             # A nonmatching line reaches completion without focusing history rows.
             shell.settled(b'git sta')
             shell.settled(b'\x1b')
@@ -83,9 +89,20 @@ def check(trial):
             results.append(dict(launch=launch, check='first-use Git completion menu', passed=True))
             require('binit_complete editor highlighting on && binit_complete editor suggestions on', 'native highlighting and suggestions available')
             require('history -s "printf source-trial-suggestion"', 'suggestion history entry')
+            capture = private / 'input.txt'
+            require('__source_trial_capture() { printf "%s" "$READLINE_LINE" > ' + shlex.quote(str(capture)) +
+                    '; }; bind -m vi-insertion -x ' + shlex.quote('"\\C-x\\C-g":__source_trial_capture'), 'input capture binding')
             shell.settled(b'printf source-trial-s')
-            shell.until(lambda: any('source-trial-suggestion' in row for row in shell.screen.display), seconds=5)
+            shell.until(lambda: 'printf source-trial-suggestion' in shell.screen.display[shell.screen.cursor.y], seconds=5)
             frames.append(dict(launch=launch, state='history suggestion', lines=shell.screen.display))
+            shell.settled(b'\x18\x07')
+            if capture.read_text() != 'printf source-trial-s':
+                raise RuntimeError('unaccepted suggestion changed the input')
+            shell.settled(b'\x06')
+            shell.settled(b'\x18\x07')
+            if capture.read_text() != 'printf source-trial-suggestion':
+                raise RuntimeError('visible suggestion could not be accepted')
+            results.append(dict(launch=launch, check='visible suggestion preserves input until accepted', passed=True))
             shell.cancel()
             require('binit trust examples/project && cd examples/project && [[ $PROJECT_MODE == development ]] && '
                     '[[ $PROJECT_MESSAGE == ' + shlex.quote('Literal data: $(printf this-is-not-executed)') + ' ]]', 'trusted project variables remain literal')

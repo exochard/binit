@@ -40,10 +40,35 @@ build dependencies explicitly in that environment:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential bash-builtins libreadline-dev \
+sudo apt-get install -y build-essential bash-builtins libreadline-dev libclang-dev \
   pkg-config git bash-completion python3 python3-venv curl ca-certificates \
   cmake shellcheck nodejs
 ```
+
+## Unpack the declared sources
+
+Starting with only the received bundle, first compare its manifest checksum
+with the expected value supplied by the sender. Then verify the archives
+and extract the bootstrap verifier from its fixed path:
+
+```bash
+cd /path/to/source-bundle
+sha256sum sources.json
+sha256sum --check SHA256SUMS
+core_archive=$(python3 -c 'import json; print(json.load(open("sources.json"))["core"]["artifact"])')
+mkdir bootstrap
+tar -xzf "$core_archive" -C bootstrap scripts/unpack_sources.py
+python3 bootstrap/scripts/unpack_sources.py . trial
+cd trial/core
+```
+
+Bootstrap extraction runs only after the trusted manifest and archive checks.
+The complete unpacker rechecks the archives against `sources.json`. It checks
+file digests, rejects links and escaping paths, and restores recorded modes.
+An existing trial directory is refused. The full trial requires the seven
+selected plugin IDs above; missing sources are named in the launch error.
+
+## Prepare build tools
 
 Use Rust with edition 2024 support, Cargo, and tree-sitter CLI 0.26.9. The
 qualification recipe acquires Rust 1.99.1 explicitly into a local tools
@@ -70,24 +95,13 @@ compatible Rust toolchain can be used instead.
 
 ## Open the trial
 
-Starting from the received core source tree and bundle, verify the expected
-manifest checksum, then unpack into a new directory:
-
 ```bash
-sha256sum /path/to/source-bundle/sources.json
-python3 scripts/unpack_sources.py /path/to/source-bundle tmp/trial
-cd tmp/trial/core
 export BINIT_PLUGIN_ROOT="$(cd ../plugins && pwd)"
 export BINIT_DEMO_ROOT="$PWD/tmp/demo"
 export CARGO_TARGET_DIR="$PWD/tmp/build"
 cargo fetch --locked
 make demo
 ```
-
-The unpacker checks archive and file digests, rejects links and escaping
-paths, and restores the recorded file modes. It refuses an existing trial
-directory. The full trial requires the seven selected plugin IDs above;
-a missing plugin produces an error naming the missing sources.
 
 The first `make demo` explicitly acquires the pinned Bash grammar and
 tree-sitter runtime, verifies their hashes, then builds Binit. Later launches

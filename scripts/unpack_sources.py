@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """Verify an explicit source bundle and extract it into a new trial directory."""
 import argparse
+import gzip
 import hashlib
+import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import tarfile
+
+MAX_TAR_BYTES = 132 * 1024 * 1024
+
+
+def regular_file(path, limit):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+        raise ValueError('expected a bounded regular source file')
 
 
 def relative_name(name):
@@ -22,8 +33,7 @@ def relative_name(name):
 def unpack(bundle, destination):
     bundle = Path(bundle).resolve(strict=True)
     manifest_path = bundle / 'sources.json'
-    if manifest_path.stat().st_size > 2 * 1024 * 1024:
-        raise ValueError('source manifest exceeds size limit')
+    regular_file(manifest_path, 2 * 1024 * 1024)
     manifest = json.loads(manifest_path.read_text())
     if manifest.get('schema') != 1 or manifest.get('complete') is not True:
         raise ValueError('source bundle is incomplete')
@@ -44,8 +54,7 @@ def unpack(bundle, destination):
         if len(relative_name(archive_name)) != 1:
             raise ValueError('archive must be inside the bundle')
         archive_path = bundle / archive_name
-        if archive_path.is_symlink() or archive_path.stat().st_size > 128 * 1024 * 1024:
-            raise ValueError('invalid source archive')
+        regular_file(archive_path, 128 * 1024 * 1024)
         if hashlib.sha256(archive_path.read_bytes()).hexdigest() != receipt['sha256']:
             raise ValueError('source archive checksum mismatch')
         expected = receipt['files']
@@ -54,7 +63,12 @@ def unpack(bundle, destination):
         target = destination / subdirectory
         target.mkdir(parents=True)
         seen, total = set(), 0
-        with tarfile.open(archive_path, 'r:gz') as archive:
+        # Bound extension headers too: tarfile consumes them before yielding a member.
+        with gzip.open(archive_path, 'rb') as compressed:
+            tar_bytes = compressed.read(MAX_TAR_BYTES + 1)
+        if len(tar_bytes) > MAX_TAR_BYTES:
+            raise ValueError('decompressed archive exceeds size limit')
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode='r:') as archive:
             for member in archive:
                 parts = relative_name(member.name)
                 if (not member.isfile() or member.name in seen or member.name not in expected

@@ -1,13 +1,16 @@
 """Source bundles preserve committed inputs and explicit plugin selection."""
 import hashlib
+import gzip
 import io
 import json
 from pathlib import Path
 import subprocess
+import os
 import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -83,6 +86,32 @@ class SourcePackageTests(unittest.TestCase):
         (self.work / 'bundle/sources.json').write_text(json.dumps(result))
         with self.assertRaisesRegex(ValueError, 'incomplete'):
             unpack(self.work / 'bundle', self.work / 'incomplete')
+
+    def test_decompression_is_bounded_before_tar_metadata_parsing(self):
+        result = package(self.core, [], self.work / 'bundle')
+        archive = self.work / 'bundle' / result['core']['artifact']
+        item = tarfile.TarInfo('metadata')
+        item.type, item.size = tarfile.XHDTYPE, 2048
+        archive.write_bytes(gzip.compress(item.tobuf() + b'x' * 2048))
+        result['core']['sha256'] = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (self.work / 'bundle/sources.json').write_text(json.dumps(result))
+        with patch('unpack_sources.MAX_TAR_BYTES', 1024):
+            with self.assertRaisesRegex(ValueError, 'decompressed archive exceeds'):
+                unpack(self.work / 'bundle', self.work / 'trial')
+
+    def test_manifest_and_archive_fifos_are_rejected_before_reading(self):
+        fifo_bundle = self.work / 'fifo-manifest'
+        fifo_bundle.mkdir()
+        os.mkfifo(fifo_bundle / 'sources.json')
+        with self.assertRaisesRegex(ValueError, 'regular source file'):
+            unpack(fifo_bundle, self.work / 'manifest-trial')
+        result = package(self.core, [], self.work / 'bundle')
+        fifo = self.work / 'bundle/fifo.gz'
+        os.mkfifo(fifo)
+        result['core']['artifact'] = fifo.name
+        (self.work / 'bundle/sources.json').write_text(json.dumps(result))
+        with self.assertRaisesRegex(ValueError, 'regular source file'):
+            unpack(self.work / 'bundle', self.work / 'archive-trial')
 
     def test_archive_members_cannot_escape_follow_links_or_disagree_with_manifest(self):
         for kind in ('escape', 'symlink', 'hardlink', 'duplicate', 'mode', 'content', 'missing'):

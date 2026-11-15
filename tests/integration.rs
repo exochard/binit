@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -83,10 +84,27 @@ trap -p DEBUG RETURN USR1
 set +o
 shopt -p extglob nullglob failglob globstar
 "#;
-    for setup in [
-        "IFS=$' :\t'; export SAMPLE='two words'; sample_array=('one' 'two words')",
-        "IFS=; export SAMPLE=''; sample_array=([3]='sparse'); set -o pipefail; shopt -s nullglob globstar",
-        "export SAMPLE=present; sample_array=(); trap ':' DEBUG RETURN USR1; shopt -s extglob",
+    for (setup, expected_monitor) in [
+        (
+            "IFS=$' :\t'; export SAMPLE='two words'; sample_array=('one' 'two words')",
+            None,
+        ),
+        (
+            "IFS=; export SAMPLE=''; sample_array=([3]='sparse'); set -o pipefail; shopt -s nullglob globstar",
+            None,
+        ),
+        (
+            "export SAMPLE=present; sample_array=(); trap ':' DEBUG RETURN USR1; shopt -s extglob",
+            None,
+        ),
+        (
+            "export SAMPLE=present; sample_array=(); set +m",
+            Some("set +o monitor"),
+        ),
+        (
+            "export SAMPLE=present; sample_array=(); set -m",
+            Some("set -o monitor"),
+        ),
     ] {
         let prefix = format!(
             "{setup}\nalias user_alias='printf alias'; user_function() {{ printf '%s' user; }}\nset -- 'two words' '' '*.literal'\n"
@@ -100,6 +118,9 @@ shopt -p extglob nullglob failglob globstar
             "{}",
             stderr(&configured)
         );
+        if let Some(expected) = expected_monitor {
+            assert!(stdout(&clean).lines().any(|line| line == expected));
+        }
         assert_eq!(stdout(&configured), stdout(&clean), "setup: {setup}");
     }
 }
@@ -272,7 +293,8 @@ impl Fixture {
             .join(fs::read_to_string(self.state().join("current")).unwrap())
     }
     fn bash(&self, script: &str) -> Output {
-        Command::new(test_bash())
+        let mut command = Command::new(test_bash());
+        command
             .args(["--noprofile", "--norc", "-ic", script])
             .env("BINIT_TEST_INIT", self.generation().join("init.bash"))
             .env("BINIT_TEST_ROOT", self.root())
@@ -280,9 +302,17 @@ impl Fixture {
             .env("TERM", "dumb")
             .env_remove("BASH_ENV")
             .env_remove("ENV")
-            .current_dir(self.root())
-            .output()
-            .unwrap()
+            .current_dir(self.root());
+        // Capture-only shells must not compete for the test runner's terminal.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.output().unwrap()
     }
 }
 fn success(output: Output) -> String {

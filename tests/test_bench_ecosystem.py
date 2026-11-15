@@ -1,0 +1,149 @@
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+import termios
+import tempfile
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+import bench_ecosystem as corpus
+
+
+class EcosystemIntegrityTests(unittest.TestCase):
+    def test_source_content_and_executable_mode_are_bound_to_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            tree = base / 'sources/example'
+            tree.mkdir(parents=True)
+            path = tree / 'loader.sh'
+            path.write_bytes(b':\n')
+            path.chmod(0o755)
+            archive = base / 'example.tar.gz'
+            with tarfile.open(archive, 'w:gz') as bundle:
+                bundle.add(path, arcname='upstream-revision/loader.sh')
+            spec = {'sources': {'example': {'archive_sha256': corpus.digest(archive)}}}
+            self.assertEqual(corpus.verify_sources(base, spec)['example']['verified_files'], 1)
+            path.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, 'source differs'):
+                corpus.verify_sources(base, spec)
+            path.chmod(0o755)
+            path.write_bytes(b'false\n')
+            with self.assertRaisesRegex(RuntimeError, 'source differs'):
+                corpus.verify_sources(base, spec)
+            path.write_bytes(b':\n')
+            (tree / 'extra.sh').write_bytes(b'sleep .1\n')
+            with self.assertRaisesRegex(RuntimeError, 'inventory differs'):
+                corpus.verify_sources(base, spec)
+
+    def test_source_symlink_target_and_archive_hash_are_bound(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            tree = base / 'sources/example'
+            tree.mkdir(parents=True)
+            link = tree / 'link'
+            link.symlink_to('target')
+            archive = base / 'example.tar.gz'
+            with tarfile.open(archive, 'w:gz') as bundle:
+                member = tarfile.TarInfo('upstream/link')
+                member.type = tarfile.SYMTYPE
+                member.linkname = 'target'
+                bundle.addfile(member)
+            spec = {'sources': {'example': {'archive_sha256': corpus.digest(archive)}}}
+            corpus.verify_sources(base, spec)
+            link.unlink()
+            link.symlink_to('other')
+            with self.assertRaisesRegex(RuntimeError, 'source differs'):
+                corpus.verify_sources(base, spec)
+            archive.write_bytes(b'changed archive')
+            with self.assertRaisesRegex(RuntimeError, 'archive hash differs'):
+                corpus.verify_sources(base, spec)
+
+    def test_effect_probe_accepts_real_effects_and_rejects_missing_alias(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary)
+            body = corpus.FIXTURE.read_text().replace('@@ID@@', 'p00')
+            probe = corpus.effect_check(1, target)
+            for shell in ('/bin/bash', '/bin/zsh'):
+                for broken, expected in ((False, 0), (True, 23)):
+                    code = body + ('\nunalias corpus_alias_p00\n' if broken else '\n')
+                    setup = 'shopt -s expand_aliases\n' if shell == '/bin/bash' else ''
+                    process = subprocess.run([shell, '-c', setup + code + probe + 'corpus_verify'],
+                                             env=corpus.environment(target), capture_output=True)
+                    self.assertEqual(process.returncode, expected, (shell, process.stderr))
+
+    def test_effect_probe_rejects_unexported_false_alias_and_later_wrong_function(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary)
+            body = ''.join(corpus.FIXTURE.read_text().replace('@@ID@@', f'p{i:02d}') for i in range(2))
+            probe = corpus.effect_check(2, target)
+            for shell in ('/bin/bash', '/bin/zsh'):
+                cases = [(body, 0), (body.replace('export CORPUS_EXPORT_', 'CORPUS_EXPORT_'), 24),
+                         (body + "alias corpus_alias_p01='false'\n", 23),
+                         (body + 'corpus_fn_p01() { return 99; }\n', 25)]
+                for code, expected in cases:
+                    setup = 'shopt -s expand_aliases\n' if shell == '/bin/bash' else ''
+                    process = subprocess.run([shell, '-c', setup + code + probe + 'corpus_verify'],
+                                             env=corpus.environment(target), capture_output=True)
+                    self.assertEqual(process.returncode, expected, (shell, process.stderr))
+
+    def test_prompt_before_editor_readiness_is_not_usable_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            rc = work / 'rc'
+            # Emit a real-looking prompt while still in cooked mode, as Zsh can.
+            rc.write_text('printf "BENCH> "\nsleep .1\nEDITOR_READY=yes\nPS1="BENCH> "\n')
+            shell = corpus.BoundedShell('/bin/bash', rc, work, corpus.environment(work))
+            try:
+                corpus.wait_for_editor(shell)
+                self.assertFalse(termios.tcgetattr(shell.fd)[3] & termios.ICANON)
+                offset = len(shell.raw)
+                shell.command('printf "\\036READY:%s\\036" "$EDITOR_READY"')
+                self.assertIn(b'\x1eREADY:yes\x1e', shell.raw[offset:])
+            finally:
+                shell.close()
+
+    def test_changed_executable_stops_next_pair_and_retains_partial_receipt(self):
+        with tempfile.TemporaryDirectory(dir=corpus.ROOT / 'tmp') as temporary:
+            base = Path(temporary)
+            binary = base / 'binary'
+            binary.write_bytes(b'original')
+            output = base / 'receipt.json'
+            argv = ['bench_ecosystem.py', '--sources', str(base), '--binary', str(binary),
+                    '--work', str(base / 'work'), '--output', str(output),
+                    '--subjects', 'bash', '--counts', '0', '--pairs', '2', '--runs', '1']
+            def drift(*_):
+                binary.write_bytes(b'changed')
+                return {'effect_status': 0}
+            with patch.object(sys, 'argv', argv), patch.object(corpus, 'verify_sources', return_value={}), \
+                    patch.object(corpus, 'observe', side_effect=drift):
+                with self.assertRaisesRegex(RuntimeError, 'inputs changed before pair'):
+                    corpus.main()
+            receipt = json.loads(output.read_text())
+            self.assertFalse(receipt['complete_two_run_framework_corpus'])
+            self.assertEqual(len(receipt['runs'][0]), 1)
+            self.assertIn('inputs changed', receipt['error'])
+
+    def test_preparation_failure_has_receipt_and_case(self):
+        with tempfile.TemporaryDirectory(dir=corpus.ROOT / 'tmp') as temporary:
+            base = Path(temporary)
+            binary = base / 'binary'
+            binary.write_bytes(b'not executed')
+            output = base / 'receipt.json'
+            argv = ['bench_ecosystem.py', '--sources', str(base), '--binary', str(binary),
+                    '--work', str(base / 'work'), '--output', str(output),
+                    '--subjects', 'binit', '--counts', '0']
+            with patch.object(sys, 'argv', argv), patch.object(corpus, 'verify_sources', return_value={}), \
+                    patch.object(corpus, 'configuration', side_effect=RuntimeError('prepare failed')):
+                with self.assertRaisesRegex(RuntimeError, 'prepare failed'):
+                    corpus.main()
+            receipt = json.loads(output.read_text())
+            self.assertFalse(receipt['complete_two_run_framework_corpus'])
+            self.assertEqual(receipt['active_case'], 'binit-0')
+            self.assertIn('prepare failed', receipt['error'])
+
+
+if __name__ == '__main__':
+    unittest.main()
+import json

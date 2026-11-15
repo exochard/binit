@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "source_date": "2026-11-15",
+  "sources": {
+    "bash-it": {"repository": "Bash-it/bash-it", "revision": "72ea9e285fe1828977d1cd2bc596b901bcc57440", "archive_sha256": "1f60765850fcfcf3d7bd738abf4b35b662b8a41982e86a9292f106c4ffbda109"},
+    "oh-my-bash": {"repository": "ohmybash/oh-my-bash", "revision": "94c2977eda06f230aafa9628fcd869123f01896b", "archive_sha256": "48307a2b7f9114d743d5a7553425cba067eb65c158efae97fa1087a66e1aa878"},
+    "ble": {"repository": "akinomyoga/ble.sh", "revision": "152942758f567e51fd17bdc7b3783d27b3c476aa", "archive_sha256": "99cc3d12b7d30977365b0da081324b000fdffc960d2b21c7081e4be0719691c3"},
+    "ble-contrib": {"repository": "akinomyoga/blesh-contrib", "revision": "d2109203480a7dfe1dead5f5f8f9f15a9146c90d", "archive_sha256": "d3e857a41be053da4d837f4a4014620501c7695a2dc12d32635f24803fc3e764"},
+    "zinit": {"repository": "zdharma-continuum/zinit", "revision": "cb4968123979cf073384e93aa8066d8fd450580f", "archive_sha256": "79afc49c3b1509b36c7f2d9b4637c03ea2acd598c084f2732c13b010cca55956"}
+  },
+  "framework": {
+    "plugin_counts": [0, 10, 50],
+    "subjects": ["bash", "binit", "bash-it", "oh-my-bash", "zsh", "zinit"],
+    "effects": ["load_order", "functions", "aliases", "exports", "literal_arguments", "return_status", "working_directory", "warm_call"],
+    "runs": 2,
+    "pairs_per_run": 20
+  },
+  "observation": {
+    "terminal_rows": 32,
+    "terminal_columns": 120,
+    "terminal_bytes_limit": 8388608,
+    "phase_timeout_seconds": 10,
+    "resource_scope": "shell and live descendants at readiness; instantaneous, not peak",
+    "source_cache": "warm filesystem cache, fresh private home for each launch",
+    "prompt": "append common sentinel after existing prompt hooks",
+    "input_ack": "after noncanonical editor readiness, first output followed by 2 ms quiet; observer interval included",
+    "source_preparation": "outside launch timing, reported separately for Binit"
+  }
+}

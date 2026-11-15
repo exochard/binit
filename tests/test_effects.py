@@ -156,6 +156,89 @@ for mode in ordinary wrapper missing command_function stat_function functrace tr
 done
 ''')
 
+    def test_traced_alias_recorder_does_not_claim_late_caller_alias(self):
+        source = (ROOT / 'runtime/core.bash').read_text()
+        functions = []
+        for name in ('__binit_capture_names', '__binit_record_effects'):
+            start = source.index(name + '() {')
+            end = source.index('\n}', start) + 2
+            functions.append(source[start:end])
+        self.shell('\n'.join(functions) + r'''
+set +T
+set -- 'caller value' '' '$literal'
+caller_pwd=$PWD
+caller_ifs=$IFS
+declare -A before_functions=() before_aliases=() __binit_owned_functions=() __binit_owned_aliases=()
+__binit_capture_names before_functions function
+__binit_capture_names before_aliases alias
+before_snapshot=$(declare -p before_functions before_aliases)
+plugin_effect() { printf '%s\n' 'literal $value'; }
+alias early_plugin_alias='printf "%s" "literal $value"'
+run_recorder() {
+    builtin unalias late_caller_alias 2>/dev/null || :
+    __binit_owned_functions=()
+    __binit_owned_aliases=()
+    trap_hits=0
+    declare -ft __binit_record_effects
+    trap 'case $BASH_COMMAND in *"effects record-functions"*) trap_hits=$((trap_hits+1)); builtin alias late_caller_alias="printf late-caller"; if [[ $trace_mode == once ]]; then trap - DEBUG; fi ;; esac' DEBUG
+    __binit_record_effects sample before_functions before_aliases || exit 1
+    trap - DEBUG
+    (( trap_hits > 0 )) || exit 2
+    [[ $- != *T* && $PWD == "$caller_pwd" && $IFS == "$caller_ifs" ]] || exit 3
+    [[ $# == 0 && ${1-unset} == unset ]] || exit 4
+    [[ $(builtin alias -- late_caller_alias) == "alias late_caller_alias='printf late-caller'" ]] || exit 5
+    [[ ${__binit_owned_aliases[sample:early_plugin_alias]-} == "$(builtin alias -p early_plugin_alias)" ]] || exit 6
+    [[ ! -v __binit_owned_aliases[sample:late_caller_alias] ]] || exit 7
+    [[ $(declare -p before_functions before_aliases) == "$before_snapshot" ]] || exit 8
+}
+for trace_mode in persistent once; do
+    run_recorder
+    native_aliases=$(declare -p __binit_owned_aliases)
+    native_functions=$(declare -p __binit_owned_functions)
+    builtin enable -n binit_complete || exit 9
+    run_recorder
+    [[ $(declare -p __binit_owned_aliases) == "$native_aliases" ]] || exit 10
+    [[ $(declare -p __binit_owned_functions) == "$native_functions" ]] || exit 11
+    builtin enable binit_complete || exit 12
+done
+[[ $# == 3 && $1 == 'caller value' && $2 == '' && $3 == '$literal' ]] || exit 13
+''')
+
+    def test_traced_watch_snapshot_preserves_debug_trap_file_mutation(self):
+        source = (ROOT / 'runtime/core.bash').read_text()
+        start = source.index('__binit_watch_snapshot() {')
+        end = source.index('\n}', start) + 2
+        with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
+            watched = Path(temporary) / 'watched'
+            self.shell(source[start:end] + '\nwatched=' + shlex.quote(str(watched)) + r'''
+set +T
+set -- 'caller value' '' '$literal'
+caller_pwd=$PWD
+caller_ifs=$IFS
+declare -A __binit_watch=([fixture]="$watched") __binit_watch_value=() __binit_watch_dirty=()
+run_watch() {
+    printf 'initial' > "$watched"
+    __binit_watch_value=()
+    __binit_watch_dirty=()
+    trap_hits=0
+    declare -ft __binit_watch_snapshot
+    trap 'case $BASH_COMMAND in __binit_watch_new=*) trap_hits=$((trap_hits+1)); printf "trap-mutated-content" > "$watched" ;; esac' DEBUG
+    __binit_watch_snapshot fixture || exit 1
+    trap - DEBUG
+    (( trap_hits > 0 )) || exit 2
+    [[ $- != *T* && $PWD == "$caller_pwd" && $IFS == "$caller_ifs" ]] || exit 3
+    [[ $(<"$watched") == trap-mutated-content ]] || exit 4
+    expected=$(LC_ALL=C command stat -Lc '%d:%i:%s:%y:%z' -- "$watched") || exit 5
+    [[ ${__binit_watch_value[fixture:0]-} == "$expected" ]] || exit 6
+}
+run_watch
+native_value=${__binit_watch_value[fixture:0]}
+builtin enable -n binit_complete || exit 7
+run_watch
+[[ ${__binit_watch_value[fixture:0]} == "$expected" ]] || exit 8
+[[ $# == 3 && $1 == 'caller value' && $2 == '' && $3 == '$literal' ]] || exit 9
+''')
+
     def test_traced_alias_recorder_matches_shell_capture(self):
         source = (ROOT / 'runtime/core.bash').read_text()
         start = source.index('__binit_record_effects() {')

@@ -79,9 +79,11 @@ __binit_capture_plugin_completions() {
 }
 
 __binit_record_effects() {
-    local __binit_record_id=$1 __binit_record_name __binit_record_def __binit_record_key __binit_record_owned
+    local __binit_record_id=$1 __binit_record_name __binit_record_def __binit_record_key __binit_record_owned __binit_record_native_aliases=0
     local -n __binit_record_before_functions=$2 __binit_record_before_aliases=$3
     local -A __binit_record_functions=() __binit_record_aliases=()
+    # A trap can remove itself after this snapshot, so retain entry eligibility.
+    if [[ $- != *T* ]] && builtin binit_complete effects plain 2>/dev/null; then __binit_record_native_aliases=1; fi
     __binit_capture_names __binit_record_aliases alias
     if ! builtin binit_complete effects record-functions "$__binit_record_id" "$2" __binit_owned_functions 2>/dev/null; then
         __binit_capture_names __binit_record_functions function
@@ -98,7 +100,7 @@ __binit_record_effects() {
             [[ -n $__binit_record_def ]] && __binit_owned_functions["$__binit_record_id:$__binit_record_name"]=$__binit_record_def
         done
     fi
-    if [[ $- != *T* ]] && builtin binit_complete effects record-aliases "$__binit_record_id" "$3" __binit_owned_aliases 2>/dev/null; then return 0; fi
+    if (( __binit_record_native_aliases )) && builtin binit_complete effects record-aliases "$__binit_record_id" "$3" __binit_owned_aliases 2>/dev/null; then return 0; fi
     for __binit_record_name in "${!__binit_record_aliases[@]}"; do
         [[ -v __binit_record_before_aliases[$__binit_record_name] ]] && continue
         __binit_record_owned=0
@@ -137,7 +139,7 @@ __binit_watch_snapshot() {
     local __binit_watch_id=$1 __binit_watch_path __binit_watch_key __binit_watch_new __binit_watch_index=0 __binit_watch_native=0 __binit_watch_command
     local -a __binit_watch_paths=()
     IFS=',' read -r -a __binit_watch_paths <<< "${__binit_watch[$__binit_watch_id]}"
-    if [[ $- != *T* ]] && builtin binit_complete status >/dev/null 2>&1; then
+    if [[ $- != *T* ]] && builtin binit_complete effects plain >/dev/null 2>&1; then
         __binit_watch_command=$(builtin type -t stat; builtin type -p stat; builtin type -t command) 2>/dev/null
         case $__binit_watch_command in
             $'file\n/usr/bin/stat\nbuiltin'|$'file\n/bin/stat\nbuiltin') __binit_watch_native=1 ;;

@@ -17,6 +17,22 @@
 #include "xmalloc.h"
 #include "effects.h"
 
+/* Bash exports these trap queries but omits trap.h from loadable headers. */
+extern int decode_signal(const char *, int);
+extern int signal_is_trapped(int);
+extern int any_signals_trapped(void);
+
+static bool plain_context(void)
+{
+    if (any_signals_trapped() > 0) return false;
+    const char *names[] = {"DEBUG", "RETURN", "ERR"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        int signal = decode_signal(names[i], 0);
+        if (signal < 0 || signal_is_trapped(signal)) return false;
+    }
+    return true;
+}
+
 static bool letter(unsigned char c)
 {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
@@ -145,6 +161,7 @@ static void print_alias_definition(FILE *stream, const alias_t *value)
 static int record_aliases(WORD_LIST *args)
 {
     if (!args || !args->next || !args->next->next || args->next->next->next) return EX_USAGE;
+    if (!plain_context()) return EXECUTION_FAILURE;
     const char *id = args->word->word;
     const char *before_name = args->next->word->word;
     const char *output = args->next->next->word->word;
@@ -216,6 +233,7 @@ static bool stat_time(char *output, size_t capacity, struct timespec value)
 
 static int watch_metadata(const char *path, const char *output)
 {
+    if (!plain_context()) return EXECUTION_FAILURE;
     SHELL_VAR *target = var_lookup(output, shell_variables);
     const unsigned int transformed = (unsigned int)att_uppercase | (unsigned int)att_lowercase | (unsigned int)att_capcase;
     if (!target || array_p(target) || assoc_p(target) || readonly_p(target) || noassign_p(target) ||
@@ -254,6 +272,10 @@ static int watch_metadata(const char *path, const char *output)
 
 int binit_effects(WORD_LIST *args)
 {
+    if (args && !strcmp(args->word->word, "plain")) {
+        if (args->next) return EX_USAGE;
+        return plain_context() ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
+    }
     if (args && !strcmp(args->word->word, "record-functions"))
         return record_functions(args->next);
     if (args && !strcmp(args->word->word, "check-functions"))

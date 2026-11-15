@@ -49,6 +49,12 @@ control checks the same arguments and caller effects. Full caller-state
 audits run outside the 20-command interval. Every paired observation requires
 matching normalized fixture identities, followed by a run-end input audit.
 
+Shell teardown follows the timed interval. Every accepted observation retains
+closing terminal output and requires exit status zero, without forced
+termination or truncated output. A negative control completes the workflow
+and then exits with status 37; that observation must be rejected. Successful
+workflows close directly from their checked empty prompt.
+
 Eight focused tests pass in each native and fallback Bash 5.2/5.3 configuration.
 Six deliberate behavior faults are rejected. The second identical-binary
 control contains 160 checked observations across two complete 20-pair runs.

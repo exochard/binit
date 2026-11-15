@@ -15,7 +15,8 @@ import subprocess
 import sys
 import time
 
-from bench_ecosystem import BoundedShell, environment, inventory, resource_sample
+from bench_corpus_terminal import CheckedShell as BoundedShell
+from bench_ecosystem import environment, inventory, resource_sample
 from bench_interactive import digest, summarize
 from bench_lifecycle import FRAME, prepare
 
@@ -23,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / 'benchmarks/runtime-workflows.json'
 GIT_PATH = 'aliases/available/git.aliases.bash'
 CASES = ('git-shortcuts-first-use', 'toolchain-readiness-during-work')
-FAULTS = ('skip-load', 'wrong-definition', 'double-source', 'no-watch', 'wrong-status', 'changed-identity')
+FAULTS = ('skip-load', 'wrong-definition', 'double-source', 'no-watch', 'wrong-status', 'changed-identity', 'abnormal-exit')
 HELPERS = '''about-alias() { :; }
 url() { :; }
 _bash-it-component-item-is-enabled() { return 1; }
@@ -169,14 +170,15 @@ def make_fixture(case, directory, source, fault=None):
 def golden_git(directory, rc, source, bash):
     """Source the unmodified pin in an independent same-interpreter shell."""
     env = {**environment(directory / 'home'), 'BINIT_BASH': bash}
-    shell = BoundedShell(bash, rc, directory, env)
+    shell = BoundedShell(bash, rc, directory, env, receipt_path=directory / 'golden-terminal.raw')
+    ready = False
     try:
         action(shell, 'source ' + shlex.quote(str(source)))
         action(shell, 'alias -p > "$WF_ROOT/aliases-golden"; '
                       'declare -f gdv get_default_branch > "$WF_ROOT/functions-golden"')
+        ready = True
     finally:
-        (directory / 'golden-terminal.raw').write_bytes(shell.raw)
-        shell.close()
+        shell.close(ready=ready)
     aliases = re.findall(r'^alias ([^=]+)=', (directory / 'aliases-golden').read_text(), re.M)
     report = ['Plugin: workflow', 'State: loaded', 'function gdv', 'function get_default_branch']
     report += ['alias ' + name for name in aliases if re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_-]*', name)
@@ -190,7 +192,8 @@ def golden_watch(directory, source, bash):
     rc.write_text(rc.read_text() + 'wf_direct_dispatch() { if [[ ${WF_SOURCES:-0} == 0 ]] && wf_ready; then '
                   'source "$WF_ROOT/plugin/plugin.bash"; fi; }\n'
                   'PROMPT_COMMAND=(wf_direct_dispatch wf_prompt)\n')
-    shell = BoundedShell(bash, rc, control, environment(control / 'home'))
+    shell = BoundedShell(bash, rc, control, environment(control / 'home'), receipt_path=control / 'terminal.raw')
+    ready = False
     try:
         action(shell, 'WF_FLAGS=$-; wf_state > "$WF_ROOT/state-before"')
         for number in range(1, 21):
@@ -198,9 +201,9 @@ def golden_watch(directory, source, bash):
         action(shell, 'wf_preserved && wf_watch_effects > "$WF_ROOT/effects-golden"')
         golden = (control / 'effects-golden').read_bytes()
         (directory / 'effects-golden').write_bytes(golden)
+        ready = True
     finally:
-        (control / 'terminal.raw').write_bytes(shell.raw)
-        shell.close()
+        shell.close(ready=ready)
 
 
 def watched_inputs(directory, final=False):
@@ -223,6 +226,7 @@ def watched_inputs(directory, final=False):
 
 def input_identity(binary, bash, source, directory):
     files = [SPEC, Path(__file__), ROOT / 'scripts/bench_ecosystem.py',
+             ROOT / 'scripts/bench_corpus_terminal.py',
              ROOT / 'scripts/bench_interactive.py', ROOT / 'scripts/bench_lifecycle.py',
              Path(sys.executable), Path(bash), binary, source, Path('/usr/bin/git')]
     for name in ('gh', 'cmp', 'sort', 'grep', 'head', 'printenv', 'stat'):
@@ -281,14 +285,17 @@ def observe(case, binary, bash, source, directory, fault=None, resources=False):
     else:
         golden_watch(directory, source, bash)
         initial_watched = watched_inputs(directory)
+    if fault == 'abnormal-exit':
+        rc.write_text(rc.read_text() + "trap 'exit 37' EXIT\n")
     identity = input_identity(binary, bash, source, directory)
-    shell = BoundedShell(bash, rc, directory, env)
     row = {'case': case, 'inputs': identity, 'commands_ms': [], 'effects_passed': False,
            'context': {'directory': str(directory), 'binary': str(binary), 'bash': bash, 'source': str(source)},
            'comparison_signature': comparison_signature(case, binary, bash, source, directory)}
     automatic_gc = gc.isenabled()
     gc.disable()
+    shell = None
     try:
+        shell = BoundedShell(bash, rc, directory, env, receipt_path=directory / 'terminal.raw')
         native_expected = row['comparison_signature']['native_module_present']
         native_probe = ('[[ $(builtin binit_complete status 2>/dev/null) == "Completion menu: on" ]]'
                         if native_expected else '! builtin binit_complete status >/dev/null 2>&1')
@@ -337,9 +344,15 @@ def observe(case, binary, bash, source, directory, fault=None, resources=False):
         return row
     finally:
         try:
-            shell.close()
+            if shell is not None:
+                shell.close(ready=row['effects_passed'])
+        except BaseException:
+            row['effects_passed'] = False
+            raise
         finally:
-            (directory / 'terminal.raw').write_bytes(shell.raw)
+            if shell is not None:
+                row['shell_close'] = {'exit_status': shell.exit_status, 'forced_exit': shell.forced_exit,
+                                      'output_truncated': shell.output_truncated}
             (directory / 'observation.json').write_text(json.dumps(row, indent=2) + '\n')
             gc.collect()
             if automatic_gc:
@@ -355,6 +368,11 @@ def assess(rows, runs, pairs):
         elapsed = row['elapsed_ms']
         if key not in expected or key in seen or not row['effects_passed']:
             raise RuntimeError('unexpected, duplicate or failed effect row')
+        close = row.get('shell_close')
+        if (not isinstance(close, dict) or set(close) != {'exit_status', 'forced_exit', 'output_truncated'}
+                or type(close['exit_status']) is not int or close['exit_status'] != 0
+                or close['forced_exit'] is not False or close['output_truncated'] is not False):
+            raise RuntimeError('missing or failed shell close evidence')
         if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed <= 0:
             raise RuntimeError('nonpositive or nonfinite elapsed time')
         seen.add(key)

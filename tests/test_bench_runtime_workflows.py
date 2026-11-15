@@ -15,6 +15,7 @@ import bench_runtime_workflows as workflow
 def paired_rows():
     return [{'case': case, 'run': 0, 'pair': 0, 'variant': variant,
              'elapsed_ms': elapsed, 'effects_passed': True, 'comparison_signature': {'fixture': 'same'},
+             'shell_close': {'exit_status': 0, 'forced_exit': False, 'output_truncated': False},
              'commands_ms': [elapsed]}
             for case in workflow.CASES for variant, elapsed in [('candidate', .5), ('reference', 1.)]]
 
@@ -31,6 +32,17 @@ class WorkflowIntegrityTests(unittest.TestCase):
             with self.subTest(sequence=sequence):
                 with self.assertRaisesRegex(RuntimeError, 'duplicate or failed'):
                     workflow.assess(sequence, 1, 1)
+
+    def test_close_evidence_is_required_after_successful_effects(self):
+        for close in (None, {'exit_status': False, 'forced_exit': False, 'output_truncated': False},
+                      {'exit_status': 37, 'forced_exit': False, 'output_truncated': False},
+                      {'exit_status': 0, 'forced_exit': True, 'output_truncated': False},
+                      {'exit_status': 0, 'forced_exit': False, 'output_truncated': True}):
+            rows = paired_rows()
+            rows[0]['shell_close'] = close
+            with self.subTest(close=close):
+                with self.assertRaisesRegex(RuntimeError, 'shell close evidence'):
+                    workflow.assess(rows, 1, 1)
 
     def test_missing_unexpected_and_invalid_elapsed_rows_fail(self):
         with self.assertRaisesRegex(RuntimeError, 'incomplete'):
@@ -107,9 +119,21 @@ class WorkflowEffectTests(unittest.TestCase):
             for fault in workflow.FAULTS:
                 case = workflow.CASES[1] if fault in ('no-watch', 'wrong-status') else workflow.CASES[0]
                 with self.subTest(fault=fault):
-                    with self.assertRaisesRegex(RuntimeError, 'effect failure|prompt activation failure|input changed'):
+                    with self.assertRaisesRegex(RuntimeError, 'effect failure|prompt activation failure|input changed|abnormal shell close'):
                         workflow.observe(case, self.binary, self.bash, self.source,
                                          Path(temporary) / fault, fault=fault)
+
+    def test_exit_failure_retains_effects_and_closing_status(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
+            directory = Path(temporary) / 'failed-exit'
+            with self.assertRaisesRegex(RuntimeError, 'abnormal shell close: status=37'):
+                workflow.observe(workflow.CASES[0], self.binary, self.bash, self.source,
+                                 directory, fault='abnormal-exit')
+            row = json.loads((directory / 'observation.json').read_text())
+            self.assertFalse(row['effects_passed'])
+            self.assertEqual(len(row['commands_ms']), 2)
+            self.assertEqual(row['shell_close']['exit_status'], 37)
+            self.assertIn(b'exit', (directory / 'terminal.raw').read_bytes())
 
 
 if __name__ == '__main__':

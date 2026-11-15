@@ -5,6 +5,7 @@ import sys
 import tarfile
 import termios
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -145,6 +146,22 @@ class EcosystemIntegrityTests(unittest.TestCase):
             self.assertFalse(receipt['complete_two_run_framework_corpus'])
             self.assertEqual(receipt['active_case'], 'binit-0')
             self.assertIn('prepare failed', receipt['error'])
+
+    def test_resource_sampler_retains_owned_zombie_without_rss(self):
+        process = subprocess.Popen(['/bin/true'])
+        try:
+            deadline = time.monotonic() + 2
+            while '\nState:\tZ' not in (Path('/proc') / str(process.pid) / 'status').read_text():
+                if time.monotonic() > deadline:
+                    self.fail('owned child did not exit')
+                time.sleep(.001)
+            sample = corpus.resource_sample(process.pid)
+            self.assertEqual(sample['processes'], 1)
+            self.assertEqual(sample['zombies'], 1)
+            self.assertEqual(sample['rss_kib_sum'], 0)
+            self.assertEqual(sample['samples'][0]['state'], 'Z')
+        finally:
+            process.wait()
 
 
 if __name__ == '__main__':

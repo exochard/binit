@@ -217,13 +217,18 @@ def resource_sample(pid):
         base = Path('/proc') / str(child)
         try:
             status = (base / 'status').read_text()
+            state = re.search(r'^State:\s+(\w)', status, re.M)[1]
+            rss = re.search(r'^VmRSS:\s+(\d+)', status, re.M)
+            if rss is None and state not in ('Z', 'X'):
+                raise RuntimeError(f'owned process {child} state {state} has no RSS field')
             rows.append({'pid': child,
-                         'rss_kib': int(re.search(r'^VmRSS:\s+(\d+)', status, re.M)[1]),
+                         'state': state, 'rss_kib': int(rss[1]) if rss else 0,
                          'fds': len(list((base / 'fd').iterdir()))})
             pending.extend(map(int, (base / f'task/{child}/children').read_text().split()))
         except FileNotFoundError:
             continue
-    return {'processes': len(rows), 'rss_kib_sum': sum(r['rss_kib'] for r in rows),
+    return {'processes': len(rows), 'zombies': sum(r['state'] == 'Z' for r in rows),
+            'rss_kib_sum': sum(r['rss_kib'] for r in rows),
             'fds_sum': sum(r['fds'] for r in rows), 'samples': rows}
 
 

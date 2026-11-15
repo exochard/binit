@@ -54,8 +54,9 @@ its execution acknowledgment followed by the next prompt. The acknowledgment
 includes the terminal observer's 2 ms echo quiet interval, also recorded
 separately. A separate command verifies required effects.
 
-Readiness resource samples include the owned shell and its live descendants:
-RSS sums, descriptor sums and process counts. These are instantaneous samples.
+Readiness resource samples include the owned shell and its present descendants:
+RSS sums, descriptor sums and process counts, with zombie counts and states
+retained explicitly. Zombies have no userspace RSS. These are instantaneous samples.
 They do not measure startup process creation or peak memory. Terminal output
 is bounded at 8 MiB, with a 10-second phase timeout.
 

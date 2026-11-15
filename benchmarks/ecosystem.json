@@ -20,7 +20,7 @@
     "terminal_columns": 120,
     "terminal_bytes_limit": 8388608,
     "phase_timeout_seconds": 10,
-    "resource_scope": "shell and live descendants at readiness; instantaneous, not peak",
+    "resource_scope": "shell and present descendants at readiness, including zombie count/state; instantaneous, not peak",
     "source_cache": "warm filesystem cache, fresh private home for each launch",
     "prompt": "append common sentinel after existing prompt hooks",
     "input_ack": "after noncanonical readiness, type ':' then require execution acknowledgment and next prompt; includes echo quiet interval of 2 ms",

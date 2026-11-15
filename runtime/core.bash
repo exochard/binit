@@ -481,7 +481,7 @@ __binit_prompt_dispatch() {
         __binit_first_prompt=0
         __binit_first_prompt_work
     fi
-    if (( __binit_dispatch_pending )); then __binit_dispatch; fi
+    if (( __binit_dispatch_pending )); then __binit_event_dispatch; fi
     for __binit_prompt_dispatch_id in "${__binit_ids[@]}"; do
         if [[ ${__binit_load_kind[$__binit_prompt_dispatch_id]} == prompt && ${__binit_state[$__binit_prompt_dispatch_id]} == pending ]]; then
             if __binit_load "$__binit_prompt_dispatch_id"; then :; fi

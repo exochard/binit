@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,167 @@ class EffectsTests(unittest.TestCase):
                                 env=environment, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(result.stdout, '')
+
+    def test_record_aliases_matches_named_bash_print_and_keeps_prior_ownership(self):
+        self.shell(r'''
+alias existing=': original'
+declare -A before=() owned=([prior:reintroduced]='prior definition')
+binit_complete effects names alias before || exit 1
+alias existing=': changed'
+alias reintroduced=': replacement'
+alias quoted='printf "%s" '\''literal $(must-not-run)'\'''
+alias multiline=$'first\nsecond\n'
+alias empty=''
+alias hello-world=': hyphen'
+alias 'odd.name=: untracked'
+alias -- '-dash=: untracked'
+snapshot=$(declare -p before)
+binit_complete effects record-aliases plugin before owned || exit 2
+[[ $(declare -p before) == "$snapshot" ]] || exit 3
+[[ ${#owned[@]} == 5 && ${owned[prior:reintroduced]} == 'prior definition' ]] || exit 4
+for name in quoted multiline empty hello-world; do
+    expected=$(builtin alias -p -- "$name")
+    [[ ${owned["plugin:$name"]-} == "$expected" ]] || exit 5
+done
+saved=$(declare -p owned)
+binit_complete effects record-aliases other before owned || exit 6
+[[ $(declare -p owned) == "$saved" ]] || exit 7
+''')
+
+    def test_record_aliases_rejects_unsafe_arrays_without_mutation(self):
+        self.shell(r'''
+alias candidate=': safe'
+declare -A before=() owners=([prior:kept]=definition)
+declare -Ar fixed=([keep]=unchanged)
+declare -Ai numbers=([keep]=7)
+declare -Au upper=([keep]=unchanged)
+declare -a indexed=(unchanged)
+declare scalar=unchanged
+declare -n reference=owners
+saved=$(declare -p before owners fixed numbers upper indexed scalar reference)
+for target in fixed numbers upper indexed scalar reference RANDOM missing 'owners[$(printf must-not-run)]'; do
+    if binit_complete effects record-aliases plugin before "$target" 2>/dev/null; then exit 1; fi
+done
+for source in indexed scalar reference RANDOM missing; do
+    if binit_complete effects record-aliases plugin "$source" owners 2>/dev/null; then exit 2; fi
+done
+if binit_complete effects record-aliases plugin owners owners; then exit 3; fi
+[[ $(declare -p before owners fixed numbers upper indexed scalar reference) == "$saved" ]] || exit 4
+''')
+
+    def test_watch_metadata_matches_stat_for_links_missing_paths_and_timestamps(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
+            directory = Path(temporary)
+            file = directory / "literal 'quote\\ and\nnewline"
+            file.write_text('data')
+            os.utime(file, ns=(1_234_567_890_123_456_789, 1_234_567_890_987_654_321))
+            (directory / 'link').symlink_to(file)
+            (directory / 'broken').symlink_to(directory / 'absent')
+            (directory / 'loop').symlink_to('loop')
+            os.mkfifo(directory / 'fifo')
+            for name, seconds in [('ancient', -62_009_366_400), ('future', 253_402_300_800)]:
+                dated = directory / name
+                dated.write_text('dated')
+                os.utime(dated, ns=(seconds * 1_000_000_000, seconds * 1_000_000_000))
+            paths = [file, directory, directory / 'link', directory / 'broken',
+                     directory / 'loop', directory / 'missing', directory / 'fifo',
+                     directory / 'ancient', directory / 'future']
+            self.shell('paths=(' + ' '.join(shlex.quote(str(path)) for path in paths) + r''')
+declare actual=unchanged
+saved_flags=$-
+saved_ifs=$IFS
+for zone in UTC0 EST5EDT Asia/Kolkata Europe/Rome; do
+    export TZ=$zone
+    for path in "${paths[@]}"; do
+        expected=$(LC_ALL=C command stat -Lc '%d:%i:%s:%y:%z' -- "$path" 2>/dev/null || printf missing)
+        binit_complete effects watch "$path" actual || exit 1
+        [[ $actual == "$expected" ]] || { printf 'metadata differs: <%s> <%s>\n' "$actual" "$expected" >&2; exit 2; }
+    done
+done
+[[ $- == "$saved_flags" && $IFS == "$saved_ifs" ]] || exit 3
+''')
+
+    def test_watch_metadata_rejects_unsafe_outputs_without_evaluating_them(self):
+        self.shell(r'''
+declare scalar=unchanged
+declare -r fixed=unchanged
+declare -i number=7
+declare -a indexed=(unchanged)
+declare -A associative=([keep]=unchanged)
+declare -n reference=scalar
+saved=$(declare -p scalar fixed number indexed associative reference)
+for output in fixed number indexed associative reference RANDOM missing 'associative[$(printf must-not-run)]'; do
+    if binit_complete effects watch / "$output" 2>/dev/null; then exit 1; fi
+done
+[[ $(declare -p scalar fixed number indexed associative reference) == "$saved" ]] || exit 2
+''')
+
+    def test_watch_runtime_matches_fallback_for_missing_and_overridden_commands(self):
+        source = (ROOT / 'runtime/core.bash').read_text()
+        start = source.index('__binit_watch_snapshot() {')
+        end = source.index('\n}', start) + 2
+        with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
+            wrapper = Path(temporary) / 'stat'
+            wrapper.write_text('#!/bin/bash\nprintf "wrapped:%s" "$*"\n')
+            wrapper.chmod(0o700)
+            self.shell(source[start:end] + '\n' + 'wrapper=' + shlex.quote(temporary) + r'''
+declare -A __binit_watch=([fixture]=/) __binit_watch_value=() __binit_watch_dirty=()
+saved_path=$PATH
+exec >/dev/null
+for mode in ordinary wrapper missing command_function stat_function functrace traced_function loader; do
+    PATH=$saved_path
+    case $mode in
+        wrapper) PATH=$wrapper ;;
+        missing) PATH=/nonexistent ;;
+        command_function) command() { printf 'intercepted:%s' "$*"; } ;;
+        stat_function) stat() { printf must-not-run; } ;;
+        functrace) set -T; trap 'printf "DEBUG:%s\n" "$BASH_COMMAND"' DEBUG ;;
+        traced_function) declare -ft __binit_watch_snapshot; trap 'printf "DEBUG:%s\n" "$BASH_COMMAND"' DEBUG ;;
+        loader) export LD_PRELOAD=/nonexistent-binit-metadata-test ;;
+    esac
+    __binit_watch_value=()
+    __binit_watch_snapshot fixture || exit 1
+    actual=${__binit_watch_value[fixture:0]}
+    enable -n binit_complete
+    __binit_watch_value=()
+    __binit_watch_snapshot fixture || exit 2
+    expected=${__binit_watch_value[fixture:0]}
+    enable binit_complete
+    [[ $actual == "$expected" ]] || { printf 'resolution differs in %s\n' "$mode" >&2; exit 3; }
+    trap - DEBUG
+    set +T
+    declare +t -f __binit_watch_snapshot
+    unset LD_PRELOAD
+    unset -f command stat
+done
+''')
+
+    def test_traced_alias_recorder_matches_shell_capture(self):
+        source = (ROOT / 'runtime/core.bash').read_text()
+        start = source.index('__binit_record_effects() {')
+        end = source.index('\n}', start) + 2
+        self.shell(source[start:end] + r'''
+__binit_capture_names() {
+    local -n target=$1
+    target=()
+    [[ $2 != alias ]] || target[new_alias]=1
+}
+declare -A before_functions=() before_aliases=() __binit_owned_functions=() __binit_owned_aliases=()
+binit_complete effects names function before_functions
+alias new_alias='printf "%s" "literal $value"'
+exec >/dev/null
+declare -ft __binit_record_effects
+trap 'printf "DEBUG\n"' DEBUG
+__binit_record_effects sample before_functions before_aliases || exit 1
+actual=${__binit_owned_aliases[sample:new_alias]}
+enable -n binit_complete
+__binit_owned_functions=()
+__binit_owned_aliases=()
+__binit_record_effects sample before_functions before_aliases || exit 2
+expected=${__binit_owned_aliases[sample:new_alias]}
+trap - DEBUG
+[[ $actual == "$expected" ]] || exit 3
+''')
 
     def test_check_functions_preserves_definitions_metadata_and_missing_entries(self):
         self.shell(r'''

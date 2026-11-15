@@ -98,6 +98,7 @@ __binit_record_effects() {
             [[ -n $__binit_record_def ]] && __binit_owned_functions["$__binit_record_id:$__binit_record_name"]=$__binit_record_def
         done
     fi
+    if [[ $- != *T* ]] && builtin binit_complete effects record-aliases "$__binit_record_id" "$3" __binit_owned_aliases 2>/dev/null; then return 0; fi
     for __binit_record_name in "${!__binit_record_aliases[@]}"; do
         [[ -v __binit_record_before_aliases[$__binit_record_name] ]] && continue
         __binit_record_owned=0
@@ -133,13 +134,23 @@ __binit_notify() {
 }
 
 __binit_watch_snapshot() {
-    local __binit_watch_id=$1 __binit_watch_path __binit_watch_key __binit_watch_new __binit_watch_index=0
+    local __binit_watch_id=$1 __binit_watch_path __binit_watch_key __binit_watch_new __binit_watch_index=0 __binit_watch_native=0 __binit_watch_command
     local -a __binit_watch_paths=()
     IFS=',' read -r -a __binit_watch_paths <<< "${__binit_watch[$__binit_watch_id]}"
+    if [[ $- != *T* ]] && builtin binit_complete status >/dev/null 2>&1; then
+        __binit_watch_command=$(builtin type -t stat; builtin type -p stat; builtin type -t command) 2>/dev/null
+        case $__binit_watch_command in
+            $'file\n/usr/bin/stat\nbuiltin'|$'file\n/bin/stat\nbuiltin') __binit_watch_native=1 ;;
+        esac
+    fi
     for __binit_watch_path in "${__binit_watch_paths[@]}"; do
         __binit_watch_key="$__binit_watch_id:$__binit_watch_index"
         __binit_watch_index=$((__binit_watch_index + 1))
-        __binit_watch_new=$( { { LC_ALL=C command stat -Lc '%d:%i:%s:%y:%z' -- "$__binit_watch_path" 2>/dev/null || printf 'missing'; } 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+        if (( __binit_watch_native )) && builtin binit_complete effects watch "$__binit_watch_path" __binit_watch_new 2>/dev/null; then
+            :
+        else
+            __binit_watch_new=$( { { LC_ALL=C command stat -Lc '%d:%i:%s:%y:%z' -- "$__binit_watch_path" 2>/dev/null || printf 'missing'; } 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+        fi
         if [[ -v __binit_watch_value[$__binit_watch_key] && ${__binit_watch_value[$__binit_watch_key]} != "$__binit_watch_new" ]]; then
             __binit_watch_dirty[$__binit_watch_id]=1
         fi

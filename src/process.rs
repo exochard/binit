@@ -207,11 +207,14 @@ fn run_inner(command: &mut Command, timeout: Duration, trace: Option<TracePipe>)
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    // The child is owned by this manager; terminate it if the manager exits.
+        .stderr(Stdio::piped());
+    // Private interactive fixtures must not acquire the caller's terminal.
+    // A new session also supplies the process group owned by this manager.
     unsafe {
         command.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
                 return Err(std::io::Error::last_os_error());
             }

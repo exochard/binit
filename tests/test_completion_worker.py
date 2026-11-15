@@ -169,7 +169,8 @@ print('bounded')
             ready = self.root / "ready"
             child = f"from pathlib import Path; import time; Path({str(ready)!r}).touch(); time.sleep(30)"
             supervisor = "import os,subprocess,sys,time; p=subprocess.Popen([sys.argv[1],'__completion-worker',str(os.getpid()),sys.executable,'-c',sys.argv[2]],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(p.pid,flush=True); time.sleep(30)"
-            parent = subprocess.Popen([sys.executable, "-c", supervisor, str(BINARY), child], stdout=subprocess.PIPE)
+            parent = subprocess.Popen([sys.executable, "-c", supervisor, str(BINARY), child],
+                                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
             worker_pid = int(parent.stdout.readline())
             deadline = time.monotonic() + 3
             while not ready.exists() and time.monotonic() < deadline:

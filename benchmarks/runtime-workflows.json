@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "status": "targets frozen before treatment; validation driver pending",
+  "reference_commit": "c80d4dfafaf74fbafefcf32626e1e22b22c67a90",
+  "reference_binary_sha256": "eab94fd91df0e5e9b23b1fc0282257477b1f1db9c41bb5179a6b46a782c5d3bd",
+  "primary_environment": "Linux x86_64, matching stock Bash 5.3 native artifacts, private homes and synthetic fixtures",
+  "qualification": {
+    "runs": 2,
+    "pairs_per_run": 20,
+    "minimum_paired_elapsed_improvement_percent": 25,
+    "primary_statistic": "median of candidate/reference elapsed ratios in each run must be <=0.75",
+    "order": "alternate candidate-first and reference-first by pair and run",
+    "failed_effect": "fail whole run and retain every collected row; no replacement or pooling",
+    "preservation": "unchanged original lifecycle/interactive/interpreter bars; no repeated >5% median or p95 regressions in applicable fields",
+    "separate_observation": "instrumented diagnosis and process counts never enter elapsed qualification"
+  },
+  "observation": {
+    "terminal_rows": 32,
+    "terminal_columns": 120,
+    "terminal_bytes_limit": 8388608,
+    "phase_timeout_seconds": 10,
+    "initialization": "already-running interactive shell with prepared generation; initial activation outside primary interval",
+    "identity": "binary, interpreter, runtime/module, driver, configuration, input files and policy checked before/after each run",
+    "resources": "no persistent worker or cache authorized; transient watch data bounded by existing 128-path-per-plugin limit; record children/FDs/RSS separately with uncertainty",
+    "tail_samples": "retain per-command samples; do not infer typing p99 from this short corpus"
+  },
+  "cases": [
+    {
+      "id": "git-shortcuts-first-use",
+      "purpose": "Activate useful Git shortcuts on demand in an existing shell and use them immediately",
+      "source": {
+        "repository": "Bash-it/bash-it",
+        "revision": "72ea9e285fe1828977d1cd2bc596b901bcc57440",
+        "path": "aliases/available/git.aliases.bash",
+        "sha256": "bf548f4d6c7287daa07206c6c6faf0c239b962852a3b7521dec358d73ddba9a6"
+      },
+      "load": "event plugin, explicitly requested through binit load after initialization",
+      "metadata_adapter": "Declared no-op about-alias/url helpers; enabled-component query returns false; warning helper remains visible. No Git behavior is stubbed.",
+      "primary_interval": "wall time from requesting binit load through a later accepted command that uses alias g, calls get_default_branch and completes the effect assertions",
+      "effects": ["exact aliases and function definitions against same-interpreter direct-source control", "g status --porcelain=v1 on a private local Git fixture", "get_default_branch returns main for the declared local origin HEAD", "source count exactly one", "export visible in child", "ownership report complete for supported simple names", "preexisting helpers and unrelated bindings preserved"],
+      "post_interval_checks": ["repeat use without another source", "owned unload preserves replacements and untracked non-simple alias names according to current contract"],
+      "limits": "This improves activation frequency, not every subsequent Git command; no startup or unload time counts toward the target."
+    },
+    {
+      "id": "toolchain-readiness-during-work",
+      "purpose": "Keep accepting ordinary commands while toolchain files are watched, then activate the ready plugin at its normal prompt boundary",
+      "load": "one watch plugin, eight absolute paths derived from fixture-relative names, condition based on ready marker",
+      "watched_files": [
+        {"path": "package-lock.json", "initial": "lock-v1\n"},
+        {"path": ".tool-versions", "initial": "tool-v1\n"},
+        {"path": "settings.env", "initial": "mode=development\n"},
+        {"path": "workspace.conf", "initial": "workspace-v1\n"},
+        {"path": ".venv/.ready", "initial": null},
+        {"path": "node_modules/.ready", "initial": null},
+        {"path": "build/toolchain.stamp", "initial": null},
+        {"path": "build/toolchain.ready", "initial": null}
+      ],
+      "commands": 20,
+      "schedule": {
+        "1-10": "ordinary status-checked commands increment a checked counter; source remains zero",
+        "11": "create build/toolchain.ready with ready newline; normal ensuing prompt must activate plugin",
+        "12": "assert source count one and call ready function with literal/empty arguments; preserve return status37, export and current-shell directory effects",
+        "13": "change settings.env to mode=ready newline; source must not run again",
+        "14-20": "continue checked commands with source count one"
+      },
+      "primary_interval": "wall time through all20accepted command/prompt round trips, including activation and first ready-function use",
+      "effects": ["all20command counters exactly once", "no source before declared readiness change", "natural activation before command12 without explicit dispatch or forced load", "literal arguments, status37, export and directory change", "source count remains one after another watched-file change", "caller options, unrelated function/alias and selection preserved"],
+      "limits": "The fixture uses declared readiness markers; it does not claim to install or validate a real toolchain."
+    }
+  ]
+}

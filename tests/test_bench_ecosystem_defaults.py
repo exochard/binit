@@ -15,6 +15,46 @@ import bench_ecosystem_defaults as defaults
 
 
 class DefaultsIntegrityTests(unittest.TestCase):
+    def test_close_ready_only_after_effect_checks_and_close_failures_propagate(self):
+        class Shell:
+            startup_ms = 1.0
+            pid = 1
+            declined = False
+            screen = type('Screen', (), {'display': []})()
+            def __init__(self, status, close_error=False):
+                self.status = status
+                self.close_error = close_error
+                self.raw = bytearray()
+                self.closed = []
+            def settled(self, data):
+                return 1.0
+            def command(self, code):
+                if code:
+                    self.raw.extend(b'\x1eCORPUS:' + self.status + b'\x1e')
+                return 1.0
+            def close(self, *, ready=False):
+                self.closed.append(ready)
+                if self.close_error:
+                    raise RuntimeError('abnormal shell close')
+        with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
+            root = Path(temporary)
+            (root / '.osh-update').write_text('invalid timestamp')
+            for case_id, status, close_error, expected in [('bash-control', b'0', False, True),
+                    ('bash-control', b'1', False, False), ('bash-control', b'0', True, True),
+                    ('omb-template-not-due', b'0', False, False)]:
+                shell = Shell(status, close_error)
+                with self.subTest(case_id=case_id, status=status, close_error=close_error), \
+                        patch.object(defaults, 'DefaultShell', return_value=shell), \
+                        patch.object(defaults.corpus, 'wait_for_editor'), \
+                        patch.object(defaults.corpus, 'resource_sample', return_value={}), \
+                        patch.object(defaults, 'default_probe', return_value=':'):
+                    if status != b'0' or close_error or case_id.startswith('omb-template-'):
+                        with self.assertRaises(RuntimeError):
+                            defaults.observe({'id': case_id, 'shell': 'bash'}, '/bin/bash', root / 'rc', root, root, root / 'terminal.raw')
+                    else:
+                        defaults.observe({'id': case_id, 'shell': 'bash'}, '/bin/bash', root / 'rc', root, root, root / 'terminal.raw')
+                    self.assertEqual(shell.closed, [expected])
+
     def test_doc_git_completion_glob_is_in_identity(self):
         with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
             root = Path(temporary)

@@ -113,6 +113,7 @@ def observe(subject, interpreter, rc, work, home, failure_path):
         raise RuntimeError('primed Zsh startup configuration changed')
     started = time.perf_counter_ns()
     shell = CheckedShell(interpreter, rc, work, env, command, receipt_path=failure_path)
+    close_ready = False
     try:
         startup = shell.startup_ms
         corpus.wait_for_editor(shell)
@@ -124,20 +125,22 @@ def observe(subject, interpreter, rc, work, home, failure_path):
         usable = (time.perf_counter_ns() - started) / 1e6
         offset = len(shell.raw)
         check = 'corpus_verify && ' + loader_readiness(subject, work, rc)
-        ready = shell.command(check + '; corpus_status=$?; printf "\\036CORPUS:%s\\036" "$corpus_status"')
+        effect_ms = shell.command(check + '; corpus_status=$?; printf "\\036CORPUS:%s\\036" "$corpus_status"')
         statuses = re.findall(rb'\x1eCORPUS:(\d+)\x1e', shell.raw[offset:])
         if statuses != [b'0']:
             raise RuntimeError(f'{subject}: effects failed: {statuses!r}')
-        return {'startup_visible_ms': startup, 'first_input_ack_ms': acknowledgment,
+        result = {'startup_visible_ms': startup, 'first_input_ack_ms': acknowledgment,
                 'input_echo_quiet_ms': echo_quiet, 'startup_usable_ms': usable,
-                'effect_probe_ms': ready, 'required_effects_ms': (time.perf_counter_ns() - started) / 1e6,
+                'effect_probe_ms': effect_ms, 'required_effects_ms': (time.perf_counter_ns() - started) / 1e6,
                 'resources_at_readiness': corpus.resource_sample(shell.pid),
                 'effect_status': 0, 'terminal_bytes': len(shell.raw)}
+        close_ready = True
+        return result
     except BaseException as error:
         failure_path.write_bytes(shell.raw)
         raise RuntimeError(f'{subject}: {error}\n' + '\n'.join(shell.screen.display)) from error
     finally:
-        shell.close()
+        shell.close(ready=close_ready)
 
 
 def verified_observe(subject, interpreter, rc, directory, home, expected_home, failure_path):

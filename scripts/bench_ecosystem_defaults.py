@@ -219,6 +219,7 @@ def observe(case, interpreter, rc, home, cwd, failure_path):
     due = case['id'] == 'omb-template-due-decline'
     started = time.perf_counter_ns()
     shell = DefaultShell(interpreter, rc, cwd, env, command, decline_due=due, receipt_path=failure_path)
+    close_ready = False
     try:
         visible = shell.startup_ms
         if due and not shell.declined:
@@ -244,17 +245,19 @@ def observe(case, interpreter, rc, home, cwd, failure_path):
                 raise RuntimeError('default updater did not preserve a current private timestamp')
         else:
             stamp = None
-        return {'startup_visible_ms': visible, 'first_input_ack_ms': ack,
+        result = {'startup_visible_ms': visible, 'first_input_ack_ms': ack,
                 'input_echo_quiet_ms': quiet, 'startup_usable_ms': usable,
                 'effect_probe_ms': effect_ms, 'required_effects_ms': (time.perf_counter_ns() - started) / 1e6,
                 'update_prompt_declined': shell.declined, 'update_timestamp': stamp,
                 'resources_at_readiness': corpus.resource_sample(shell.pid),
                 'effect_status': 0, 'terminal_bytes': len(shell.raw)}
+        close_ready = True
+        return result
     except BaseException as error:
         failure_path.write_bytes(shell.raw)
         raise RuntimeError(f'{case["id"]}: {error}\n' + '\n'.join(shell.screen.display)) from error
     finally:
-        shell.close()
+        shell.close(ready=close_ready)
 
 
 def run_summary(rows, case_ids, pairs):

@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "status": "frozen measurement policy; execution and review pending",
+  "source_lock": "benchmarks/ecosystem.json",
+  "cases": [
+    {
+      "id": "bash-bare",
+      "role": "same-interpreter baseline, not a framework default",
+      "shell": "bash",
+      "oracle": "accepted command and next prompt"
+    },
+    {
+      "id": "bash-it-template",
+      "role": "Bash-it silent installer profile and generated bobby-theme template",
+      "shell": "bash",
+      "template": "bash-it/template/bashrc.template.bash",
+      "template_sha256": "d122a9e7c5ff91299cb68172ccf709e6664f9a1522a89f8cd6c66fdcb156cce3",
+      "profile": "bash-it/profiles/default.bash_it",
+      "profile_sha256": "ae4d32b57091c1fba62f24d7911e66ae5c96e42226ed3be03fa4b7cb016a39de",
+      "components": ["plugin:base", "completion:aliases", "completion:bash-it", "completion:system", "alias:general", "alias:bash-it", "alias:directory", "alias:editor"],
+      "oracle": "bobby prompt function, base plugin, all default-profile links, exact edit/ll/shit/cd.. aliases and bash-it completion"
+    },
+    {
+      "id": "omb-template-not-due",
+      "role": "Oh My Bash template, primed private state, default update check not due",
+      "shell": "bash",
+      "template": "oh-my-bash/templates/bashrc.osh-template",
+      "template_sha256": "51b1a36439738ff76bb1b93b7714f016b4d10a5d1a19a5b6b1ddec90273ecbe0",
+      "updater": "oh-my-bash/tools/check_for_upgrade.sh",
+      "updater_sha256": "463f04836768675569d091398d56b6794717253d4f09c1b163c3804b4456bc4f",
+      "components": ["completion:git", "completion:composer", "completion:ssh", "alias:general", "plugin:git", "plugin:bashmarks", "theme:font"],
+      "oracle": "font prompt, loaded-module list, exact ga/g/ll aliases and composer/ssh completion; update check enabled and not due"
+    },
+    {
+      "id": "omb-template-due-decline",
+      "role": "Oh My Bash template with due update prompt answered n; automated response time included",
+      "shell": "bash",
+      "template": "oh-my-bash/templates/bashrc.osh-template",
+      "template_sha256": "51b1a36439738ff76bb1b93b7714f016b4d10a5d1a19a5b6b1ddec90273ecbe0",
+      "updater": "oh-my-bash/tools/check_for_upgrade.sh",
+      "updater_sha256": "463f04836768675569d091398d56b6794717253d4f09c1b163c3804b4456bc4f",
+      "initial_update_timestamp": "LAST_EPOCH=1\n",
+      "oracle": "same OMB module effects, actual due prompt observed and declined, update timestamp refreshed"
+    },
+    {
+      "id": "blesh-trial",
+      "role": "standalone editor source trial with upstream defaults; not a framework",
+      "shell": "bash",
+      "entry": "ble/out/ble.sh",
+      "entry_sha256": "dcd375d84a85c099da23d4c243937bb55127db76c983fc2840bc0ac2aaf5ac41",
+      "oracle": "BLE_VERSION present, ble-attach function exists, editor attached, accepted command and next prompt"
+    },
+    {
+      "id": "zsh-bare",
+      "role": "same-interpreter baseline, not a framework default",
+      "shell": "zsh",
+      "oracle": "accepted command and next prompt"
+    },
+    {
+      "id": "zinit-loader",
+      "role": "Zinit loader with private primed state and no selected plugins; no universal configuration is claimed",
+      "shell": "zsh",
+      "entry": "zinit/zinit.zsh",
+      "entry_sha256": "cc93029d610df8e91195694b3b608c4af5bdbffdd79395e9cafb4c902fed5485",
+      "oracle": "zinit function and expected private data directory, accepted command and next prompt"
+    }
+  ],
+  "unsupported": [
+    "Binit has no universal installed default; its explicit seven-plugin source trial is a separate configuration",
+    "ble.sh is an editor and its startup is not an equivalent framework fixture",
+    "Zinit is a Zsh loader and has no single universal selected-plugin configuration",
+    "The due-update case measures a declined prompt; it does not execute an update or access a network"
+  ],
+  "observation": {
+    "runs": 2,
+    "pairs_per_run": 20,
+    "order": "alternate case order by pair and run",
+    "terminal": "32 rows, 120 columns, 8 MiB output limit, 10 second phase timeout",
+    "accepted_input": "after editor input mode, type colon and require execution acknowledgment and next prompt; record observer echo quiet interval",
+    "priming": "one fully effect-checked untimed launch before timings; source preparation and template installation remain outside launch timing",
+    "home": "separate private home and copied framework tree per case; synthetic history reset outside timed fields; ble.sh runs from a private build copy and creates its own cache there",
+    "system_completion_inputs": "record presence and SHA256 for system Bash-completion entry points and Git completion search matches, plus tool identities; system packages remain outside the pinned upstream archives",
+    "updates": "template updater remains enabled, not-due and due-decline are distinct cases; automatic decline prevents network calls",
+    "integrity": "pinned source archive and build-output inventories checked before and after each run; driver, contract, executable and case identities checked at pair boundaries; dynamic private state recorded at launch boundaries",
+    "resources": "readiness observation only; non-atomic approximate RSS, shared pages counted per process, vanished children explicit; no peak or overall ranking",
+    "failure": "any setup, identity, prompt or effect failure rejects the run and retains all completed observations and partial evidence"
+  }
+}

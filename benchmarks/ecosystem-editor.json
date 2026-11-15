@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "status": "frozen trace and effect contract; driver and execution pending",
+  "sources": {
+    "source_lock": "benchmarks/ecosystem.json",
+    "ble_entry": "ble/out/ble.sh",
+    "ble_entry_sha256": "dcd375d84a85c099da23d4c243937bb55127db76c983fc2840bc0ac2aaf5ac41"
+  },
+  "subjects": [
+    {"id": "readline", "role": "plain Bash and Readline control; no independent live history panel"},
+    {"id": "binit", "role": "Binit native completion and explicitly enabled live history in stock Bash"},
+    {"id": "blesh", "role": "pinned standalone ble.sh editor in the same stock Bash"}
+  ],
+  "modes": ["emacs", "vi"],
+  "pairing_preflight": "for each keymap, first pass both standalone control traces; then attempt the paired trace; only a demonstrated paired behavior mismatch may leave the pairing unqualified, and preparation, identity, timeout or harness errors reject the corpus",
+  "framework_editor_track": {
+    "fixture": "benchmarks/fixtures/ecosystem/framework-plugin.sh",
+    "plugins": 10,
+    "measured_baseline": "equiv-binit",
+    "conditional_pairings": ["equiv-bashit-blesh", "equiv-omb-blesh"],
+    "standalone_controls": ["equiv-bashit-control", "equiv-omb-control", "equiv-blesh-control"],
+    "loader_config": "genuine pinned loaders with the same portable startup plugin fixture; themes and update checks disabled in this matched-feature track",
+    "selected_editor_features": "Binit completion and live history with syntax highlighting disabled; ble.sh history-driven suggestions and completion, with syntax, filename and variable highlighting and syntax-driven auto-completion disabled",
+    "ble_options": ["highlight_syntax=", "highlight_filename=", "highlight_variable=", "complete_auto_complete_opts=syntax-disabled"],
+    "limits": "The Binit plus ble pairing checks an explicitly created alpha_pair_probe file, the enabled provider registration and live ble Tab binding; only observed completion of that file without a provider start is classified as an isolated-provider mismatch. Configured feature targets share inputs and checked effects but retain different menus, history windows, completion semantics and isolated-provider capabilities; they do not establish full feature parity.",
+    "qualification": "each framework-plus-editor pairing enters measurement only after its framework-only and editor-only controls and the paired trace pass in both keymaps; observed mismatches stay unequal, infrastructure failures reject the corpus"
+  },
+  "histories": [
+    {"id": "empty", "entries": 0},
+    {"id": "small", "entries": 64},
+    {"id": "large", "entries": 2048, "old_match": "editor-historic-needle", "recent_match": "editor-recent-needle"}
+  ],
+  "trace": [
+    {"id": "typing", "events_per_key_per_pair": 50, "events_per_key_per_case_per_run": 1000, "input": "alternating printable ASCII and deletion on an unmatched prefix", "effects": "every event acknowledged; command line remains usable; calculate p99 separately from at least 1000 events of each key per case per run"},
+    {"id": "unicode", "input": "invoke capture function with literal caffè and 雪", "effects": "exact UTF-8 argument and zero unintended execution"},
+    {"id": "multiline-paste", "input": "bracketed paste containing a quoted newline", "effects": "exact argument bytes after acceptance; no execution before acceptance"},
+    {"id": "wrapped-prompt", "columns": 40, "input": "prompt and editable line wrapping across the right edge", "effects": "complete argument bytes and usable prompt after acceptance"},
+    {"id": "completion-first-warm", "input": "same Bash completion function and one candidate containing a space, twice", "effects": "correct first and warm insertion, literal argument bytes and provider invocation count"},
+    {"id": "completion-large-cancel", "candidates": 1024, "input": "ambiguous completion then Readline Emacs Ctrl-G, Readline vi Esc followed by i, Binit menu Esc, or ble.sh menu Ctrl-G", "effects": "time from first cancellation input through accepted-command endpoint; record accepted-command latency separately; answer the complete Readline candidate confirmation when present, preserve editable input, record provider count and reject stale insertion"},
+    {"id": "history-range", "input": "search recent marker and large-history old marker", "effects": "record visible/retrievable matches; Binit searches only its newest 1000 entries"},
+    {"id": "isolated-slow-cancel", "provider_delay_ms": 200, "input": "type while isolated completion is in flight", "effects": "the provider publishes its own PID atomically; a successful Binit plus ble pairing requires that exact non-zombie owned descendant at input; Binit must preserve all input and reject stale completion; Readline and ble.sh synchronous controls record their exact accepted input and differing behavior; retain immediate resource and descriptor inventory; mark vanished descriptors partial; require a complete single-shell, no-child observation at or below the baseline descriptor count within 100 ms, with checks at 5 ms intervals and all observations retained"},
+    {"id": "stateful-slow-provider", "provider_delay_ms": 200, "input": "ordinary current-shell Bash completion function changes globals", "effects": "record exact provider arguments, global changes and final candidate; report blocking behavior separately"},
+    {"id": "recovery", "input": "press Ctrl-C on an unaccepted command, then execute a harmless capture command", "effects": "no interrupted command execution and correct next accepted argument; record ble.sh vi normal-mode line retention and explicit deletion before continuing"}
+  ],
+  "environment": {
+    "shell": "the same selected stock Bash and matching Readline for every subject",
+    "terminal": "PTY 32x120 except the explicit 32x40 wrap trace, bracketed paste enabled, 8 MiB output bound and 10 second phase timeout",
+    "history": "synthetic private history; HISTSIZE and HISTFILESIZE 4096, no personal data",
+    "provider": "same ordinary Bash function for stateful cases; Binit's public isolated provider registration and a separately declared ble.sh-compatible isolated wrapper",
+    "initialization": "prepared Binit generation and ble.sh build outside measured input intervals; verify public editor identity and active configuration",
+    "privacy": "input and histories are synthetic; no user startup files or shell installation",
+    "typing_tail": "per-event monotonic timing to terminal response; retain all samples, no p99 unless at least 1000 acknowledged input events",
+    "identity": "driver, terminal observer, contract, input histories, provider, Bash, selected Binit binary and module, ble.sh sources and build outputs checked before and after each run",
+    "resources": "observe owned shell/descendants and descriptors separately; approximate non-atomic RSS, explicit vanished samples; no peak claim",
+    "failure": "retain failed traces and raw terminal output; a failure cannot be converted into a missing or unsupported timing row"
+  },
+  "comparability": [
+    "Plain Readline is a control without Binit's or ble.sh's editor features.",
+    "Binit live history searches only the newest 1000 entries; the old large-history match must remain visible as a capability limit.",
+    "Frameworks without editors require an explicitly checked editor pairing; untested pairings remain unqualified.",
+    "Binit plus ble.sh must pass compatibility behavior before any pairing can be measured.",
+    "Isolated and current-shell stateful providers have different effects and are not interchangeable."
+  ],
+  "measurement": {"runs": 2, "pairs_per_run": 20, "order": "alternate subject order by run and pair", "results": "raw events, effects and per-run distributions; no pooled overall winner"}
+}

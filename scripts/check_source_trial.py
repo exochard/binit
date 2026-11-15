@@ -75,9 +75,9 @@ def check(trial):
             shell.settled(b'\x1b')
             shell.cancel()
             require('hs "hello from binit" | grep -Fx ' + shlex.quote('printf "hello from binit\\n"'), 'seeded history search')
-            # A nonmatching line reaches completion without focusing history rows.
             shell.settled(b'git sta')
-            shell.settled(b'\x1b')
+            shell.settled(b'\t')
+            shell.until(lambda: any('History NAVIGATE' in row for row in shell.screen.display), seconds=5)
             shell.settled(b'\x1b')
             shell.settled(b'\t')
             shell.until(lambda: any('Completions' in row for row in shell.screen.display), seconds=5)

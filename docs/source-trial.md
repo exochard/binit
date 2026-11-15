@@ -54,7 +54,7 @@ and extract the bootstrap verifier from its fixed path:
 ```bash
 cd /path/to/source-bundle
 sha256sum sources.json
-sha256sum --check SHA256SUMS
+python3 -c 'import json; r=json.load(open("sources.json")); [print(p["sha256"]+"  "+p["artifact"]) for p in [r["core"], *r["plugins"]]]' | sha256sum --check
 core_archive=$(python3 -c 'import json; print(json.load(open("sources.json"))["core"]["artifact"])')
 mkdir bootstrap
 tar -xzf "$core_archive" -C bootstrap scripts/unpack_sources.py
@@ -63,6 +63,8 @@ cd trial/core
 ```
 
 Bootstrap extraction runs only after the trusted manifest and archive checks.
+The checksum lines above come from that manifest. `SHA256SUMS` is a convenience
+copy and is not the trust anchor for bootstrap execution.
 The complete unpacker rechecks the archives against `sources.json`. It checks
 file digests, rejects links and escaping paths, and restores recorded modes.
 An existing trial directory is refused. The full trial requires the seven
@@ -111,8 +113,9 @@ repository search is needed. Trial history starts with two example commands
 and persists only within the trial. Existing personal history is not imported.
 
 Inside the trial, use Ctrl-R to open history search. Esc returns to navigation
-and closes the panel. Type `git sta` and press Tab for Git completion; j/k
-move through the menu and Enter selects. `binit profile` shows plugin readiness.
+and closes the panel. Type `git sta`, then Tab, Esc, Tab to dismiss matching
+history and open Git completion. j/k move through the menu and Enter selects.
+`binit profile` shows plugin readiness.
 The Git completion plugin starts pending and loads on its first completion.
 The native module supplies suggestions and advisory highlighting.
 

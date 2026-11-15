@@ -54,7 +54,7 @@ def unpack(bundle, destination):
         if len(relative_name(archive_name)) != 1:
             raise ValueError('archive must be inside the bundle')
         archive_path = bundle / archive_name
-        regular_file(archive_path, 128 * 1024 * 1024)
+        regular_file(archive_path, MAX_TAR_BYTES)
         if hashlib.sha256(archive_path.read_bytes()).hexdigest() != receipt['sha256']:
             raise ValueError('source archive checksum mismatch')
         expected = receipt['files']

@@ -54,10 +54,14 @@ its execution acknowledgment followed by the next prompt. The acknowledgment
 includes the terminal observer's 2 ms echo quiet interval, also recorded
 separately. A separate command verifies required effects.
 
-Readiness resource samples include the owned shell and its present descendants:
-RSS sums, descriptor sums and process counts, with zombie counts and states
-retained explicitly. Zombies have no userspace RSS. These are instantaneous samples.
-They do not measure startup process creation or peak memory. Terminal output
+Readiness resource samples include the owned shell and its discovered
+descendants. Approximate RSS uses resident pages from `/proc/PID/statm` and
+the recorded page size. Shared mappings count in each process. Descriptor
+counts and process states are separate, non-atomic observations. Disappearing
+children remain explicit missing samples and mark totals partial. Zero
+resident pages count as an observed zero, regardless of a separately read
+state. These instantaneous samples do not measure startup process creation
+or peak memory. Terminal output
 is bounded at 8 MiB, with a 10-second phase timeout.
 
 Full framework measurement requires two runs of 20 paired blocks. Subject

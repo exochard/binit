@@ -163,6 +163,40 @@ class EcosystemIntegrityTests(unittest.TestCase):
         finally:
             process.wait()
 
+    def test_resource_sampler_retains_vanished_child_and_rejects_malformed_memory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            for pid in (123, 456):
+                root = proc / str(pid)
+                (root / 'fd').mkdir(parents=True)
+                (root / f'task/{pid}').mkdir(parents=True)
+                (root / 'status').write_text('Name: fixture\nState:\tR\n')
+            (proc / '123/statm').write_text('5 2 0 0 0 0 0\n')
+            (proc / '123/task/123/children').write_text('456\n')
+            sample = corpus.resource_sample(123, proc)
+            self.assertEqual(sample['processes'], 1)
+            self.assertEqual(sample['discovered_processes'], 2)
+            self.assertEqual(sample['vanished_processes'], 1)
+            self.assertTrue(sample['partial'])
+            self.assertEqual(sample['samples'][0]['resident_pages'], 2)
+            (proc / '456/statm').write_text('malformed\n')
+            with self.assertRaisesRegex(RuntimeError, 'malformed statm'):
+                corpus.resource_sample(123, proc)
+
+    def test_resource_sampler_accepts_reported_zero_without_inferring_process_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            root = proc / '123'
+            (root / 'fd').mkdir(parents=True)
+            (root / 'task/123').mkdir(parents=True)
+            (root / 'status').write_text('Name: fixture\nState:\tR\n')
+            (root / 'statm').write_text('0 0 0 0 0 0 0\n')
+            (root / 'task/123/children').write_text('')
+            sample = corpus.resource_sample(123, proc)
+            self.assertFalse(sample['partial'])
+            self.assertEqual(sample['rss_kib_sum'], 0)
+            self.assertEqual(sample['samples'][0]['state'], 'R')
+
 
 if __name__ == '__main__':
     unittest.main()

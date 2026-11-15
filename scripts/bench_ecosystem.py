@@ -209,25 +209,38 @@ def configuration(subject, count, directory, sources, binary, bash):
     return rc, preparation
 
 
-def resource_sample(pid):
-    """Sample only the child we own and its currently live descendants."""
-    pending, rows = [pid], []
+def resource_sample(pid, proc=Path('/proc')):
+    """Read separate, non-atomic observations of our child and its descendants."""
+    pending, rows, seen, vanished = [pid], [], set(), []
+    page_size = os.sysconf('SC_PAGE_SIZE')
     while pending:
         child = pending.pop()
-        base = Path('/proc') / str(child)
+        if child in seen:
+            continue
+        seen.add(child)
+        base = proc / str(child)
+        row = {'pid': child}
         try:
             status = (base / 'status').read_text()
-            state = re.search(r'^State:\s+(\w)', status, re.M)[1]
-            rss = re.search(r'^VmRSS:\s+(\d+)', status, re.M)
-            if rss is None and state not in ('Z', 'X'):
-                raise RuntimeError(f'owned process {child} state {state} has no RSS field')
-            rows.append({'pid': child,
-                         'state': state, 'rss_kib': int(rss[1]) if rss else 0,
-                         'fds': len(list((base / 'fd').iterdir()))})
+            row['state'] = re.search(r'^State:\s+(\w)', status, re.M)[1]
+            fields = (base / 'statm').read_text().split()
+            if len(fields) != 7 or not all(value.isascii() and value.isdigit() for value in fields):
+                raise RuntimeError(f'malformed statm for owned process {child}')
+            row['resident_pages'] = int(fields[1])
+            row['rss_kib'] = row['resident_pages'] * page_size // 1024
+            row['fds'] = len(list((base / 'fd').iterdir()))
             pending.extend(map(int, (base / f'task/{child}/children').read_text().split()))
-        except FileNotFoundError:
+            rows.append(row)
+        except (FileNotFoundError, ProcessLookupError):
+            if child == pid:
+                raise RuntimeError('owned shell disappeared during resource observation')
+            vanished.append(row)
             continue
     return {'processes': len(rows), 'zombies': sum(r['state'] == 'Z' for r in rows),
+            'discovered_processes': len(seen), 'vanished_processes': len(vanished),
+            'partial': bool(vanished), 'vanished_samples': vanished,
+            'rss_kind': 'approximate kernel statm RSS; shared mappings counted per process',
+            'page_size_bytes': page_size,
             'rss_kib_sum': sum(r['rss_kib'] for r in rows),
             'fds_sum': sum(r['fds'] for r in rows), 'samples': rows}
 

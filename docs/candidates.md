@@ -46,3 +46,9 @@ commands; candidate-specific check latency needs separate workloads.
 
 The [check and selection receipt](candidate-checks-evidence.md) covers the
 completed workflow and its later streaming-verification treatment.
+
+Managed fixtures inherit no controlling terminal. Their standard input is
+empty and output is captured; a terminal interaction fixture must create its
+own PTY. Ctrl-C and declared timeouts stop the owned process group. The
+[source-trial evidence](source-trial-evidence.md) records the public terminal
+regression and cleanup checks.

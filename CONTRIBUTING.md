@@ -25,6 +25,8 @@ bash scripts/demo.bash
 ```
 
 The demo opens a separate vi-mode Bash with all seven independent plugins.
+The [source trial](docs/source-trial.md) documents an explicit source bundle
+for a fresh Linux environment, including dependency acquisition.
 Clone their repositories under `../binit-plugins`, or set `BINIT_PLUGIN_ROOT`.
 State and private history live under `.local-demo-interactive/`; `exit` returns
 to the parent shell. Existing startup files and Readline settings are preserved.

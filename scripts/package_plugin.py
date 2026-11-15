@@ -14,7 +14,7 @@ import tomllib
 
 def git_read(source, args, limit):
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    with subprocess.Popen(["git", "-C", str(source), *args], env=environment,
+    with subprocess.Popen(["git", "--no-replace-objects", "-C", str(source), *args], env=environment,
                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL) as child:
         data = child.stdout.read(limit + 1)

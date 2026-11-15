@@ -71,6 +71,10 @@ selected files in an isolated source snapshot before publication.
 
 ## Try it
 
+For an explicit trial from source archives, follow the
+[source trial](docs/source-trial.md). It lists dependency acquisition and
+the selected independent plugin sources, with private example history.
+
 Source builds require Linux, Rust and Cargo, a C compiler, and Bash/Readline
 development headers. The runtime targets Bash 5.2+; local verification uses
 Bash 5.3.20. Bundled Git features use Git and GNU `timeout`.

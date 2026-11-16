@@ -208,6 +208,9 @@ def main():
     result = {'policy_sha256': hashlib.sha256(POLICY.read_bytes()).hexdigest(),
               'framework_sha256': hashlib.sha256(args.framework.read_bytes()).hexdigest(),
               'editor_sha256': hashlib.sha256(args.editor.read_bytes()).hexdigest() if args.editor else None,
+              # The measured binary and driver identities, so a verdict names what it was computed for.
+              'framework_inputs': framework.get('inputs', {}).get('files'),
+              'editor_inputs': editor.get('inputs') if editor else None,
               'aspects': {}}
     for aspect in policy['aspects']:
         if aspect['id'] in ('first-usable-input', 'all-effects-ready'):

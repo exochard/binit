@@ -100,6 +100,8 @@ __binit_record_effects() {
             [[ -n $__binit_record_def ]] && __binit_owned_functions["$__binit_record_id:$__binit_record_name"]=$__binit_record_def
         done
     fi
+    # An empty post-load snapshot has no new alias to record on either path.
+    (( ${#__binit_record_aliases[@]} )) || return 0
     if (( __binit_record_native_aliases )) && builtin binit_complete effects record-aliases "$__binit_record_id" "$3" __binit_owned_aliases 2>/dev/null; then return 0; fi
     for __binit_record_name in "${!__binit_record_aliases[@]}"; do
         [[ -v __binit_record_before_aliases[$__binit_record_name] ]] && continue
@@ -414,7 +416,12 @@ __binit_drop_commands() {
     local -a __binit_drop_names __binit_drop_owned=()
     IFS=' ' read -r -a __binit_drop_names <<< "${__binit_commands[$__binit_drop_id]}"
     for __binit_drop_name in "${__binit_drop_names[@]}"; do
-        __binit_drop_definition=$( { builtin declare -f -- "$__binit_drop_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+        # Without traps or function tracing no trap code can observe the serializer, so the
+        # calling-shell copy replaces the subshell; any other context keeps the subshell.
+        if [[ $- == *T* ]] || ! builtin binit_complete effects plain 2>/dev/null ||
+           ! builtin binit_complete effects function "$__binit_drop_name" __binit_drop_definition 2>/dev/null; then
+            __binit_drop_definition=$( { builtin declare -f -- "$__binit_drop_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+        fi
         if builtin alias -- "$__binit_drop_name" &>/dev/null ||
            [[ -n $__binit_drop_definition && $__binit_drop_definition != "${__binit_stub[$__binit_drop_name]-}" ]]; then
             __binit_reason[$__binit_drop_id]="command already defined: $__binit_drop_name"
@@ -962,7 +969,7 @@ __binit_first_prompt_work() {
 # Activates the given plugins together: conflicts are checked before any
 # startup dependency can load, then triggers are installed.
 __binit_activate_plugins() {
-    local __binit_activate_id __binit_activate_command
+    local __binit_activate_id __binit_activate_command __binit_activate_definition
     local -a __binit_activate_names
     for __binit_activate_id in "$@"; do
         if [[ ${__binit_load_kind[$__binit_activate_id]} == timed ]]; then
@@ -1028,8 +1035,14 @@ __binit_activate_plugins() {
         IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if builtin eval -- "$__binit_activate_command() { __binit_invoke '$__binit_activate_command' \"\$@\"; }"; then
-                # Capture only the builtin's output; inherited DEBUG output stays out.
-                __binit_stub[$__binit_activate_command]=$( { builtin declare -f -- "$__binit_activate_command" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+                # Same serializer choice as __binit_drop_commands. The subshell captures only the
+                # builtin's output; inherited DEBUG output stays out.
+                if [[ $- != *T* ]] && builtin binit_complete effects plain 2>/dev/null &&
+                   builtin binit_complete effects function "$__binit_activate_command" __binit_activate_definition 2>/dev/null; then
+                    __binit_stub[$__binit_activate_command]=$__binit_activate_definition
+                else
+                    __binit_stub[$__binit_activate_command]=$( { builtin declare -f -- "$__binit_activate_command" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+                fi
             else
                 __binit_state[$__binit_activate_id]=blocked
                 __binit_reason[$__binit_activate_id]="cannot define command: $__binit_activate_command"

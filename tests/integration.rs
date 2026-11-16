@@ -1191,6 +1191,163 @@ tool && exit 2
 "#));
 }
 
+// First use must not depend on which serializer validates command stubs: the calling-shell
+// serializer is only eligible without traps or function tracing, and a shell without the
+// native module keeps the subshell path. Every context and module mode must agree.
+const FIRST_USE_CONTEXTS: [&str; 7] = [
+    ":",
+    "trap ':' DEBUG",
+    "set -T; trap ':' DEBUG",
+    "trap ':' RETURN",
+    "set -E; trap ':' ERR",
+    "trap ':' INT",
+    "trap 'trap - DEBUG' DEBUG",
+];
+
+#[test]
+fn first_use_effects_match_across_trap_contexts_and_native_availability() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.root().join("target")).unwrap();
+    let body = r#"BINIT_LOADS=$(( ${BINIT_LOADS:-0} + 1 ))
+export BINIT_PLUGIN_EXPORT=loaded
+cd -- "$BINIT_TEST_ROOT/target" || return 9
+{ALIAS}
+tool() { BINIT_ARGS=$(printf '<%s>' "$@"); return 37; }
+other() {
+    cat <<'EOF'
+heredoc $literal
+EOF
+}
+"#;
+    for (prelude, plugin_alias, expected_alias) in [
+        ("", "", "alias-absent alias-removed"),
+        (
+            "",
+            "alias plugin_alias='printf first'",
+            "alias-present alias-removed",
+        ),
+        (
+            "alias foreign_alias='printf foreign'",
+            "",
+            "alias-absent alias-removed",
+        ),
+        (
+            "alias foreign_alias='printf foreign'",
+            "alias plugin_alias='printf owned'",
+            "alias-present alias-removed",
+        ),
+    ] {
+        f.plugin(
+            "tools",
+            "load='command'\ncommands=['tool', 'other']",
+            &body.replace(
+                "{ALIAS}",
+                if plugin_alias.is_empty() {
+                    ":"
+                } else {
+                    plugin_alias
+                },
+            ),
+        );
+        success(f.prepare(&["tools"]));
+        for menu in ["1", "0"] {
+            for context in FIRST_USE_CONTEXTS {
+                let script = r#"
+BINIT_COMPLETION_MENU={MENU}
+{PRELUDE}
+foreign_fn() { :; }
+source "$BINIT_TEST_INIT"
+{CONTEXT}
+tool 'one two' '' λ; status=$?
+set +T +E; trap - DEBUG RETURN ERR INT
+printf 'status=%s args=%s pwd=%s export=%s child=%s loads=%s state=%s\n' "$status" "$BINIT_ARGS" "${PWD##*/}" "$BINIT_PLUGIN_EXPORT" "$("$BASH" --noprofile --norc -c 'printf %s "$BINIT_PLUGIN_EXPORT"')" "$BINIT_LOADS" "${__binit_state[tools]}"
+alias plugin_alias >/dev/null 2>&1 && printf 'alias-present ' || printf 'alias-absent '
+other
+tool() { : user change; }
+binit unload tools >/dev/null 2>&1 && echo refused=no || echo refused=yes
+[[ $(declare -f tool) == *'user change'* ]] && echo changed-kept
+tool() { BINIT_ARGS=$(printf '<%s>' "$@"); return 37; }
+binit unload tools; echo unload=$?
+alias plugin_alias >/dev/null 2>&1 && echo alias-still || echo alias-removed
+declare -F tool other >/dev/null || echo plugin-functions-removed
+declare -F foreign_fn >/dev/null && echo foreign-function-kept
+[[ -z "{PRELUDE}" ]] || { alias foreign_alias >/dev/null && echo foreign-alias-kept; }
+"#
+                .replace("{MENU}", menu)
+                .replace("{PRELUDE}", prelude)
+                .replace("{CONTEXT}", context);
+                let text = success(f.bash(&script));
+                let summary = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                let aliases: Vec<&str> = expected_alias.split(' ').collect();
+                let expected = format!(
+                    "status=37 args=<one two><><λ> pwd=target export=loaded child=loaded loads=1 state=loaded {} heredoc $literal refused=yes changed-kept unload=0 {} plugin-functions-removed foreign-function-kept{}",
+                    aliases[0],
+                    aliases[1],
+                    if prelude.is_empty() {
+                        ""
+                    } else {
+                        " foreign-alias-kept"
+                    }
+                );
+                assert_eq!(
+                    summary, expected,
+                    "menu={menu} context={context} alias={plugin_alias:?} prelude={prelude:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn modified_stubs_and_conflicting_aliases_block_first_use_in_every_context() {
+    let f = Fixture::new();
+    f.plugin(
+        "tools",
+        "load='command'\ncommands=['tool', 'other']",
+        "BINIT_LOADED=1\ntool() { printf loaded; }\nother() { printf overwritten; }\n",
+    );
+    success(f.prepare(&["tools"]));
+    for menu in ["1", "0"] {
+        for context in FIRST_USE_CONTEXTS {
+            for (change, observe) in [
+                ("other() { printf custom; }", "other"),
+                (
+                    "other() { __binit_invoke 'other' \"$@\" ; : edited; }",
+                    "printf edited",
+                ),
+                ("alias other='printf aliased'", "other"),
+            ] {
+                let script = r#"
+BINIT_COMPLETION_MENU={MENU}
+source "$BINIT_TEST_INIT"
+{CHANGE}
+{CONTEXT}
+tool; status=$?
+set +T +E; trap - DEBUG RETURN ERR INT
+printf 'status=%s loaded=%s state=%s reason=%s|' "$status" "${BINIT_LOADED-no}" "${__binit_state[tools]}" "${__binit_reason[tools]}"
+{OBSERVE}
+"#
+                .replace("{MENU}", menu)
+                .replace("{CHANGE}", change)
+                .replace("{CONTEXT}", context)
+                .replace("{OBSERVE}", observe);
+                let expected = match observe {
+                    "other" if change.starts_with("alias") => "aliased",
+                    "other" => "custom",
+                    _ => "edited",
+                };
+                assert_eq!(
+                    success(f.bash(&script)),
+                    format!(
+                        "status=1 loaded=no state=blocked reason=command already defined: other|{expected}"
+                    ),
+                    "menu={menu} context={context} change={change}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn failed_loads_report_a_reason_and_explicit_loading_uses_the_same_state() {
     let f = Fixture::new();

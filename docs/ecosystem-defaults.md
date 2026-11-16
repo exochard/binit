@@ -73,4 +73,5 @@ cache files in the shared source tree. Its receipt and original observation
 scope are retained alongside the completed result. Later runs use private
 copies and check the source inventory. The measurement does not establish an
 editor feature equivalence, a new 25% workload gain or release qualification.
-The modern-Binit milestone remains unqualified while its other gates are open.
+The eight local outcomes of the [modern-Binit milestone](modern-binit-milestone.md)
+later passed at `b6532e8`; release qualification keeps its separate gates.

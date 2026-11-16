@@ -41,3 +41,14 @@ timings are reported for each subject without a verdict.
 The editor corpus runs on the candidate without `BINIT_HISTORY_MODE`, so
 Binit uses its default search-mode history. The historical editor receipt
 used the live panel and stays historical.
+
+## Current result
+
+At `c94c8c8` four aspects are measured. First usable input and all effects
+ready tie with Bash-it and win against Oh My Bash. Keystroke p99 wins against
+ble.sh in every cell. Typing and cancellation during slow completion loses:
+input response and accept win, but cancelling a large completion takes about
+52.8 ms in Binit against 33–44 ms in ble.sh. Unmodified popular plugins are not
+measured. The gate needs four measured aspects that all win or tie, so
+publication stays closed. The [startup-cost evidence](startup-cost-evidence.md)
+has every comparison.

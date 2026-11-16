@@ -67,6 +67,11 @@ class DemoEntry(unittest.TestCase):
 
         try:
             until(b'$ ')
+            # The demo opens on the prompt alone: no banner, status list or key guide before it.
+            before = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Z0-9]|\x1b[=>]', '',
+                            data[:data.index(b'$ ')].decode(errors='replace')).replace('\r', '')
+            self.assertEqual([line for line in before.split('\n')[:-1] if line.strip()], [],
+                             'text printed before the first prompt')
             os.write(descriptor, b'binit profile; [[ -o vi ]] && printf "\\036VI\\036"; bind -v; printf "\\036DONE\\036"\n')
             until(b'\x1eDONE\x1e')
             text = data.decode(errors='replace').replace('\r', '')

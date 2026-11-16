@@ -85,7 +85,7 @@ def prepare():
                   + 'PATH=' + shlex.quote(str(binary.parent)) + ':"$PATH"\n'
                   + 'eval "$(' + shlex.quote(str(binary)) + ' init --state '
                   + shlex.quote(str(state)) + ')"\n'
-                  + 'binit editor || printf \'Readline fallback\\n\'\n')
+                  + 'binit editor >/dev/null 2>&1 || printf \'binit: native editor unavailable, using Readline\\n\' >&2\n')
     (demo / 'launch.bash').write_text('#!/usr/bin/env bash\nexec bash '
                                     + shlex.quote(str(ROOT / 'scripts/demo.bash')) + '\n')
     bash = os.environ.get('BINIT_BASH', '/bin/bash')
@@ -103,5 +103,4 @@ if __name__ == '__main__':
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         detail = getattr(error, 'stderr', '') or str(error)
         raise SystemExit('binit demo: ' + detail)
-    print('Binit demo. Ctrl-R history. Exit returns.', flush=True)
     os.execvpe(interpreter, [interpreter, '--noprofile', '--rcfile', str(startup), '-i'], environment)

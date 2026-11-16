@@ -14,7 +14,9 @@ precedence, and vi command mode shows no suggestion. While suggestions are on,
 `bind -p` does not list the keys Binit has taken, because their functions have
 no Readline name. When a line is accepted or
 interrupted, the suggestion is erased, so scrollback shows only the command
-that ran.
+that ran. Opening a completion or history picker also hides the suggestion;
+the picker displays the actual input line. `binit editor` reports the enabled
+features and native availability.
 
 Suggestions use up to 1,000 recent entries from the current shell's Readline
 history. Entries with terminal control characters are not displayed. The

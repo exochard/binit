@@ -80,7 +80,7 @@ static int wait_hook(void);
 extern int running_trap;
 static rl_hook_func_t *previous_pre_input;
 static bool wait_installed;
-static bool history_enabled, history_owns_suggestions, history_dismissed;
+static bool history_enabled, history_owns_suggestions, history_dismissed, history_live;
 static bool history_painted, colors_painted;
 static bool history_deprep_active, history_deprep_running, history_deprep_detached;
 static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
@@ -121,7 +121,7 @@ static bool alias_context_unknown(const char *line)
 
 static const char *history_suggestion(void)
 {
-    if (!suggestions_enabled || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1 ||
+    if (!suggestions_enabled || active || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1 ||
         rl_point != rl_end || rl_end <= 0 || rl_end > 4096 || !rl_line_buffer) return NULL;
     if (binit_cells(rl_line_buffer, (size_t)rl_end) < 0) return NULL;
     HIST_ENTRY **entries = history_list();
@@ -655,7 +655,8 @@ static void replay_input(struct context *ctx, const char *prefix, size_t length)
 static int picker(struct context *ctx)
 {
     rl_point = rl_end;
-    rl_redisplay();
+    if (rl_redisplay_function == suggestion_redisplay) suggestion_redisplay();
+    else rl_redisplay();
     terminal_size(&ctx->rows, &ctx->columns);
     if (ctx->menu.total == 0 || ctx->rows < 4 || ctx->columns < 20 ||
         !cursor_position(ctx, &ctx->row, &ctx->column) ||
@@ -787,7 +788,7 @@ static void history_clear(void)
 static size_t history_panel(const char **items, const struct binit_layout *layout, int rows, int columns, bool searching)
 {
     history_matches = 0;
-    if (!history_enabled || active || searching || !rl_instream || !isatty(fileno(rl_outstream)) ||
+    if (!history_enabled || !history_live || active || searching || !rl_instream || !isatty(fileno(rl_outstream)) ||
         !isatty(fileno(rl_instream)) || rl_executing_macro) return 0;
     bool can_focus = false;
     for (size_t i = 0; i < 2; ++i) {
@@ -947,9 +948,12 @@ static void history_unbind(struct binding *binding, int key, rl_command_func_t *
     binding->owned = false;
 }
 
-static int enable_history(void)
+static void disable_history(void);
+
+static int enable_history(bool live)
 {
-    if (history_enabled) return EXECUTION_SUCCESS;
+    if (history_enabled && history_live == live) return EXECUTION_SUCCESS;
+    if (history_enabled) disable_history();
     if (!suggestions_enabled) {
         if (enable_suggestions() != EXECUTION_SUCCESS) return EXECUTION_FAILURE;
         history_owns_suggestions = true;
@@ -959,12 +963,13 @@ static int enable_history(void)
         Keymap map = rl_get_keymap_by_name(names[i]);
         if (!map) continue;
         rl_command_func_t *tab = map['\t'].function;
-        if (map['\t'].type == ISFUNC && (tab == native_complete || tab == rl_complete || tab == rl_menu_complete || tab == rl_backward_menu_complete))
+        if (live && map['\t'].type == ISFUNC && (tab == native_complete || tab == rl_complete || tab == rl_menu_complete || tab == rl_backward_menu_complete))
             history_bind(&history_tabs[i], map, '\t', tab, history_tab);
         if (map[18].type == ISFUNC && map[18].function == rl_reverse_search_history)
             history_bind(&history_searches[i], map, 18, map[18].function, binit_history_search);
     }
     history_enabled = true;
+    history_live = live;
     return EXECUTION_SUCCESS;
 }
 
@@ -972,6 +977,7 @@ static void disable_history(void)
 {
     history_clear();
     history_enabled = false;
+    history_live = false;
     history_matches = 0;
     history_line[0] = '\0';
     for (size_t i = 0; i < 2; ++i) {
@@ -1312,9 +1318,42 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
     if (strcmp(action, "editor") == 0) {
         WORD_LIST *feature = arguments->next;
         WORD_LIST *setting = feature ? feature->next : NULL;
+        if (feature && !setting && strcmp(feature->word->word, "status") == 0) {
+            printf("Native editor: available\n");
+            printf("Completion menu: %s\n", enabled ? terminal_support < 0 ? "unavailable in this terminal" : "on" : "off");
+            printf("Suggestions: %s\n", suggestions_enabled ? "on" : "off");
+            printf("History: %s\n", history_enabled ? history_live ? "live" : "search" : "off");
+#ifdef BINIT_HIGHLIGHT
+            printf("Highlighting: %s\n", highlighting_enabled ? "on" : "off");
+#else
+            printf("Highlighting: unavailable\n");
+#endif
+            Keymap map = rl_get_keymap_by_name(rl_editing_mode == 1 ? "emacs-standard" : "vi-insert");
+            if (map) {
+                rl_command_func_t *tab = bound_function(map, "\t");
+                printf("Tab: %s\n", tab == native_complete || tab == rl_complete || tab == rl_menu_complete || tab == rl_backward_menu_complete ?
+                       "complete" : tab == history_tab ? "history" : "custom binding");
+                if (suggestions_enabled && bound_function(map, "\033[C") == accept_or_forward_char)
+                    printf("Right: accept suggestion\n");
+                rl_command_func_t *forward = bound_function(map, "\006");
+                if (suggestions_enabled && (forward == accept_or_forward_char || forward == accept_or_self_insert))
+                    printf("Ctrl-F: accept suggestion\n");
+                if (history_enabled && bound_function(map, "\022") == binit_history_search)
+                    printf("Ctrl-R: history search\n");
+            }
+            return EXECUTION_SUCCESS;
+        }
         if (!feature || !setting || setting->next) return EX_USAGE;
         if (strcmp(feature->word->word, "history") == 0) {
-            if (strcmp(setting->word->word, "on") == 0) return enable_history();
+            if (strcmp(setting->word->word, "on") == 0) {
+                const char *mode = get_string_value("BINIT_HISTORY_MODE");
+                if (mode && strcmp(mode, "search") != 0 && strcmp(mode, "live") != 0) {
+                    builtin_error("BINIT_HISTORY_MODE must be search or live");
+                    return EXECUTION_FAILURE;
+                }
+                return enable_history(mode && strcmp(mode, "live") == 0);
+            }
+            if (strcmp(setting->word->word, "live") == 0) return enable_history(true);
             if (strcmp(setting->word->word, "off") == 0) {disable_history(); return EXECUTION_SUCCESS;}
             return EX_USAGE;
         }

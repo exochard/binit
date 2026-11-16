@@ -84,7 +84,8 @@ def prepare():
                   + 'set -o ' + mode + '\nPS1=\'binit \\w \\$ \'\n'
                   + 'PATH=' + shlex.quote(str(binary.parent)) + ':"$PATH"\n'
                   + 'eval "$(' + shlex.quote(str(binary)) + ' init --state '
-                  + shlex.quote(str(state)) + ')"\n')
+                  + shlex.quote(str(state)) + ')"\n'
+                  + 'binit editor || printf \'Readline fallback\\n\'\n')
     (demo / 'launch.bash').write_text('#!/usr/bin/env bash\nexec bash '
                                     + shlex.quote(str(ROOT / 'scripts/demo.bash')) + '\n')
     bash = os.environ.get('BINIT_BASH', '/bin/bash')

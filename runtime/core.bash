@@ -734,6 +734,17 @@ binit() {
             printf 'binit: %s: %s\n' "$2" "${__binit_reason[$2]:-${__binit_state[$2]}}" >&2
             return 1
         fi
+    elif [[ ${1-} == editor ]]; then
+        if (( $# > 2 )) || [[ ${2-status} != status ]]; then
+            printf 'Usage: binit editor [status]\n' >&2
+            return 2
+        fi
+        if __binit_has_completion; then
+            builtin binit_complete editor status
+        else
+            printf 'Native editor: unavailable in this shell\n' >&2
+            return 1
+        fi
     elif [[ ${1-} == completion ]]; then
         if (( $# > 2 )) || [[ ! ${2-status} =~ ^(on|off|status)$ ]]; then
             printf 'Usage: binit completion [on|off|status]\n' >&2

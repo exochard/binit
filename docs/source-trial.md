@@ -114,9 +114,9 @@ repository search is needed. Trial history starts with two example commands
 and persists only within the trial. Existing personal history is not imported.
 
 Inside the trial, use Ctrl-R to open history search. Esc returns to navigation
-and closes the panel. Type `git sta`, then Tab, Esc, Tab to dismiss matching
-history and open Git completion. j/k move through the menu and Enter selects.
-`binit profile` shows plugin readiness.
+and closes the panel. Type `git sta`, then Tab to open Git completion.
+j/k move through the menu and Enter selects. `binit editor` reports active
+features and owned keys; `binit profile` shows plugin readiness.
 The Git completion plugin starts pending and loads on its first completion.
 The native module supplies suggestions and advisory highlighting.
 

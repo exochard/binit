@@ -4,10 +4,12 @@ import os
 import signal
 import struct
 import termios
+from unittest.mock import patch
 
 from test_completion import MODULE, Session
 
 
+@patch.dict(os.environ, BINIT_HISTORY_MODE='live')
 class LiveHistoryTests(unittest.TestCase):
     def test_startup_history_keeps_completion_available_after_dismissal(self):
         extra = "history -s 'demo_cmd value one'\nbinit_complete editor history on\n"
@@ -310,6 +312,7 @@ def headers(session):
     return [y for y, row in enumerate(session.screen.display) if 'History  Tab focus' in row]
 
 
+@patch.dict(os.environ, BINIT_HISTORY_MODE='live')
 class LivePanelLayoutTests(unittest.TestCase):
     extra = f"history -s '{ENTRY}'\nbinit_complete editor history on\n"
 

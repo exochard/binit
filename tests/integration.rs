@@ -1193,15 +1193,18 @@ tool && exit 2
 
 // First use must not depend on which serializer validates command stubs: the calling-shell
 // serializer is only eligible without traps or function tracing, and a shell without the
-// native module keeps the subshell path. Every context and module mode must agree.
-const FIRST_USE_CONTEXTS: [&str; 7] = [
-    ":",
-    "trap ':' DEBUG",
-    "set -T; trap ':' DEBUG",
-    "trap ':' RETURN",
-    "set -E; trap ':' ERR",
-    "trap ':' INT",
-    "trap 'trap - DEBUG' DEBUG",
+// native module keeps the subshell path. Every context and module mode must agree. Each pair
+// is applied before initialization and before first use, so stubs captured by one serializer
+// are also validated by the other.
+const FIRST_USE_CONTEXTS: [(&str, &str); 8] = [
+    (":", ":"),
+    (":", "trap ':' DEBUG"),
+    (":", "set -T; trap ':' DEBUG"),
+    (":", "trap ':' RETURN"),
+    (":", "set -E; trap ':' ERR"),
+    (":", "trap ':' INT"),
+    (":", "trap 'trap - DEBUG' DEBUG"),
+    ("trap ':' DEBUG", "trap - DEBUG"),
 ];
 
 #[test]
@@ -1251,16 +1254,18 @@ EOF
         );
         success(f.prepare(&["tools"]));
         for menu in ["1", "0"] {
-            for context in FIRST_USE_CONTEXTS {
+            for (setup, context) in FIRST_USE_CONTEXTS {
                 let script = r#"
 BINIT_COMPLETION_MENU={MENU}
 {PRELUDE}
 foreign_fn() { :; }
+{SETUP}
 source "$BINIT_TEST_INIT"
+[[ $(type -t binit_complete) == builtin ]] && native=yes || native=no
 {CONTEXT}
 tool 'one two' '' λ; status=$?
 set +T +E; trap - DEBUG RETURN ERR INT
-printf 'status=%s args=%s pwd=%s export=%s child=%s loads=%s state=%s\n' "$status" "$BINIT_ARGS" "${PWD##*/}" "$BINIT_PLUGIN_EXPORT" "$("$BASH" --noprofile --norc -c 'printf %s "$BINIT_PLUGIN_EXPORT"')" "$BINIT_LOADS" "${__binit_state[tools]}"
+printf 'native=%s status=%s args=%s pwd=%s export=%s child=%s loads=%s state=%s\n' "$native" "$status" "$BINIT_ARGS" "${PWD##*/}" "$BINIT_PLUGIN_EXPORT" "$("$BASH" --noprofile --norc -c 'printf %s "$BINIT_PLUGIN_EXPORT"')" "$BINIT_LOADS" "${__binit_state[tools]}"
 alias plugin_alias >/dev/null 2>&1 && printf 'alias-present ' || printf 'alias-absent '
 other
 tool() { : user change; }
@@ -1275,12 +1280,18 @@ declare -F foreign_fn >/dev/null && echo foreign-function-kept
 "#
                 .replace("{MENU}", menu)
                 .replace("{PRELUDE}", prelude)
+                .replace("{SETUP}", setup)
                 .replace("{CONTEXT}", context);
                 let text = success(f.bash(&script));
                 let summary = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 let aliases: Vec<&str> = expected_alias.split(' ').collect();
                 let expected = format!(
-                    "status=37 args=<one two><><λ> pwd=target export=loaded child=loaded loads=1 state=loaded {} heredoc $literal refused=yes changed-kept unload=0 {} plugin-functions-removed foreign-function-kept{}",
+                    "native={} status=37 args=<one two><><λ> pwd=target export=loaded child=loaded loads=1 state=loaded {} heredoc $literal refused=yes changed-kept unload=0 {} plugin-functions-removed foreign-function-kept{}",
+                    if menu == "1" && f.generation().join("completion.so").exists() {
+                        "yes"
+                    } else {
+                        "no"
+                    },
                     aliases[0],
                     aliases[1],
                     if prelude.is_empty() {
@@ -1291,7 +1302,7 @@ declare -F foreign_fn >/dev/null && echo foreign-function-kept
                 );
                 assert_eq!(
                     summary, expected,
-                    "menu={menu} context={context} alias={plugin_alias:?} prelude={prelude:?}"
+                    "menu={menu} setup={setup} context={context} alias={plugin_alias:?} prelude={prelude:?}"
                 );
             }
         }
@@ -1308,17 +1319,24 @@ fn modified_stubs_and_conflicting_aliases_block_first_use_in_every_context() {
     );
     success(f.prepare(&["tools"]));
     for menu in ["1", "0"] {
-        for context in FIRST_USE_CONTEXTS {
-            for (change, observe) in [
-                ("other() { printf custom; }", "other"),
+        for (setup, context) in FIRST_USE_CONTEXTS {
+            for (change, observe, expected) in [
+                ("other() { printf custom; }", "other", "custom"),
                 (
                     "other() { __binit_invoke 'other' \"$@\" ; : edited; }",
-                    "printf edited",
+                    "[[ $(declare -f other) == *edited* ]] && printf edited",
+                    "edited",
                 ),
-                ("alias other='printf aliased'", "other"),
+                (
+                    "other() { cat <<'EOF' >/dev/null 2>&1\n__binit_invoke 'other' \"$@\"\nEOF\n}",
+                    "[[ $(declare -f other) == *EOF* ]] && printf heredoc",
+                    "heredoc",
+                ),
+                ("alias other='printf aliased'", "other", "aliased"),
             ] {
                 let script = r#"
 BINIT_COMPLETION_MENU={MENU}
+{SETUP}
 source "$BINIT_TEST_INIT"
 {CHANGE}
 {CONTEXT}
@@ -1328,22 +1346,38 @@ printf 'status=%s loaded=%s state=%s reason=%s|' "$status" "${BINIT_LOADED-no}" 
 {OBSERVE}
 "#
                 .replace("{MENU}", menu)
+                .replace("{SETUP}", setup)
                 .replace("{CHANGE}", change)
                 .replace("{CONTEXT}", context)
                 .replace("{OBSERVE}", observe);
-                let expected = match observe {
-                    "other" if change.starts_with("alias") => "aliased",
-                    "other" => "custom",
-                    _ => "edited",
-                };
                 assert_eq!(
                     success(f.bash(&script)),
                     format!(
                         "status=1 loaded=no state=blocked reason=command already defined: other|{expected}"
                     ),
-                    "menu={menu} context={context} change={change}"
+                    "menu={menu} setup={setup} context={context} change={change}"
                 );
             }
+            // Re-evaluating the stub's own text must still be recognized as the stub, whichever
+            // serializer captured it at initialization and whichever validates it at first use.
+            let script = r#"
+BINIT_COMPLETION_MENU={MENU}
+{SETUP}
+source "$BINIT_TEST_INIT"
+eval "$(declare -f other)"
+{CONTEXT}
+tool; status=$?
+set +T +E; trap - DEBUG RETURN ERR INT
+printf '|status=%s loaded=%s state=%s' "$status" "${BINIT_LOADED-no}" "${__binit_state[tools]}"
+"#
+            .replace("{MENU}", menu)
+            .replace("{SETUP}", setup)
+            .replace("{CONTEXT}", context);
+            assert_eq!(
+                success(f.bash(&script)),
+                "loaded|status=0 loaded=1 state=loaded",
+                "menu={menu} setup={setup} context={context} re-evaluated stub"
+            );
         }
     }
 }

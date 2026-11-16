@@ -125,6 +125,17 @@ class RuntimeFeatures(unittest.TestCase):
             session.wait(lambda: '\nload interrupted' in session.text)
             self.assertFalse(session.mark('sourced'))
 
+    @unittest.skipIf(os.environ.get("BINIT_NATIVE") == "0", "native entry snapshots require the module")
+    def test_interrupted_load_releases_native_snapshots(self):
+        import test_wait
+        test_wait.BINARY = BINARY
+        with test_wait.Session("touch MARKS/started; sleep 30\n") as session:
+            session.wait(lambda: session.mark('started'))
+            session.send(b'\x03')
+            session.settle()
+            session.send("binit profile | grep -o 'load interrupted'; t=; binit_complete effects mark t; echo \"snapshot-depth-$t\"\n")
+            session.wait(lambda: '\nload interrupted' in session.text and 'snapshot-depth-1' in session.text)
+
     @unittest.skipIf(os.environ.get("BINIT_NATIVE") == "0", "idle dispatch requires the native module")
     def test_timed_plugin_runs_at_idle_without_enter(self):
         self.plugin('sample', 'touch "$HOME/idle-loaded"\n', 'load=timed', 'delay_ms=700')
@@ -308,6 +319,36 @@ class RuntimeFeatures(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([line for line in result.stdout.splitlines() if ':' in line],
                          ['first:1:first', 'second:1:second', 'third:1:third'])
+
+    def test_startup_plugin_declarations_stay_local_to_each_load(self):
+        # A prepared generation activates all startup plugins in one call. Under __binit_load a top-level
+        # declare or local in a plugin is local to its own load; the direct path must agree.
+        bodies = {'first': "declare -r PLUGIN_SCOPE=first\nlocal plugin_local=first\nfirst_fn() { :; }\n",
+                  'second': "declare -r PLUGIN_SCOPE=second\nlocal plugin_local=second\n"
+                            "printf 'second:%s:%s\\n' \"$PLUGIN_SCOPE\" \"$plugin_local\"\n",
+                  'failing': "failing_fn() { :; }\nreturn 3\n"}
+        config = 'schema=1\n'
+        for name, body in bodies.items():
+            directory = self.root / name
+            directory.mkdir()
+            (directory / 'plugin.toml').write_text(f"schema=1\nid='{name}'\nentry='plugin.bash'\nload='startup'\n")
+            (directory / 'plugin.bash').write_text(body)
+            config += f"[[plugins]]\npath='{name}'\n"
+        (self.root / 'config.toml').write_text(config)
+        state = self.root / 'prepared'
+        prepared = subprocess.run([str(BINARY), 'prepare', str(self.root / 'config.toml'), '--state', str(state)],
+                                  env=self.env, capture_output=True, text=True)
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        self.rc.write_text(f'eval "$({shlex.quote(str(BINARY))} init --state {shlex.quote(str(state))})"\n')
+        script = ("[[ ${__binit_state[first]} == loaded && ${__binit_state[second]} == loaded ]] || exit 41; "
+                  "[[ ${__binit_state[failing]} == failed && ${__binit_reason[failing]} == 'entry returned 3' ]] || exit 42; "
+                  "[[ -v __binit_owned_functions[failing:failing_fn] && -v __binit_owned_functions[first:first_fn] ]] || exit 43; "
+                  "if [[ -v PLUGIN_SCOPE || -v plugin_local ]]; then exit 44; fi")
+        result = subprocess.run([BASH, '--noprofile', '--rcfile', str(self.rc), '-i'], input=script + '\nexit\n',
+                                text=True, capture_output=True, env=self.env, cwd=self.root, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('second:second:second', result.stdout.splitlines())
+        self.assertNotIn('readonly', result.stderr)
 
     def test_unload_dependency_refusal_preserves_both_plugins(self):
         self.plugin('parent', 'parent_function() { :; }\n', 'load=startup')

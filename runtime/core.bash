@@ -508,6 +508,8 @@ __binit_prompt_dispatch() {
         done
         __binit_loading=''
         __binit_load_active=0
+        # No load is running at the prompt, so every native entry snapshot left by the interrupted one is stale.
+        builtin binit_complete effects release 1 2>/dev/null || :
     fi
     if (( __binit_first_prompt )); then
         __binit_first_prompt=0
@@ -991,6 +993,40 @@ __binit_first_prompt_work() {
 
 # Activates the given plugins together: conflicts are checked before any
 # startup dependency can load, then triggers are installed.
+# Loads a pending startup plugin that has no condition, command, dependency, requirement, completion or
+# callback, with only its source and the native effect record. Each plugin gets this function's frame, as
+# under __binit_load, so a top-level declare or local in the plugin stays local to its load; the locals
+# keep __binit_load's names. Returns 2, having changed nothing, when the general load must run instead:
+# the plugin needs more, or a trap or function tracing can observe the shell (mark then fails).
+__binit_load_direct() {
+    local __binit_load_id=$1 __binit_load_mark __binit_load_before
+    local __binit_load_saved=$__binit_loading __binit_load_active_saved=$__binit_load_active
+    [[ $- != *T* && ${__binit_state[$__binit_load_id]} == pending &&
+       -z ${__binit_when[$__binit_load_id]-}${__binit_commands[$__binit_load_id]}${__binit_depends[$__binit_load_id]}${__binit_requires[$__binit_load_id]}${__binit_completions[$__binit_load_id]}${__binit_before_callbacks[$__binit_load_id]-}${__binit_after_callbacks[$__binit_load_id]-} ]] &&
+        builtin binit_complete effects mark __binit_load_mark || return 2
+    __binit_load_active=1
+    __binit_state[$__binit_load_id]=loading
+    __binit_load_before=${EPOCHREALTIME/./}
+    __binit_loading=$__binit_load_id
+    # Sourced plugins are trusted code. A failed load can have partial effects. The plugin sees the same
+    # positional parameters as under __binit_load: its identifier alone.
+    # shellcheck source=/dev/null
+    if source "${__binit_entry[$__binit_load_id]}" "$__binit_load_id"; then __binit_state[$__binit_load_id]=loaded
+    else
+        __binit_reason[$__binit_load_id]="entry returned $?"
+        __binit_state[$__binit_load_id]=failed
+    fi
+    # The plugin may have left a trap; the shell recorder then uses the entry snapshot.
+    if ! builtin binit_complete effects record-since "$__binit_load_mark" "$__binit_load_id" __binit_owned_functions __binit_owned_aliases 2>/dev/null; then
+        local -A __binit_load_functions=() __binit_load_aliases=()
+        __binit_record_effects "$__binit_load_id" __binit_load_functions __binit_load_aliases "$__binit_load_mark"
+    fi
+    __binit_loading=$__binit_load_saved
+    __binit_load_us[$__binit_load_id]=$(( ${EPOCHREALTIME/./} - __binit_load_before ))
+    __binit_load_active=$__binit_load_active_saved
+    [[ ${__binit_state[$__binit_load_id]} == loaded ]]
+}
+
 __binit_activate_plugins() {
     local __binit_activate_id __binit_activate_command __binit_activate_definition
     local -a __binit_activate_names
@@ -1020,39 +1056,17 @@ __binit_activate_plugins() {
             fi
         done
     done
-    local __binit_activate_native=0 __binit_activate_mark __binit_activate_started
-    local __binit_activate_loading=$__binit_loading __binit_activate_active=$__binit_load_active
+    local __binit_activate_native=0 __binit_activate_status
     builtin binit_complete effects plain 2>/dev/null && __binit_activate_native=1
     for __binit_activate_id in "$@"; do
         [[ ${__binit_load_kind[$__binit_activate_id]} == startup ]] || continue
-        # A pending plugin with no condition, command, dependency, requirement, completion or callback, in a shell
-        # that no trap or function tracing observes, needs only its source and the native effect record. Anything
-        # else, including every plugin after one that leaves a trap, takes the general load.
-        if (( __binit_activate_native )) && [[ $- != *T* && ${__binit_state[$__binit_activate_id]} == pending &&
-              -z ${__binit_when[$__binit_activate_id]-}${__binit_commands[$__binit_activate_id]}${__binit_depends[$__binit_activate_id]}${__binit_requires[$__binit_activate_id]}${__binit_completions[$__binit_activate_id]}${__binit_before_callbacks[$__binit_activate_id]-}${__binit_after_callbacks[$__binit_activate_id]-} ]] &&
-           builtin binit_complete effects mark __binit_activate_mark; then
-            __binit_load_active=1
-            __binit_state[$__binit_activate_id]=loading
-            __binit_activate_started=${EPOCHREALTIME/./}
-            __binit_loading=$__binit_activate_id
-            # Sourced plugins are trusted code. A failed load can have partial effects.
-            # shellcheck source=/dev/null
-            # The plugin sees the same positional parameters as under __binit_load: its identifier alone.
-            if source "${__binit_entry[$__binit_activate_id]}" "$__binit_activate_id"; then __binit_state[$__binit_activate_id]=loaded
-            else
-                __binit_reason[$__binit_activate_id]="entry returned $?"
-                __binit_state[$__binit_activate_id]=failed
-            fi
-            # The plugin may have left a trap; the shell recorder then uses the entry snapshot.
-            if ! builtin binit_complete effects record-since "$__binit_activate_mark" "$__binit_activate_id" __binit_owned_functions __binit_owned_aliases 2>/dev/null; then
-                local -A __binit_activate_functions=() __binit_activate_aliases=()
-                __binit_record_effects "$__binit_activate_id" __binit_activate_functions __binit_activate_aliases "$__binit_activate_mark"
-            fi
-            __binit_loading=$__binit_activate_loading
-            __binit_load_us[$__binit_activate_id]=$(( ${EPOCHREALTIME/./} - __binit_activate_started ))
-            __binit_load_active=$__binit_activate_active
-        elif __binit_load "$__binit_activate_id"; then :
+        if (( __binit_activate_native )); then
+            # Status 2 means the direct load declined; errexit never sees a failed plugin here.
+            __binit_activate_status=0
+            __binit_load_direct "$__binit_activate_id" || __binit_activate_status=$?
+            (( __binit_activate_status != 2 )) && continue
         fi
+        if __binit_load "$__binit_activate_id"; then :; fi
     done
     for __binit_activate_id in "$@"; do
         if [[ ${__binit_state[$__binit_activate_id]} == pending && ${__binit_load_kind[$__binit_activate_id]} =~ ^(timed|watch)$ ]] && __binit_has_completion; then

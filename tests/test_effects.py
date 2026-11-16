@@ -22,7 +22,7 @@ class EffectsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(result.stdout, '')
 
-    def test_record_aliases_matches_named_bash_print_and_keeps_prior_ownership(self):
+    def test_record_aliases_keeps_each_alias_value_and_prior_ownership(self):
         self.shell(r'''
 alias existing=': original'
 declare -A before=() owned=([prior:reintroduced]='prior definition')
@@ -40,8 +40,7 @@ binit_complete effects record-aliases plugin before owned || exit 2
 [[ $(declare -p before) == "$snapshot" ]] || exit 3
 [[ ${#owned[@]} == 5 && ${owned[prior:reintroduced]} == 'prior definition' ]] || exit 4
 for name in quoted multiline empty hello-world; do
-    expected=$(builtin alias -p -- "$name")
-    [[ ${owned["plugin:$name"]-} == "$expected" ]] || exit 5
+    [[ ${owned["plugin:$name"]+set} && ${owned["plugin:$name"]} == "${BASH_ALIASES[$name]}" ]] || exit 5
 done
 saved=$(declare -p owned)
 binit_complete effects record-aliases other before owned || exit 6
@@ -187,7 +186,7 @@ run_recorder() {
     [[ $- != *T* && $PWD == "$caller_pwd" && $IFS == "$caller_ifs" ]] || exit 3
     [[ $# == 0 && ${1-unset} == unset ]] || exit 4
     [[ $(builtin alias -- late_caller_alias) == "alias late_caller_alias='printf late-caller'" ]] || exit 5
-    [[ ${__binit_owned_aliases[sample:early_plugin_alias]-} == "$(builtin alias -p early_plugin_alias)" ]] || exit 6
+    [[ ${__binit_owned_aliases[sample:early_plugin_alias]-} == "${BASH_ALIASES[early_plugin_alias]}" ]] || exit 6
     [[ ! -v __binit_owned_aliases[sample:late_caller_alias] ]] || exit 7
     [[ $(declare -p before_functions before_aliases) == "$before_snapshot" ]] || exit 8
 }
@@ -499,6 +498,106 @@ actual=$RANDOM
 [[ $(declare -p before owned fixed scalar indexed integer_assoc upper_assoc reference before_alias before_ref cycle_a cycle_b) == "$saved" ]] || exit 5
 ''')
 
+    def test_entry_snapshot_records_what_the_name_arrays_record(self):
+        self.shell(r"""
+existing() { : original; }
+alias kept=': original'
+declare -A before_f=() before_a=() old_f=([prior:gone]=saved) old_a=() new_f=([prior:gone]=saved) new_a=()
+token=
+binit_complete effects names function before_f || exit 1
+binit_complete effects names alias before_a || exit 2
+binit_complete effects mark token || exit 3
+[[ $token == 1 ]] || exit 4
+existing() { : changed; }
+alias kept=': changed'
+fresh() { printf '%s\n' 'literal $text' "$(printf must-not-run)"; }
+other-name() { :; }
+alias fresh_alias='printf "%s\n" "quoted alias"'
+alias 'odd.name=: untracked'
+binit_complete effects record-functions plugin before_f old_f || exit 5
+binit_complete effects record-aliases plugin before_a old_a || exit 6
+binit_complete effects record-since "$token" plugin new_f new_a || exit 7
+[[ $(declare -p new_f) == "$(declare -p old_f | sed 's/old_f/new_f/')" ]] || exit 8
+[[ $(declare -p new_a) == "$(declare -p old_a | sed 's/old_a/new_a/')" ]] || exit 9
+[[ ${#new_f[@]} == 3 && ${#new_a[@]} == 1 ]] || exit 10
+! binit_complete effects release "$token" || exit 11
+! binit_complete effects record-since "$token" plugin new_f new_a || exit 12
+""")
+
+    def test_nested_snapshots_attribute_effects_to_the_inner_load(self):
+        self.shell(r"""
+declare -A owned_f=() owned_a=()
+outer= inner= again=
+binit_complete effects mark outer || exit 1
+outer_fn() { :; }
+binit_complete effects mark inner || exit 2
+[[ $outer == 1 && $inner == 2 ]] || exit 3
+inner_fn() { :; }
+alias inner_alias=':'
+binit_complete effects record-since "$inner" child owned_f owned_a || exit 4
+! binit_complete effects release "$inner" || exit 5
+binit_complete effects record-since "$outer" parent owned_f owned_a || exit 6
+! binit_complete effects release "$outer" || exit 7
+[[ ${owned_f[child:inner_fn]+set} && ${owned_f[parent:outer_fn]+set} && ${owned_a[child:inner_alias]+set} ]] || exit 8
+[[ ${#owned_f[@]} == 2 && ${#owned_a[@]} == 1 ]] || exit 9
+binit_complete effects mark again || exit 10
+[[ $again == 1 ]] || exit 11
+""")
+
+    def test_entry_snapshot_falls_back_outside_a_plain_context(self):
+        self.shell(r"""
+declare -A owned_f=() owned_a=() names_f=() names_a=() direct_f=() direct_a=()
+token=
+early() { :; }
+alias early_alias=':'
+binit_complete effects mark token || exit 1
+binit_complete effects names function direct_f || exit 2
+binit_complete effects names alias direct_a || exit 3
+late() { :; }
+trap ':' DEBUG
+! binit_complete effects record-since "$token" plugin owned_f owned_a || exit 4
+other=
+! binit_complete effects mark other || exit 4
+trap - DEBUG
+[[ -z $other ]] || exit 4
+[[ ${#owned_f[@]} == 0 && ${#owned_a[@]} == 0 ]] || exit 5
+binit_complete effects names-since "$token" function names_f || exit 6
+binit_complete effects names-since "$token" alias names_a || exit 7
+binit_complete effects release "$token" || exit 7
+[[ $(declare -p names_f | sed 's/names_f/x/') == "$(declare -p direct_f | sed 's/direct_f/x/')" ]] || exit 8
+[[ $(declare -p names_a | sed 's/names_a/x/') == "$(declare -p direct_a | sed 's/direct_a/x/')" ]] || exit 9
+[[ ! ${names_f[late]+set} ]] || exit 10
+""")
+
+    def test_snapshot_tokens_and_outputs_are_validated_without_mutation(self):
+        self.shell(r"""
+declare -A owned_f=([keep]=1) owned_a=()
+declare -Ar fixed=([keep]=1)
+declare -a indexed=(unchanged)
+declare -r constant=unchanged
+token= extra=
+! binit_complete effects mark constant || exit 1
+! binit_complete effects mark missing_variable || exit 1
+! binit_complete effects mark indexed || exit 2
+[[ $constant == unchanged && ${indexed[*]} == unchanged ]] || exit 3
+binit_complete effects mark token || exit 4
+for bad in 0 2 -1 x 1x ''; do
+    ! binit_complete effects record-since "$bad" plugin owned_f owned_a || exit 5
+    ! binit_complete effects release "$bad" || exit 6
+done
+! binit_complete effects record-since "$token" plugin owned_f owned_f || exit 7
+! binit_complete effects record-since "$token" plugin fixed owned_a || exit 8
+! binit_complete effects record-since "$token" 'bad id' owned_f owned_a || exit 9
+! binit_complete effects names-since "$token" variable owned_a || exit 10
+[[ $(declare -p owned_f) == 'declare -A owned_f=([keep]="1" )' ]] || exit 11
+binit_complete effects release "$token" || exit 12
+for ((i = 1; i <= 64; i++)); do binit_complete effects mark token || exit 13; done
+[[ $token == 64 ]] || exit 14
+! binit_complete effects mark extra || exit 15
+binit_complete effects release 1 || exit 16
+binit_complete effects mark token && [[ $token == 1 ]] || exit 17
+""")
+
     def test_runtime_recording_matches_native_disabled_fallback(self):
         source = (ROOT / 'runtime/core.bash').read_text()
         start = source.index('__binit_record_effects() {')
@@ -534,7 +633,7 @@ __binit_record_effects plugin before_functions before_aliases || exit 1
 [[ ${#__binit_owned_functions[@]} == 2 ]] || exit 2
 [[ ${__binit_owned_functions[plugin:new_function]} == "$(declare -f new_function)" ]] || exit 3
 [[ ${#__binit_owned_aliases[@]} == 1 ]] || exit 4
-[[ ${__binit_owned_aliases[plugin:new_alias]} == "$(alias -p new_alias)" ]] || exit 5
+[[ ${__binit_owned_aliases[plugin:new_alias]} == "${BASH_ALIASES[new_alias]}" ]] || exit 5
 native_functions=$(declare -p __binit_owned_functions)
 native_aliases=$(declare -p __binit_owned_aliases)
 

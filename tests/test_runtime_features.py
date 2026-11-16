@@ -283,6 +283,17 @@ class RuntimeFeatures(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('alias changed: sample_alias', result.stderr)
 
+    def test_alias_unload_ignores_aliases_added_later_by_other_plugins(self):
+        self.plugin('first', "alias first_alias='printf first'\nalias empty_alias=''\n", 'load=startup')
+        self.plugin('second', "alias second_alias='printf second'\n", 'load=startup')
+        self.sync()
+        result = self.shell("alias caller_alias=':'; binit unload first || exit 41; "
+                            "if alias first_alias empty_alias >/dev/null 2>&1; then exit 42; fi; "
+                            "alias second_alias caller_alias >/dev/null || exit 43; "
+                            "binit unload second || exit 44; "
+                            "if alias second_alias >/dev/null 2>&1; then exit 45; fi")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_unload_dependency_refusal_preserves_both_plugins(self):
         self.plugin('parent', 'parent_function() { :; }\n', 'load=startup')
         self.plugin('child', 'child_function() { :; }\n', 'load=startup', 'depends=parent')

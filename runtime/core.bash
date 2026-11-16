@@ -45,8 +45,8 @@ __binit_register() {
     __binit_when[$id]=${10-}
     __binit_watch[$id]=${11-}
     local -a completion_names command_names
-    IFS=' ' read -r -a completion_names <<< "$completions"
-    IFS=' ' read -r -a command_names <<< "$commands"
+    if [[ -n "$completions" ]]; then IFS=' ' read -r -a completion_names <<< "$completions"; else completion_names=(); fi
+    if [[ -n "$commands" ]]; then IFS=' ' read -r -a command_names <<< "$commands"; else command_names=(); fi
     for command in "${completion_names[@]}"; do __binit_completion_owner[$command]=$id; done
     for command in "${command_names[@]}"; do __binit_command_owner[$command]=$id; done
 }
@@ -66,7 +66,7 @@ __binit_capture_names() {
 __binit_capture_plugin_completions() {
     local __binit_comp_id=$1 __binit_comp_name __binit_comp_current
     local -a __binit_comp_names=()
-    IFS=' ' read -r -a __binit_comp_names <<< "${__binit_completions[$__binit_comp_id]}"
+    if [[ -n "${__binit_completions[$__binit_comp_id]}" ]]; then IFS=' ' read -r -a __binit_comp_names <<< "${__binit_completions[$__binit_comp_id]}"; else __binit_comp_names=(); fi
     for __binit_comp_name in "${__binit_comp_names[@]}"; do
         [[ ${__binit_pre_completion[$__binit_comp_name]-safe} == safe ]] || continue
         __binit_comp_current=$( { builtin complete -p -- "$__binit_comp_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_comp_current=''
@@ -80,8 +80,19 @@ __binit_capture_plugin_completions() {
 
 __binit_record_effects() {
     local __binit_record_id=$1 __binit_record_name __binit_record_def __binit_record_key __binit_record_owned __binit_record_native_aliases=0
+    local __binit_record_mark=${4-}
     local -n __binit_record_before_functions=$2 __binit_record_before_aliases=$3
     local -A __binit_record_functions=() __binit_record_aliases=()
+    if [[ -n $__binit_record_mark ]]; then
+        # The native record needs a plain context. When the plugin left a trap, the shell path below records
+        # from the entry snapshot copied into the caller's arrays.
+        if ! builtin binit_complete effects names-since "$__binit_record_mark" function "$2" 2>/dev/null ||
+           ! builtin binit_complete effects names-since "$__binit_record_mark" alias "$3" 2>/dev/null; then
+            builtin binit_complete effects release "$__binit_record_mark" 2>/dev/null || :
+            return 1
+        fi
+        builtin binit_complete effects release "$__binit_record_mark" 2>/dev/null || :
+    fi
     # A trap can remove itself after this snapshot, so retain entry eligibility.
     if [[ $- != *T* ]] && builtin binit_complete effects plain 2>/dev/null; then __binit_record_native_aliases=1; fi
     __binit_capture_names __binit_record_aliases alias
@@ -110,8 +121,8 @@ __binit_record_effects() {
             [[ ${__binit_record_key#*:} != "$__binit_record_name" ]] || __binit_record_owned=1
         done
         (( __binit_record_owned )) && continue
-        __binit_record_def=$( { builtin alias -p -- "$__binit_record_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
-        [[ -n $__binit_record_def ]] && __binit_owned_aliases["$__binit_record_id:$__binit_record_name"]=$__binit_record_def
+        [[ -v BASH_ALIASES[$__binit_record_name] ]] &&
+            __binit_owned_aliases["$__binit_record_id:$__binit_record_name"]=${BASH_ALIASES[$__binit_record_name]}
     done
     return 0
 }
@@ -120,9 +131,9 @@ __binit_notify() {
     local __binit_notify_phase=$1 __binit_notify_id=$2 __binit_notify_result=${3-} __binit_notify_name
     local -a __binit_notify_names=()
     if [[ $__binit_notify_phase == before-load ]]; then
-        IFS=',' read -r -a __binit_notify_names <<< "${__binit_before_callbacks[$__binit_notify_id]-}"
+        if [[ -n "${__binit_before_callbacks[$__binit_notify_id]-}" ]]; then IFS=',' read -r -a __binit_notify_names <<< "${__binit_before_callbacks[$__binit_notify_id]-}"; else __binit_notify_names=(); fi
     else
-        IFS=',' read -r -a __binit_notify_names <<< "${__binit_after_callbacks[$__binit_notify_id]-}"
+        if [[ -n "${__binit_after_callbacks[$__binit_notify_id]-}" ]]; then IFS=',' read -r -a __binit_notify_names <<< "${__binit_after_callbacks[$__binit_notify_id]-}"; else __binit_notify_names=(); fi
     fi
     for __binit_notify_name in "${__binit_notify_names[@]}"; do
         [[ -n $__binit_notify_name ]] || continue
@@ -140,7 +151,7 @@ __binit_notify() {
 __binit_watch_snapshot() {
     local __binit_watch_id=$1 __binit_watch_path __binit_watch_key __binit_watch_new __binit_watch_index=0 __binit_watch_native=0 __binit_watch_command
     local -a __binit_watch_paths=()
-    IFS=',' read -r -a __binit_watch_paths <<< "${__binit_watch[$__binit_watch_id]}"
+    if [[ -n "${__binit_watch[$__binit_watch_id]}" ]]; then IFS=',' read -r -a __binit_watch_paths <<< "${__binit_watch[$__binit_watch_id]}"; else __binit_watch_paths=(); fi
     if [[ $- != *T* ]] && builtin binit_complete effects plain >/dev/null 2>&1; then
         __binit_watch_command=$(builtin type -t stat; builtin type -p stat; builtin type -t command) 2>/dev/null
         case $__binit_watch_command in
@@ -214,7 +225,7 @@ __binit_unload() {
     [[ ${__binit_state[$__binit_unload_id]-} == loaded || ${__binit_state[$__binit_unload_id]-} == failed ]] || return 1
     for __binit_unload_other in "${__binit_ids[@]}"; do
         [[ $__binit_unload_other != "$__binit_unload_id" && ${__binit_state[$__binit_unload_other]} == loaded ]] || continue
-        IFS=' ' read -r -a __binit_unload_dependencies <<< "${__binit_depends[$__binit_unload_other]}"
+        if [[ -n "${__binit_depends[$__binit_unload_other]}" ]]; then IFS=' ' read -r -a __binit_unload_dependencies <<< "${__binit_depends[$__binit_unload_other]}"; else __binit_unload_dependencies=(); fi
         for __binit_unload_dep in "${__binit_unload_dependencies[@]}"; do
             [[ $__binit_unload_dep != "$__binit_unload_id" ]] || { printf 'binit: %s: required by %s\n' "$__binit_unload_id" "$__binit_unload_other" >&2; return 1; }
         done
@@ -232,14 +243,17 @@ __binit_unload() {
     for __binit_unload_key in "${!__binit_owned_aliases[@]}"; do
         [[ $__binit_unload_key == "$__binit_unload_id:"* ]] || continue
         __binit_unload_name=${__binit_unload_key#*:}
-        __binit_unload_current=$( { builtin alias -p -- "$__binit_unload_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_unload_current=''
-        [[ -z $__binit_unload_current || $__binit_unload_current == "${__binit_owned_aliases[$__binit_unload_key]}" ]] || { printf 'binit: %s: alias changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2; return 1; }
+        # A removed alias needs no restore; a changed value is someone else's and blocks unload.
+        if [[ -v BASH_ALIASES[$__binit_unload_name] && ${BASH_ALIASES[$__binit_unload_name]} != "${__binit_owned_aliases[$__binit_unload_key]}" ]]; then
+            printf 'binit: %s: alias changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2
+            return 1
+        fi
     done
     for __binit_unload_key in "${!__binit_segment_owner[@]}"; do
         [[ ${__binit_segment_owner[$__binit_unload_key]} == "$__binit_unload_id" ]] || continue
         [[ ${__binit_segment_value[$__binit_unload_key]-} == "${__binit_owned_segment_value[$__binit_unload_key]}" ]] || { printf 'binit: %s: segment changed: %s\n' "$__binit_unload_id" "$__binit_unload_key" >&2; return 1; }
     done
-    IFS=' ' read -r -a __binit_unload_names <<< "${__binit_completions[$__binit_unload_id]}"
+    if [[ -n "${__binit_completions[$__binit_unload_id]}" ]]; then IFS=' ' read -r -a __binit_unload_names <<< "${__binit_completions[$__binit_unload_id]}"; else __binit_unload_names=(); fi
     for __binit_unload_name in "${__binit_unload_names[@]}"; do
         if [[ -v __binit_provider_count[$__binit_unload_name] && ${__binit_provider_owner[$__binit_unload_name]} != "$__binit_unload_id" ]]; then
             printf 'binit: %s: completion changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2
@@ -330,7 +344,7 @@ __binit_load() {
     local __binit_load_before __binit_load_after __binit_load_saved=$__binit_loading __binit_load_active_saved=$__binit_load_active
     local -a __binit_load_dependencies __binit_load_requirements
     local -A __binit_load_functions=() __binit_load_aliases=() __binit_pre_completion=()
-    local __binit_load_comp __binit_load_comp_before
+    local __binit_load_comp __binit_load_comp_before __binit_load_mark=''
     local -a __binit_load_completions=()
     case ${__binit_state[$__binit_load_id]-missing} in
         loaded) return 0 ;;
@@ -348,13 +362,13 @@ __binit_load() {
         fi
     fi
     __binit_state[$__binit_load_id]=loading
-    if ! __binit_drop_commands "$__binit_load_id"; then
+    if [[ -n ${__binit_commands[$__binit_load_id]} ]] && ! __binit_drop_commands "$__binit_load_id"; then
         __binit_state[$__binit_load_id]=blocked
         __binit_load_active=$__binit_load_active_saved
         return 1
     fi
-    IFS=' ' read -r -a __binit_load_dependencies <<< "${__binit_depends[$__binit_load_id]}"
-    IFS=' ' read -r -a __binit_load_requirements <<< "${__binit_requires[$__binit_load_id]}"
+    if [[ -n "${__binit_depends[$__binit_load_id]}" ]]; then IFS=' ' read -r -a __binit_load_dependencies <<< "${__binit_depends[$__binit_load_id]}"; else __binit_load_dependencies=(); fi
+    if [[ -n "${__binit_requires[$__binit_load_id]}" ]]; then IFS=' ' read -r -a __binit_load_requirements <<< "${__binit_requires[$__binit_load_id]}"; else __binit_load_requirements=(); fi
     for __binit_load_dependency in "${__binit_load_dependencies[@]}"; do
         if ! __binit_load "$__binit_load_dependency"; then
             __binit_state[$__binit_load_id]=unavailable
@@ -371,16 +385,20 @@ __binit_load() {
             return 1
         fi
     done
-    if ! __binit_notify before-load "$__binit_load_id"; then
+    if [[ -n ${__binit_before_callbacks[$__binit_load_id]-} ]] && ! __binit_notify before-load "$__binit_load_id"; then
         __binit_state[$__binit_load_id]=failed
         __binit_reason[$__binit_load_id]='before-load callback failed'
         __binit_notify after-load "$__binit_load_id" failed || :
         __binit_load_active=$__binit_load_active_saved
         return 1
     fi
-    __binit_capture_names __binit_load_functions function
-    __binit_capture_names __binit_load_aliases alias
-    IFS=' ' read -r -a __binit_load_completions <<< "${__binit_completions[$__binit_load_id]}"
+    # A native entry snapshot replaces the two name arrays when no trap or function tracing can observe it.
+    if [[ $- == *T* ]] || ! builtin binit_complete effects mark __binit_load_mark 2>/dev/null; then
+        __binit_load_mark=''
+        __binit_capture_names __binit_load_functions function
+        __binit_capture_names __binit_load_aliases alias
+    fi
+    if [[ -n "${__binit_completions[$__binit_load_id]}" ]]; then IFS=' ' read -r -a __binit_load_completions <<< "${__binit_completions[$__binit_load_id]}"; else __binit_load_completions=(); fi
     for __binit_load_comp in "${__binit_load_completions[@]}"; do
         __binit_load_comp_before=$( { builtin complete -p -- "$__binit_load_comp" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_load_comp_before=''
         if [[ -n $__binit_load_comp_before && $__binit_load_comp_before != "${__binit_completion_spec[$__binit_load_comp]-}" ]]; then
@@ -398,10 +416,14 @@ __binit_load() {
         __binit_reason[$__binit_load_id]="entry returned $?"
         __binit_state[$__binit_load_id]=failed
     fi
-    __binit_record_effects "$__binit_load_id" __binit_load_functions __binit_load_aliases
-    __binit_capture_plugin_completions "$__binit_load_id"
+    # A successful native record also releases the entry snapshot.
+    if [[ -z $__binit_load_mark ]] ||
+       ! builtin binit_complete effects record-since "$__binit_load_mark" "$__binit_load_id" __binit_owned_functions __binit_owned_aliases 2>/dev/null; then
+        __binit_record_effects "$__binit_load_id" __binit_load_functions __binit_load_aliases "$__binit_load_mark"
+    fi
+    [[ -z ${__binit_completions[$__binit_load_id]} ]] || __binit_capture_plugin_completions "$__binit_load_id"
     __binit_loading=$__binit_load_saved
-    if ! __binit_notify after-load "$__binit_load_id" "${__binit_state[$__binit_load_id]}"; then
+    if [[ -n ${__binit_after_callbacks[$__binit_load_id]-} ]] && ! __binit_notify after-load "$__binit_load_id" "${__binit_state[$__binit_load_id]}"; then
         __binit_state[$__binit_load_id]=failed
         __binit_reason[$__binit_load_id]='after-load callback failed'
     fi
@@ -414,7 +436,7 @@ __binit_load() {
 __binit_drop_commands() {
     local __binit_drop_id=$1 __binit_drop_name __binit_drop_definition
     local -a __binit_drop_names __binit_drop_owned=()
-    IFS=' ' read -r -a __binit_drop_names <<< "${__binit_commands[$__binit_drop_id]}"
+    if [[ -n "${__binit_commands[$__binit_drop_id]}" ]]; then IFS=' ' read -r -a __binit_drop_names <<< "${__binit_commands[$__binit_drop_id]}"; else __binit_drop_names=(); fi
     for __binit_drop_name in "${__binit_drop_names[@]}"; do
         # Without traps or function tracing no trap code can observe the serializer, so the
         # calling-shell copy replaces the subshell; any other context keeps the subshell.
@@ -668,7 +690,7 @@ binit() {
         local -n __binit_callbacks=$__binit_callbacks_array
         local __binit_callbacks_old=${__binit_callbacks[$3]-} __binit_callback_name
         local -a __binit_callback_names=() __binit_callback_keep=()
-        IFS=',' read -r -a __binit_callback_names <<< "$__binit_callbacks_old"
+        if [[ -n "$__binit_callbacks_old" ]]; then IFS=',' read -r -a __binit_callback_names <<< "$__binit_callbacks_old"; else __binit_callback_names=(); fi
         for __binit_callback_name in "${__binit_callback_names[@]}"; do
             [[ -n $__binit_callback_name && $__binit_callback_name != "$4" ]] && __binit_callback_keep+=("$__binit_callback_name")
         done
@@ -981,14 +1003,14 @@ __binit_activate_plugins() {
         elif [[ ${__binit_load_kind[$__binit_activate_id]} == startup && -n ${__binit_when[$__binit_activate_id]-} ]]; then
             __binit_dispatch_pending=1
         fi
-        IFS=' ' read -r -a __binit_activate_names <<< "${__binit_completions[$__binit_activate_id]}"
+        if [[ -n "${__binit_completions[$__binit_activate_id]}" ]]; then IFS=' ' read -r -a __binit_activate_names <<< "${__binit_completions[$__binit_activate_id]}"; else __binit_activate_names=(); fi
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if complete -p -- "$__binit_activate_command" &>/dev/null; then
                 __binit_state[$__binit_activate_id]=blocked
                 __binit_reason[$__binit_activate_id]="completion already defined: $__binit_activate_command"
             fi
         done
-        IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"
+        if [[ -n "${__binit_commands[$__binit_activate_id]}" ]]; then IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"; else __binit_activate_names=(); fi
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if __binit_command_conflict "$__binit_activate_command"; then
                 __binit_state[$__binit_activate_id]=blocked
@@ -1012,7 +1034,7 @@ __binit_activate_plugins() {
             __binit_wait_pending=1
             __binit_wait_queue+=("$__binit_activate_id")
         fi
-        IFS=' ' read -r -a __binit_activate_names <<< "${__binit_completions[$__binit_activate_id]}"
+        if [[ -n "${__binit_completions[$__binit_activate_id]}" ]]; then IFS=' ' read -r -a __binit_activate_names <<< "${__binit_completions[$__binit_activate_id]}"; else __binit_activate_names=(); fi
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if [[ ${__binit_state[$__binit_activate_id]} == pending ]]; then
                 complete -F __binit_complete -- "$__binit_activate_command"
@@ -1022,7 +1044,7 @@ __binit_activate_plugins() {
     done
     # Startup plugins may have supplied a function after the first conflict check.
     for __binit_activate_id in "$@"; do
-        IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"
+        if [[ -n "${__binit_commands[$__binit_activate_id]}" ]]; then IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"; else __binit_activate_names=(); fi
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if [[ ${__binit_state[$__binit_activate_id]} == pending ]] && __binit_command_conflict "$__binit_activate_command"; then
                 __binit_state[$__binit_activate_id]=blocked
@@ -1032,7 +1054,7 @@ __binit_activate_plugins() {
     done
     for __binit_activate_id in "$@"; do
         [[ ${__binit_state[$__binit_activate_id]} == pending ]] || continue
-        IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"
+        if [[ -n "${__binit_commands[$__binit_activate_id]}" ]]; then IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"; else __binit_activate_names=(); fi
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if builtin eval -- "$__binit_activate_command() { __binit_invoke '$__binit_activate_command' \"\$@\"; }"; then
                 # Same serializer choice as __binit_drop_commands. The subshell captures only the

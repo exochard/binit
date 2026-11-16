@@ -687,15 +687,9 @@ class WordKeyTests(unittest.TestCase):
                 session.send(CTRL_BACKSPACE + b'echo ok one' + CTRL_BACKSPACE)
                 self.assertEqual(session.capture(), (8, 'echo ok '))
 
-    def test_unknown_or_ctrl_h_erase_key_is_left_alone(self):
-        # Readline repairs the erase key in the active keymap at each prompt, so the other keymap shows the guard.
-        dump = "bind -m vi-insert -p > .binds-vi\n"
-        for name, setup in (('ctrl-h erase', "stty erase '^H'\n" + KEYS_ON),
-                            ('unreadable terminal', "stty erase '^H'\nbinit_complete editor keys on </dev/null\n"),
-                            ('stdin redirected, erase DEL', "binit_complete editor keys on </dev/null\n")):
-            with self.subTest(case=name), Session(extra=setup + dump) as session:
-                session.pump(.3)
-                self.assertIn('"\\C-h": backward-delete-char', (session.directory / '.binds-vi').read_text())
+    def test_terminal_erase_key_ctrl_h_is_left_alone(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra="stty erase '^H'\n" + KEYS_ON, mode=mode) as session:
                 self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (11, 'echo one tw'))
                 self.assertNotIn('Ctrl-Backspace', status(session))
 

@@ -995,16 +995,16 @@ static void disable_history(void)
 }
 
 /* Kitty and several other terminals send Ctrl-H for Ctrl-Backspace. Binit takes Ctrl-H while it still deletes
-   one character and the terminal's erase key is known to be another byte, so Backspace keeps its meaning. */
+   one character and the terminal's erase key is another byte, so Backspace keeps its meaning. */
 static int enable_keys(void)
 {
     if (keys_enabled) return EXECUTION_SUCCESS;
     const char *term = get_string_value("TERM");
     if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
     struct termios settings;
-    bool erase_known_other = rl_instream && tcgetattr(fileno(rl_instream), &settings) == 0 && settings.c_cc[VERASE] != '\b';
+    bool erase_is_ctrl_h = rl_instream && tcgetattr(fileno(rl_instream), &settings) == 0 && settings.c_cc[VERASE] == '\b';
     const char *names[] = {"emacs-standard", "vi-insert"};
-    for (size_t i = 0; i < 2 && erase_known_other; ++i) {
+    for (size_t i = 0; i < 2 && !erase_is_ctrl_h; ++i) {
         Keymap map = rl_get_keymap_by_name(names[i]);
         if (map && map['\b'].type == ISFUNC && map['\b'].function == rl_rubout)
             history_bind(&word_keys[i], map, '\b', rl_rubout, rl_backward_kill_word);

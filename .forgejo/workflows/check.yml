@@ -1,0 +1,131 @@
+# Forgejo runs this directory instead of .github/workflows. It mirrors the GitHub
+# checks for the self-hosted x86-64 runner: one job at a time, 4 CPUs, 3 GB and a
+# 30-minute limit per job, so the matrix is smaller than GitHub's. ARM64 runs on
+# GitHub only. Job containers are unprivileged, so the plugin check that GitHub
+# isolates with `unshare --net` runs with the network available here.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_HOME: /root/.cargo
+  RUSTUP_HOME: /root/.rustup
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        bash:
+          - version: '5.2'
+            source: '5.2.15'
+          - version: '5.3'
+            source: '5.3'
+        native: ['0', '1']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      BINIT_NATIVE: ${{ matrix.native }}
+      BINIT_BASH: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/install/bin/bash
+      BINIT_BASH_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/install/include/bash
+      BINIT_READLINE_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/bash-${{ matrix.bash.source }}/lib
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ci/target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install tools
+        run: |
+          mkdir -p .cache/ci/evidence
+          sudo apt-get update
+          sudo apt-get install -y shellcheck cmake gcc clang make patch bison curl libncurses-dev python3-venv
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy --component rustfmt
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Build selected Bash and matching headers
+        run: |
+          set -o pipefail
+          python3 scripts/ci_bash.py '${{ matrix.bash.version }}' "$PWD/.cache/ci/bash-${{ matrix.bash.version }}" 2>&1 | tee .cache/ci/evidence/bash-build.log
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Verify
+        run: |
+          set -o pipefail
+          bash scripts/verify.bash 2>&1 | tee .cache/ci/evidence/verify.log
+
+  ecosystem:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      BINIT_BASH: ${{ github.workspace }}/.cache/ci/bash-5.3/install/bin/bash
+      BINIT_BASH_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-5.3/install/include/bash
+      BINIT_READLINE_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-5.3/bash-5.3/lib
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ci/target
+      BINIT_TEST_BINARY: ${{ github.workspace }}/.cache/ci/target/release/binit
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install tools
+        run: |
+          mkdir -p .cache/ci/evidence
+          sudo apt-get update
+          sudo apt-get install -y gcc git curl fzf bash-completion libncurses-dev python3-venv patch bison
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Build Bash 5.3 and Binit
+        run: |
+          set -o pipefail
+          python3 scripts/ci_bash.py 5.3 "$PWD/.cache/ci/bash-5.3" 2>&1 | tee .cache/ci/evidence/bash-build.log
+          cargo fetch --locked
+          cargo build --release --locked --offline 2>&1 | tee .cache/ci/evidence/binit-build.log
+      - name: Acquire pinned plugin fixtures
+        run: |
+          set -o pipefail
+          python3 scripts/fetch_plugins.py .cache/ci/plugins 2>&1 | tee .cache/ci/evidence/fixture-fetch.log
+      - name: Check plugin workflows (network available on this runner)
+        run: |
+          set -o pipefail
+          python3 scripts/check_plugins.py --fzf .cache/ci/plugins/fzf --bash-completion .cache/ci/plugins/bash-completion/bash_completion --nvm .cache/ci/plugins/nvm/nvm.sh --output .cache/ci/evidence/plugin-compatibility.json 2>&1 | tee .cache/ci/evidence/ecosystem.log
+
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc clang cmake patch bison curl libncurses-dev bash-builtins libreadline-dev python3
+      - name: Check both ABI mismatch directions
+        run: |
+          mkdir -p .cache/ci/abi
+          for version in 5.2 5.3; do
+            python3 scripts/ci_bash.py "$version" "$PWD/.cache/ci/abi/bash-$version"
+            if [[ $version == 5.2 ]]; then source_version=5.2.15; else source_version=5.3; fi
+            cmake -S native -B ".cache/ci/abi/module-$version" -DBASH_INCLUDE_DIR="$PWD/.cache/ci/abi/bash-$version/install/include/bash" -DREADLINE_INCLUDE_DIR="$PWD/.cache/ci/abi/bash-$version/bash-$source_version/lib"
+            cmake --build ".cache/ci/abi/module-$version" --parallel 4
+          done
+          python3 scripts/check_native_abi.py .cache/ci/abi/module-5.2/binit_complete.so .cache/ci/abi/bash-5.3/install/bin/bash
+          python3 scripts/check_native_abi.py .cache/ci/abi/module-5.3/binit_complete.so .cache/ci/abi/bash-5.2/install/bin/bash
+      - name: Run isolated native tests under sanitizers
+        env:
+          CC: clang
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          cmake -S native -B .cache/ci/sanitizers -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake --build .cache/ci/sanitizers --parallel 4
+          ctest --test-dir .cache/ci/sanitizers --output-on-failure

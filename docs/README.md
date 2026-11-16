@@ -88,6 +88,7 @@ its decision first.
 | [Arithmetic interpreter](arithmetic-scan-experiment.md) | Arithmetic fast paths |
 | [Combined execution](execution-batch-experiment.md) | Batched execution changes |
 | [Parser context](parser-context-experiment.md) | Parser context and command snapshots |
+| [Private completion cancellation](completion-cancellation.md) | Cancelling shell-code completion inside a private Bash build |
 | [Syntax interface](syntax-interface-experiment.md) | Parser hooks and an incremental grammar for the editor |
 | [Interpreter overhead](overhead-experiments.md) | Four trials that failed the 2% screen |
 | [Closing pass](closing-performance-pass.md) | Final performance and stability pass |

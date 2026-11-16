@@ -2,6 +2,10 @@
 
 Manage Bash plugins and complete commands in a navigable menu. Binit keeps reviewed plugin snapshots and lets you roll back a change. Its Bash runtime shares hooks and loads Git's full Bash completion definitions on the first request.
 
+Binit is vibe-engineered: it is written with AI coding agents, and the tests
+and measurements behind each landed change are kept in the
+[documentation](docs/README.md).
+
 The 0.1 release is in development. Current functionality and the remaining
 gates are described separately in the [release requirements](docs/release-0.1.md).
 

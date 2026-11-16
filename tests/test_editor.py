@@ -439,7 +439,7 @@ class SuggestionLifecycleTests(unittest.TestCase):
 
     def test_interrupt_in_the_middle_keeps_the_text_after_the_cursor(self):
         for mode in ('vi', 'emacs'):
-            with self.subTest(mode=mode), Session(extra=SUGGEST + 'binit_complete editor history on\n', mode=mode) as session:
+            with self.subTest(mode=mode), Session(extra=SUGGEST + 'binit_complete editor history live\n', mode=mode) as session:
                 session.send('echo sample')
                 session.wait(lambda: 'History' in session.text)
                 session.send(b'\x1b[D' * 3)

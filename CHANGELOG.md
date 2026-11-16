@@ -14,9 +14,10 @@ as qualified on Linux x86-64 with Bash 5.2 and 5.3.
   `BINIT_SAFE=1` starts a recovery shell that skips initialization.
 - Candidate generations and reviewed candidate checks, so a configuration can be
   prepared and tested before new shells use it.
-- Load timing per plugin (`load=command`, `load=prompt`, `load=wait`) with
-  tracked effects, so a plugin's functions, aliases and variables can be
-  unloaded.
+- Load timing per plugin (`load=command`, `load=prompt`, `load=wait`).
+  `binit unload` removes the functions, aliases, prompt segments and
+  completions a plugin added, if they are unchanged; assignments, exports and
+  other side effects stay.
 - A native completion menu that reuses Bash's completion definitions and
   quoting, with filtering, grid movement and hjkl keys.
 - History search and history suggestions through the same native module, plus

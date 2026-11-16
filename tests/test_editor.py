@@ -589,3 +589,130 @@ class AcceptKeyTests(unittest.TestCase):
             row = session.screen.display[session.screen.cursor.y]
             self.assertEqual(row.rstrip(), '*READY> echo abcdefg')
             self.assertEqual(session.screen.cursor.x, len('*READY> echo abcdefg'))
+
+
+KEYS_ON = 'binit_complete editor keys on\n'
+CTRL_BACKSPACE, CTRL_DELETE, ALT_BACKSPACE = b'\x08', b'\x1b[3;5~', b'\x1b\x7f'
+
+
+def edited(session, line, left, *keys):
+    """Types line, moves the cursor left `left` characters, sends each key and returns (point, line)."""
+    session.send(line.encode() + b'\x1b[D' * left)
+    session.pump(.1)
+    for key in keys:
+        session.send(key)
+        session.pump(.05)
+    return session.capture()
+
+
+class WordKeyTests(unittest.TestCase):
+    # (line, characters left of the end, key, point, result); words are Readline's letters and digits.
+    CASES = (
+        ('echo one two three', 0, CTRL_BACKSPACE, 13, 'echo one two '),
+        ('echo one two three', 3, CTRL_BACKSPACE, 13, 'echo one two ree'),
+        ('echo one two three', 6, CTRL_BACKSPACE, 9, 'echo one  three'),
+        ('git commit -m fix-bug_x', 0, CTRL_BACKSPACE, 22, 'git commit -m fix-bug_'),
+        ('cd /usr/local/share/', 0, CTRL_BACKSPACE, 14, 'cd /usr/local/'),
+        ('echo caffè 雪', 0, CTRL_BACKSPACE, 11, 'echo caffè '),
+        ('echo one two three', 9, CTRL_DELETE, 9, 'echo one  three'),
+        ('echo one two three', 7, CTRL_DELETE, 11, 'echo one tw three'),
+        ('echo one two three', 0, b'\x7f', 17, 'echo one two thre'),
+    )
+
+    def test_word_boundaries_in_both_modes(self):
+        for mode in ('vi', 'emacs'):
+            for line, left, key, point, result in self.CASES:
+                with self.subTest(mode=mode, line=line, left=left, key=key), \
+                        Session(extra=KEYS_ON, mode=mode) as session:
+                    self.assertEqual(edited(session, line, left, key), (point, result))
+
+    def test_ctrl_backspace_matches_alt_backspace_and_undoes_in_one_step(self):
+        with Session(extra=KEYS_ON) as session:
+            expected = edited(session, 'echo caffè 雪 x-y', 2, ALT_BACKSPACE)
+        with Session(extra=KEYS_ON) as session:
+            self.assertEqual(edited(session, 'echo caffè 雪 x-y', 2, CTRL_BACKSPACE), expected)
+            session.send(b'\x1f')
+            self.assertEqual(session.capture()[1], 'echo caffè 雪 x-y')
+            session.send(b'\x05\x19')
+            self.assertEqual(session.capture()[1], 'echo caffè 雪 x-yx')
+
+    def test_home_end_and_delete_keep_readline_meaning_with_every_feature(self):
+        extra = SUGGEST + KEYS_ON + 'binit_complete editor history on\n'
+        for mode in ('vi', 'emacs'):
+            for home in (b'\x1b[H', b'\x1bOH'):
+                with self.subTest(mode=mode, home=home), Session(extra=extra, mode=mode) as session:
+                    self.assertEqual(edited(session, 'echo one two', 4, home), (0, 'echo one two'))
+                    session.send(b'\x1b[3~')
+                    self.assertEqual(session.capture(), (0, 'cho one two'))
+                    session.send(b'\x1b[F')
+                    self.assertEqual(session.capture(), (11, 'cho one two'))
+
+    def test_vi_command_mode_keeps_home_end_and_ctrl_delete(self):
+        with Session(extra=KEYS_ON, mode='vi') as session:
+            session.send(b'echo one two\x1b')
+            session.pump(.1)
+            session.send(b'\x1b[Hi')
+            self.assertEqual(session.capture(), (0, 'echo one two'))
+            session.send(b'\x1b')
+            session.pump(.1)
+            session.send(b'\x1b[3;5~i')
+            self.assertEqual(session.capture(), (0, ' one two'))
+            session.send(b'\x1b')
+            session.pump(.1)
+            session.send(b'\x1b[FA')
+            self.assertEqual(session.capture(), (8, ' one two'))
+
+    def test_wrapped_line_and_first_input_after_interrupt(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=KEYS_ON, mode=mode, columns=40) as session:
+                settle(session)
+                session.send(WRAPPED + ' tail')
+                session.pump(.15)
+                session.send(CTRL_BACKSPACE)
+                session.pump(.15)
+                self.assertEqual(typed(session), WRAPPED + ' ')
+                self.assertEqual(session.capture(), (len(WRAPPED) + 1, WRAPPED + ' '))
+                session.send(b'\x1b[H')
+                session.pump(.15)
+                self.assertEqual((session.screen.cursor.y, session.screen.cursor.x), (prompt_row(session), len(PROMPT)))
+                session.send(b'\x03')
+                session.pump(.2)
+                session.send(CTRL_BACKSPACE + b'echo ok one' + CTRL_BACKSPACE)
+                self.assertEqual(session.capture(), (8, 'echo ok '))
+
+    def test_terminal_erase_key_ctrl_h_is_left_alone(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra="stty erase '^H'\n" + KEYS_ON, mode=mode) as session:
+                self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (11, 'echo one tw'))
+                session.send(b'\x15binit_complete editor status\n')
+                session.wait(lambda: 'Tab: ' in session.text)
+                self.assertNotIn('Ctrl-Backspace', session.text)
+
+    def test_custom_binding_is_kept_and_status_lists_only_owned_keys(self):
+        extra = "bind -m vi-insert '\"\\C-h\": unix-word-rubout'\n" + KEYS_ON
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode, framework=True) as session:
+                result = edited(session, 'echo a/b-c', 0, CTRL_BACKSPACE)
+                self.assertEqual(result, (5, 'echo ') if mode == 'vi' else (9, 'echo a/b-'))
+                session.send(b'\x15binit editor\n')
+                session.wait(lambda: 'Tab: complete' in session.text)
+                self.assertEqual('Ctrl-Backspace: delete word' in session.text, mode == 'emacs')
+
+    def test_framework_activation_takes_the_key_and_off_and_unload_restore_it(self):
+        dump = "bind -m vi-insert -p > .binds-vi\nbind -m emacs-standard -p > .binds-emacs\n"
+        with Session(framework=True) as session:
+            self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (9, 'echo one '))
+            session.send(b'\x15binit editor\n')
+            session.wait(lambda: 'Ctrl-Backspace: delete word' in session.text)
+            self.assertIn('Tab: complete', session.text)
+        for release in ('binit_complete editor keys off\n', 'enable -d binit_complete\n'):
+            with self.subTest(release=release), Session(extra=KEYS_ON + release + dump) as session:
+                session.pump(.3)
+                for name in ('.binds-vi', '.binds-emacs'):
+                    self.assertIn('"\\C-h": backward-delete-char', (session.directory / name).read_text())
+                if release.startswith('binit_complete'):
+                    self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (11, 'echo one tw'))
+
+    def test_disabled_native_menu_leaves_the_key_alone(self):
+        with Session(framework=True, menu=False) as session:
+            self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (11, 'echo one tw'))

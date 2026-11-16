@@ -18,6 +18,28 @@ that ran. Opening a completion or history picker also hides the suggestion;
 the picker displays the actual input line. `binit editor` reports the enabled
 features and native availability.
 
+## Editing keys
+
+Readline already gives Home, End, Delete, Ctrl-Delete, Ctrl-Left and
+Ctrl-Right their usual meaning in Emacs mode and both vi modes, and Binit
+leaves them alone. The one addition: End also accepts a visible suggestion, as
+described above. Ctrl-Delete deletes from the cursor to the end of the word.
+
+Kitty and several other terminals send Ctrl-H for Ctrl-Backspace, which
+Readline treats as Backspace. When a shell starts with the native module,
+which `BINIT_COMPLETION_MENU=0` turns off, Binit binds Ctrl-H
+to `backward-kill-word` in Emacs mode and vi insert mode, so Ctrl-Backspace
+deletes the word before the cursor, like Alt-Backspace in Emacs mode. One undo
+restores it. Binit takes Ctrl-H only while it still deletes one character and
+the terminal's erase key is another byte; `stty erase '^H'` keeps the old
+meaning. A custom binding takes precedence, and
+`binit_complete editor keys off` restores the original. `binit editor` lists
+`Ctrl-Backspace: delete word` while Binit owns the key.
+
+Words follow Readline's rule: letters and digits. In `fix-bug_x`,
+Ctrl-Backspace removes only `x`, and in `/usr/local/share/` it removes
+`share/`.
+
 Suggestions use up to 1,000 recent entries from the current shell's Readline
 history. Entries with terminal control characters are not displayed. The
 overlays follow Readline's own line wrapping. On a wrapped line, highlighting

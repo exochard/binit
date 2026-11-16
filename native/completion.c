@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
@@ -85,7 +86,8 @@ static bool history_painted, colors_painted;
 static bool history_deprep_active, history_deprep_running, history_deprep_detached;
 static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
 static char history_line[4097];
-static struct binding history_tabs[2], history_searches[2];
+static struct binding history_tabs[2], history_searches[2], word_keys[2];
+static bool keys_enabled;
 static size_t history_matches;
 static bool poll_installed;
 static bool poll_running;
@@ -992,6 +994,31 @@ static void disable_history(void)
     deprep_release();
 }
 
+/* Kitty and several other terminals send Ctrl-H for Ctrl-Backspace. Binit takes Ctrl-H while it still deletes
+   one character and the terminal's erase key is another byte, so Backspace keeps its meaning. */
+static int enable_keys(void)
+{
+    if (keys_enabled) return EXECUTION_SUCCESS;
+    const char *term = get_string_value("TERM");
+    if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
+    struct termios settings;
+    bool erase_is_ctrl_h = rl_instream && tcgetattr(fileno(rl_instream), &settings) == 0 && settings.c_cc[VERASE] == '\b';
+    const char *names[] = {"emacs-standard", "vi-insert"};
+    for (size_t i = 0; i < 2 && !erase_is_ctrl_h; ++i) {
+        Keymap map = rl_get_keymap_by_name(names[i]);
+        if (map && map['\b'].type == ISFUNC && map['\b'].function == rl_rubout)
+            history_bind(&word_keys[i], map, '\b', rl_rubout, rl_backward_kill_word);
+    }
+    keys_enabled = true;
+    return EXECUTION_SUCCESS;
+}
+
+static void disable_keys(void)
+{
+    for (size_t i = 0; i < 2; ++i) history_unbind(&word_keys[i], '\b', rl_backward_kill_word);
+    keys_enabled = false;
+}
+
 static void capture(char **matches, int count, int width)
 {
     (void)width;
@@ -1340,6 +1367,9 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
                     printf("Ctrl-F: accept suggestion\n");
                 if (history_enabled && bound_function(map, "\022") == binit_history_search)
                     printf("Ctrl-R: history search\n");
+                for (size_t i = 0; i < 2; ++i)
+                    if (word_keys[i].owned && word_keys[i].map == map && bound_function(map, "\b") == rl_backward_kill_word)
+                        printf("Ctrl-Backspace: delete word\n");
             }
             return EXECUTION_SUCCESS;
         }
@@ -1355,6 +1385,11 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
             }
             if (strcmp(setting->word->word, "live") == 0) return enable_history(true);
             if (strcmp(setting->word->word, "off") == 0) {disable_history(); return EXECUTION_SUCCESS;}
+            return EX_USAGE;
+        }
+        if (strcmp(feature->word->word, "keys") == 0) {
+            if (strcmp(setting->word->word, "on") == 0) return enable_keys();
+            if (strcmp(setting->word->word, "off") == 0) {disable_keys(); return EXECUTION_SUCCESS;}
             return EX_USAGE;
         }
         if (strcmp(feature->word->word, "suggestions") == 0) {
@@ -1414,6 +1449,7 @@ EXPORT int binit_complete_builtin_load(char *name)
 EXPORT void binit_complete_builtin_unload(char *name)
 {
     (void)name;
+    disable_keys();
     disable_history();
     disable_suggestions();
     remove_poll_hook();

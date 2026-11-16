@@ -97,12 +97,13 @@ Your startup files and Readline configuration remain unchanged. The first demo
 prepares the pinned editor build dependencies; later builds reuse its local
 `build.mk`. Core installation still installs no plugins.
 
-History matches appear below the line while typing. Tab focuses NAVIGATE;
-j/k move, `/` enters SEARCH, and Enter inserts without executing. In SEARCH,
-j and k are ordinary query characters. Esc returns to navigation, then closes
-the panel. Ctrl-R opens SEARCH directly. After dismissing history, Tab can open
-normal command completion. See [history controls](docs/history.md) for binding
-precedence and terminal fallbacks. Inside the shell, run:
+Typing shows the newest matching history entry as a dim suggestion; Right,
+Ctrl-F or End accepts it. Tab opens command completion. Ctrl-R opens history
+SEARCH, Esc switches to NAVIGATE with j/k, and Enter inserts without
+executing. Home and End move to the line's edges, Ctrl-Delete deletes the
+next word and Ctrl-Backspace the previous one. See
+[history controls](docs/history.md) and [editing keys](docs/editor.md) for
+binding precedence and terminal fallbacks. Inside the shell, run:
 
 ```bash
 binit profile

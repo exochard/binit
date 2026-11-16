@@ -1061,6 +1061,7 @@ __binit_activate_shell() {
     if [[ ${BINIT_COMPLETION_MENU-1} == 1 && -f $__binit_generation_dir/completion.so ]]; then
         if __binit_load_completion >/dev/null 2>&1; then
             builtin binit_complete on >/dev/null 2>&1 || :
+            builtin binit_complete editor keys on >/dev/null 2>&1 || :
         fi
     fi
 }

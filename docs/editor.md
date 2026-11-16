@@ -31,8 +31,11 @@ which `BINIT_COMPLETION_MENU=0` turns off, Binit binds Ctrl-H
 to `backward-kill-word` in Emacs mode and vi insert mode, so Ctrl-Backspace
 deletes the word before the cursor, like Alt-Backspace in Emacs mode. One undo
 restores it. Binit takes Ctrl-H only while it still deletes one character and
-the terminal's erase key is another byte; `stty erase '^H'` keeps the old
-meaning. A custom binding takes precedence, and
+the terminal's erase key is another byte. Readline rebinds the erase key at
+every prompt, so `stty erase '^H'` restores character deletion even after
+startup. If the erase key was Ctrl-H when Binit started, a later
+`binit_complete editor keys on` changes nothing until `keys off` runs first.
+A custom binding takes precedence, and
 `binit_complete editor keys off` restores the original. `binit editor` lists
 `Ctrl-Backspace: delete word` while Binit owns the key.
 

@@ -595,6 +595,13 @@ KEYS_ON = 'binit_complete editor keys on\n'
 CTRL_BACKSPACE, CTRL_DELETE, ALT_BACKSPACE = b'\x08', b'\x1b[3;5~', b'\x1b\x7f'
 
 
+def status(session, command='binit_complete editor status'):
+    """Runs the status command and waits for a sentinel printed after its last line."""
+    session.send(b'\x15' + command.encode() + b'; echo STATUS-$((1))-DONE\n')
+    session.wait(lambda: 'STATUS-1-DONE' in session.text)
+    return session.text
+
+
 def edited(session, line, left, *keys):
     """Types line, moves the cursor left `left` characters, sends each key and returns (point, line)."""
     session.send(line.encode() + b'\x1b[D' * left)
@@ -684,9 +691,15 @@ class WordKeyTests(unittest.TestCase):
         for mode in ('vi', 'emacs'):
             with self.subTest(mode=mode), Session(extra="stty erase '^H'\n" + KEYS_ON, mode=mode) as session:
                 self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (11, 'echo one tw'))
-                session.send(b'\x15binit_complete editor status\n')
-                session.wait(lambda: 'Tab: ' in session.text)
-                self.assertNotIn('Ctrl-Backspace', session.text)
+                self.assertNotIn('Ctrl-Backspace', status(session))
+
+    def test_erase_key_set_after_enable_takes_effect_at_the_next_prompt(self):
+        for mode in ('vi', 'emacs'):
+            with self.subTest(mode=mode), Session(extra=KEYS_ON, mode=mode) as session:
+                session.send(b"stty erase '^H'\n")
+                session.wait(lambda: session.text.count(PROMPT) >= 2)
+                self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (11, 'echo one tw'))
+                self.assertNotIn('Ctrl-Backspace', status(session))
 
     def test_custom_binding_is_kept_and_status_lists_only_owned_keys(self):
         extra = "bind -m vi-insert '\"\\C-h\": unix-word-rubout'\n" + KEYS_ON
@@ -694,17 +707,17 @@ class WordKeyTests(unittest.TestCase):
             with self.subTest(mode=mode), Session(extra=extra, mode=mode, framework=True) as session:
                 result = edited(session, 'echo a/b-c', 0, CTRL_BACKSPACE)
                 self.assertEqual(result, (5, 'echo ') if mode == 'vi' else (9, 'echo a/b-'))
-                session.send(b'\x15binit editor\n')
-                session.wait(lambda: 'Tab: complete' in session.text)
-                self.assertEqual('Ctrl-Backspace: delete word' in session.text, mode == 'emacs')
+                text = status(session, 'binit editor')
+                self.assertIn('Tab: complete', text)
+                self.assertEqual('Ctrl-Backspace: delete word' in text, mode == 'emacs')
 
     def test_framework_activation_takes_the_key_and_off_and_unload_restore_it(self):
         dump = "bind -m vi-insert -p > .binds-vi\nbind -m emacs-standard -p > .binds-emacs\n"
         with Session(framework=True) as session:
             self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (9, 'echo one '))
-            session.send(b'\x15binit editor\n')
-            session.wait(lambda: 'Ctrl-Backspace: delete word' in session.text)
-            self.assertIn('Tab: complete', session.text)
+            text = status(session, 'binit editor')
+            self.assertIn('Ctrl-Backspace: delete word', text)
+            self.assertIn('Tab: complete', text)
         for release in ('binit_complete editor keys off\n', 'enable -d binit_complete\n'):
             with self.subTest(release=release), Session(extra=KEYS_ON + release + dump) as session:
                 session.pump(.3)

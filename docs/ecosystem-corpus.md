@@ -31,6 +31,7 @@ alias evaluation must succeed.
 | Subject | Actual loader | Control |
 | --- | --- | --- |
 | Binit | Prepared startup-plugin generation | Same Bash, directly sourced fixture |
+| Binit, wait row | The same generation with `load=wait` for every plugin | Same Bash, directly sourced fixture |
 | Bash-it | `bash_it.sh` with custom plugin directory | Same Bash, directly sourced fixture |
 | Oh My Bash | `oh-my-bash.sh` with named custom plugins | Same Bash, directly sourced fixture |
 | Zinit | `zinit load` with local plugin directories | Same Zsh, directly sourced fixture |

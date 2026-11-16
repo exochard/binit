@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "status": "frozen before any comparison measurement of the f6885a9 candidate",
+  "decision": "Publication requires at least four measured aspects, each a win or a tie, and no loss.",
+  "rule": {
+    "unit": "per run, the ratio Binit / competitor of the stated statistic",
+    "interval": "95% percentile interval from a paired block bootstrap: blocks are the measured pairs, resampled with replacement, the same block indices for both subjects",
+    "bootstrap_resamples": 10000,
+    "seed": 20261116,
+    "win_upper": 0.95,
+    "tie_upper": 1.05,
+    "loss_lower": 1.05,
+    "max_interval_width": 0.2,
+    "run_verdict": [
+      "win: interval upper bound below win_upper",
+      "loss: interval lower bound above loss_lower, and the difference interval lies wholly above the aspect's absolute_tie_ms",
+      "tie: interval upper bound at most tie_upper, or the absolute difference interval lies wholly within plus or minus absolute_tie_ms",
+      "inconclusive: anything else, and any ratio interval wider than max_interval_width unless the absolute rule decides a tie"
+    ],
+    "comparison_verdict": "both runs agree; a win and a tie give a tie; any other mix is inconclusive",
+    "aspect_verdict": "any losing comparison loses the aspect; all wins win it; wins and ties tie it; otherwise inconclusive",
+    "statistics": "median; nearest-rank p95 and p99",
+    "runs_required": 2
+  },
+  "aspects": [
+    {
+      "id": "first-usable-input",
+      "title": "First usable input with 50 plugins",
+      "source": "primed framework corpus, benchmarks/ecosystem.json",
+      "plugins": 50,
+      "metric": "startup_usable_ms",
+      "statistic": "median",
+      "absolute_tie_ms": 0,
+      "subject": "binit",
+      "competitors": ["bash-it", "oh-my-bash"],
+      "labelled_rows": {
+        "binit-wait": "load=wait for the same plugins; scored on acknowledged input like every row, reported beside the eager row and never in place of it"
+      },
+      "reported": ["startup_visible_ms", "first_input_ack_ms"],
+      "framework_track": "Zinit runs in Zsh; its overhead over the same-Zsh direct-source control is reported beside Binit's overhead over the same-Bash control and is not scored"
+    },
+    {
+      "id": "all-effects-ready",
+      "title": "All 50 plugin effects ready",
+      "source": "primed framework corpus, benchmarks/ecosystem.json",
+      "plugins": 50,
+      "metric": "required_effects_ms",
+      "statistic": "median",
+      "absolute_tie_ms": 0,
+      "subject": "binit",
+      "competitors": ["bash-it", "oh-my-bash"],
+      "labelled_rows": {
+        "binit-wait": "deferred loads are charged to this boundary; reported beside the eager row"
+      },
+      "reported": ["effect_probe_ms"],
+      "framework_track": "as for first-usable-input"
+    },
+    {
+      "id": "keystroke-p99",
+      "title": "Keystroke p99 on today's default editor",
+      "source": "editor corpus, benchmarks/ecosystem-editor.json, run on the candidate without BINIT_HISTORY_MODE (search-mode history)",
+      "cells": "every mode and history",
+      "metrics": [
+        {"trace": "typing", "event": "insert", "statistic": "p99"},
+        {"trace": "typing", "event": "delete", "statistic": "p99"}
+      ],
+      "absolute_tie_ms": 1.0,
+      "subject": "binit",
+      "competitors": ["blesh"],
+      "controls": ["readline"],
+      "feature_differences": "Readline has no history panel or suggestions; ble.sh and Binit keep different menus, history windows and providers"
+    },
+    {
+      "id": "slow-completion",
+      "title": "Typing and cancellation during eligible slow completion",
+      "source": "editor corpus, as for keystroke-p99",
+      "cells": "every mode and history",
+      "metrics": [
+        {"name": "isolated_response", "statistic": "p95"},
+        {"name": "isolated_accept", "statistic": "median"},
+        {"name": "large_cancel", "statistic": "median"}
+      ],
+      "absolute_tie_ms": 1.0,
+      "subject": "binit",
+      "competitors": ["blesh"],
+      "controls": ["readline"],
+      "stateful_controls": ["stateful_completion", "stateful_accept"],
+      "stateful_rule": "reported for every subject and not scored: the ordinary state-changing provider runs in the shell for all of them"
+    },
+    {
+      "id": "popular-plugins",
+      "title": "Unmodified popular Bash plugins",
+      "status": "not measured: no frozen cross-framework corpus exists yet",
+      "rule": "A frozen list of unmodified popular plugins, each loaded through every framework's documented mechanism in a private fixture and checked by declared observable effects. Win: Binit passes strictly more plugins and every plugin another framework passes. Tie: the same passing set. Loss: another framework passes a plugin Binit fails. Anything else is inconclusive."
+    }
+  ]
+}

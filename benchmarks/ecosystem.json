@@ -10,7 +10,7 @@
   },
   "framework": {
     "plugin_counts": [0, 10, 50],
-    "subjects": ["bash", "binit", "bash-it", "oh-my-bash", "zsh", "zinit"],
+    "subjects": ["bash", "binit", "binit-wait", "bash-it", "oh-my-bash", "zsh", "zinit"],
     "effects": ["load_order", "functions", "aliases", "exports", "literal_arguments", "return_status", "working_directory", "warm_call"],
     "runs": 2,
     "pairs_per_run": 20

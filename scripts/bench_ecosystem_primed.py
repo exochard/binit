@@ -78,7 +78,7 @@ def binit_readiness(directory):
 
 
 def loader_readiness(subject, work, rc):
-    if subject == 'binit':
+    if subject in ('binit', 'binit-wait'):
         return binit_readiness(work)
     if subject in ('bash-it', 'oh-my-bash'):
         variable = 'BASH_IT' if subject == 'bash-it' else 'OSH'
@@ -241,7 +241,7 @@ def main():
                 result.setdefault('configurations', {})[key] = {
                     'plugin_count': count, 'subject': subject, 'preparation_ms': preparation,
                     'rc_sha256': digest(rc), 'shell': 'zsh' if subject in ('zsh', 'zinit') else 'bash'}
-                if subject == 'binit':
+                if subject in ('binit', 'binit-wait'):
                     result['configurations'][key]['selected_generation'] = (directory / 'state/current').read_text().strip()
                 interpreter = args.zsh if subject in ('zsh', 'zinit') else args.bash
                 result['active_case'] = ['prime', key]

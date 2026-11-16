@@ -150,7 +150,9 @@ def configuration(subject, count, directory, sources, binary, bash):
         plugin = plugins / key
         plugin.mkdir()
         body = template.replace('@@ID@@', key)
-        (plugin / 'plugin.toml').write_text(f'schema=1\nid="{key}"\nentry="{key}.plugin.bash"\nload="startup"\n')
+        # The labelled wait row defers the same plugins until after the first prompt is drawn.
+        load = 'wait' if subject == 'binit-wait' else 'startup'
+        (plugin / 'plugin.toml').write_text(f'schema=1\nid="{key}"\nentry="{key}.plugin.bash"\nload="{load}"\n')
         entry = plugin / f'{key}.plugin.bash'
         entry.write_text(body)
         # The loaders use different entry-file suffixes; the script bytes match.
@@ -162,7 +164,7 @@ def configuration(subject, count, directory, sources, binary, bash):
     preparation = None
     if subject in ('bash', 'zsh'):
         setup += ''.join(f'source {shlex.quote(str(p))}\n' for p in entries)
-    elif subject == 'binit':
+    elif subject in ('binit', 'binit-wait'):
         config = directory / 'config.toml'
         config.write_text('schema=1\n' + ('plugins=[]\n' if not count else '') + ''.join(
             f'\n[[plugins]]\npath="plugins/p{i:02d}"\n' for i in range(count)))

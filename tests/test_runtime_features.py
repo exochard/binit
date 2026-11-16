@@ -294,6 +294,21 @@ class RuntimeFeatures(unittest.TestCase):
                             "if alias second_alias >/dev/null 2>&1; then exit 45; fi")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_startup_plugins_keep_arguments_and_ownership_when_one_leaves_a_trap(self):
+        # The first plugin takes the direct startup path and leaves a DEBUG trap; the rest take the general load.
+        self.plugin('first', "first_fn() { :; }\nalias first_alias=:\ntrap ':' DEBUG\nprintf 'first:%s:%s\\n' \"$#\" \"$1\"\n", 'load=startup')
+        self.plugin('second', "second_fn() { :; }\nprintf 'second:%s:%s\\n' \"$#\" \"$1\"\n", 'load=startup')
+        self.plugin('third', "third_fn() { :; }\nprintf 'third:%s:%s\\n' \"$#\" \"$1\"\n", 'load=startup')
+        self.sync()
+        result = self.shell("trap - DEBUG; for id in first second third; do [[ ${__binit_state[$id]} == loaded ]] || exit 41; done; "
+                            "[[ -v __binit_owned_functions[first:first_fn] && -v __binit_owned_aliases[first:first_alias] ]] || exit 42; "
+                            "[[ -v __binit_owned_functions[second:second_fn] && -v __binit_owned_functions[third:third_fn] ]] || exit 43; "
+                            "binit unload second || exit 44; if declare -F second_fn >/dev/null; then exit 45; fi; "
+                            "declare -F first_fn third_fn >/dev/null || exit 46")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([line for line in result.stdout.splitlines() if ':' in line],
+                         ['first:1:first', 'second:1:second', 'third:1:third'])
+
     def test_unload_dependency_refusal_preserves_both_plugins(self):
         self.plugin('parent', 'parent_function() { :; }\n', 'load=startup')
         self.plugin('child', 'child_function() { :; }\n', 'load=startup', 'depends=parent')

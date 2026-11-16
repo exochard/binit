@@ -44,6 +44,7 @@ __binit_register() {
     __binit_event[$id]=${9-}
     __binit_when[$id]=${10-}
     __binit_watch[$id]=${11-}
+    [[ -n $completions$commands ]] || return 0
     local -a completion_names command_names
     if [[ -n "$completions" ]]; then IFS=' ' read -r -a completion_names <<< "$completions"; else completion_names=(); fi
     if [[ -n "$commands" ]]; then IFS=' ' read -r -a command_names <<< "$commands"; else command_names=(); fi
@@ -1003,6 +1004,7 @@ __binit_activate_plugins() {
         elif [[ ${__binit_load_kind[$__binit_activate_id]} == startup && -n ${__binit_when[$__binit_activate_id]-} ]]; then
             __binit_dispatch_pending=1
         fi
+        [[ -n ${__binit_completions[$__binit_activate_id]}${__binit_commands[$__binit_activate_id]} ]] || continue
         if [[ -n "${__binit_completions[$__binit_activate_id]}" ]]; then IFS=' ' read -r -a __binit_activate_names <<< "${__binit_completions[$__binit_activate_id]}"; else __binit_activate_names=(); fi
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if complete -p -- "$__binit_activate_command" &>/dev/null; then
@@ -1018,9 +1020,38 @@ __binit_activate_plugins() {
             fi
         done
     done
+    local __binit_activate_native=0 __binit_activate_mark __binit_activate_started
+    local __binit_activate_loading=$__binit_loading __binit_activate_active=$__binit_load_active
+    builtin binit_complete effects plain 2>/dev/null && __binit_activate_native=1
     for __binit_activate_id in "$@"; do
-        if [[ ${__binit_load_kind[$__binit_activate_id]} == startup ]]; then
-            if __binit_load "$__binit_activate_id"; then :; fi
+        [[ ${__binit_load_kind[$__binit_activate_id]} == startup ]] || continue
+        # A pending plugin with no condition, command, dependency, requirement, completion or callback, in a shell
+        # that no trap or function tracing observes, needs only its source and the native effect record. Anything
+        # else, including every plugin after one that leaves a trap, takes the general load.
+        if (( __binit_activate_native )) && [[ $- != *T* && ${__binit_state[$__binit_activate_id]} == pending &&
+              -z ${__binit_when[$__binit_activate_id]-}${__binit_commands[$__binit_activate_id]}${__binit_depends[$__binit_activate_id]}${__binit_requires[$__binit_activate_id]}${__binit_completions[$__binit_activate_id]}${__binit_before_callbacks[$__binit_activate_id]-}${__binit_after_callbacks[$__binit_activate_id]-} ]] &&
+           builtin binit_complete effects mark __binit_activate_mark; then
+            __binit_load_active=1
+            __binit_state[$__binit_activate_id]=loading
+            __binit_activate_started=${EPOCHREALTIME/./}
+            __binit_loading=$__binit_activate_id
+            # Sourced plugins are trusted code. A failed load can have partial effects.
+            # shellcheck source=/dev/null
+            # The plugin sees the same positional parameters as under __binit_load: its identifier alone.
+            if source "${__binit_entry[$__binit_activate_id]}" "$__binit_activate_id"; then __binit_state[$__binit_activate_id]=loaded
+            else
+                __binit_reason[$__binit_activate_id]="entry returned $?"
+                __binit_state[$__binit_activate_id]=failed
+            fi
+            # The plugin may have left a trap; the shell recorder then uses the entry snapshot.
+            if ! builtin binit_complete effects record-since "$__binit_activate_mark" "$__binit_activate_id" __binit_owned_functions __binit_owned_aliases 2>/dev/null; then
+                local -A __binit_activate_functions=() __binit_activate_aliases=()
+                __binit_record_effects "$__binit_activate_id" __binit_activate_functions __binit_activate_aliases "$__binit_activate_mark"
+            fi
+            __binit_loading=$__binit_activate_loading
+            __binit_load_us[$__binit_activate_id]=$(( ${EPOCHREALTIME/./} - __binit_activate_started ))
+            __binit_load_active=$__binit_activate_active
+        elif __binit_load "$__binit_activate_id"; then :
         fi
     done
     for __binit_activate_id in "$@"; do
@@ -1030,7 +1061,8 @@ __binit_activate_plugins() {
         fi
     done
     for __binit_activate_id in "$@"; do
-        if [[ ${__binit_load_kind[$__binit_activate_id]} == wait && ${__binit_state[$__binit_activate_id]} == pending ]]; then
+        [[ ${__binit_state[$__binit_activate_id]} == pending ]] || continue
+        if [[ ${__binit_load_kind[$__binit_activate_id]} == wait ]]; then
             __binit_wait_pending=1
             __binit_wait_queue+=("$__binit_activate_id")
         fi
@@ -1044,6 +1076,7 @@ __binit_activate_plugins() {
     done
     # Startup plugins may have supplied a function after the first conflict check.
     for __binit_activate_id in "$@"; do
+        [[ ${__binit_state[$__binit_activate_id]} == pending ]] || continue
         if [[ -n "${__binit_commands[$__binit_activate_id]}" ]]; then IFS=' ' read -r -a __binit_activate_names <<< "${__binit_commands[$__binit_activate_id]}"; else __binit_activate_names=(); fi
         for __binit_activate_command in "${__binit_activate_names[@]}"; do
             if [[ ${__binit_state[$__binit_activate_id]} == pending ]] && __binit_command_conflict "$__binit_activate_command"; then

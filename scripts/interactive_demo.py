@@ -58,7 +58,7 @@ def prepare():
                         'BINIT_SYNTAX_SOURCE=' + str(source),
                         'BINIT_SYNTAX_RUNTIME=' + str(engine)], cwd=ROOT, check=True)
     if not binary.is_file():
-        raise ValueError('Binit binary unavailable; run make build')
+        raise ValueError(f'no binary at {binary}')
     config = demo / 'plugins.toml'
     config.write_text('schema=1\n' + ''.join('\n[[plugins]]\npath=' + json.dumps(str(plugins / name))
                                             + '\n' for name in PLUGINS))

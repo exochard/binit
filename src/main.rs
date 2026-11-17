@@ -429,6 +429,82 @@ fn install_config(config_path: &Path, bytes: &[u8], state: &Path) -> Result<Stri
 }
 
 /// Byte-length-prefixed arguments; the runtime builds the same key from a line.
+/// Registers every plugin of a generation with one compound assignment per runtime table, which
+/// Bash runs far faster than one function call per plugin. The tables match what the runtime's
+/// per-plugin defaults would hold.
+fn registration(order: &[String], plugins: &BTreeMap<String, Plugin>) -> String {
+    if order.is_empty() {
+        return String::new();
+    }
+    let mut ids = String::from("__binit_ids+=(");
+    let mut tables: Vec<String> = [
+        "entry",
+        "load_kind",
+        "requires",
+        "depends",
+        "state",
+        "load_us",
+        "hook_us",
+        "hook_calls",
+        "commands",
+        "completions",
+        "reason",
+        "delay_ms",
+        "event",
+        "when",
+        "watch",
+    ]
+    .iter()
+    .map(|name| format!("__binit_{name}+=("))
+    .collect();
+    let mut owners = String::new();
+    for id in order {
+        let p = &plugins[id];
+        let key = quote(id);
+        ids.push_str(&format!(" {key}"));
+        let values = [
+            format!(
+                "\"$__binit_generation_dir\"/{}",
+                quote(&format!("plugins/{id}/{}", p.entry))
+            ),
+            quote(&p.load),
+            quote(&p.requires.join(" ")),
+            quote(&p.depends.join(" ")),
+            "pending".into(),
+            "0".into(),
+            "0".into(),
+            "0".into(),
+            quote(&p.commands.join(" ")),
+            quote(&p.completions.join(" ")),
+            "''".into(),
+            p.delay_ms.to_string(),
+            quote(&p.event),
+            quote(&p.when),
+            quote(&p.watch.join(",")),
+        ];
+        for (table, value) in tables.iter_mut().zip(values) {
+            table.push_str(&format!(" [{key}]={value}"));
+        }
+        for command in &p.completions {
+            owners.push_str(&format!(
+                "__binit_completion_owner[{}]={key}\n",
+                quote(command)
+            ));
+        }
+        for command in &p.commands {
+            owners.push_str(&format!(
+                "__binit_command_owner[{}]={key}\n",
+                quote(command)
+            ));
+        }
+    }
+    let mut text = ids + " )\n";
+    for table in tables {
+        text.push_str(&table);
+        text.push_str(" )\n");
+    }
+    text + &owners
+}
 fn line_key(declaration: &[String]) -> String {
     declaration
         .iter()
@@ -524,23 +600,9 @@ fn install_generation(
             "case :$PATH: in *:\"$__binit_generation_dir/bin\":*) ;; *) PATH=$__binit_generation_dir/bin${PATH:+:$PATH} ;; esac\n__binit_has_bin=1\n",
         );
     }
+    init.push_str(&registration(&order, &plugins));
     let mut activate = Vec::new();
     for id in &order {
-        let p = &plugins[id];
-        init.push_str(&format!(
-            "__binit_register {} \"$__binit_generation_dir\"/{} {} {} {} {} {} {} {} {} {}\n",
-            quote(id),
-            quote(&format!("plugins/{id}/{}", p.entry)),
-            quote(&p.load),
-            quote(&p.requires.join(" ")),
-            quote(&p.depends.join(" ")),
-            quote(&p.completions.join(" ")),
-            quote(&p.commands.join(" ")),
-            p.delay_ms,
-            quote(&p.event),
-            quote(&p.when),
-            quote(&p.watch.join(","))
-        ));
         let declaration = catalog
             .iter()
             .find(|item| item.plugin.id == *id)

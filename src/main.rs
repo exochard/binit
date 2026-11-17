@@ -27,6 +27,8 @@ mod trace;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
+/// Binit's own native module, which the binary embeds; a debug build with a grammar exceeds 2 MiB.
+const MAX_MODULE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_FILES: usize = 128;
 const PROJECT_FILE: &str = ".binit-project.toml";
 
@@ -142,6 +144,9 @@ fn read_regular_limit(path: &Path, limit: u64) -> Result<Vec<u8>> {
 }
 
 fn snapshot_limit(file: &str, lock: &Lock) -> u64 {
+    if file == "completion.so" {
+        return MAX_MODULE_BYTES;
+    }
     let program = file
         .strip_prefix("bin/")
         .is_some_and(|name| lock.bin.contains_key(name))
@@ -1074,5 +1079,23 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("binit: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod size_limits {
+    use super::*;
+
+    #[test]
+    fn the_embedded_module_has_its_own_limit_and_plugins_keep_theirs() {
+        let lock = Lock {
+            schema: 1,
+            plugins: Vec::new(),
+            catalog: Vec::new(),
+            bin: BTreeMap::new(),
+            files: BTreeMap::new(),
+        };
+        assert_eq!(snapshot_limit("completion.so", &lock), MAX_MODULE_BYTES);
+        assert_eq!(snapshot_limit("plugins/x/completion.so", &lock), MAX_BYTES);
     }
 }

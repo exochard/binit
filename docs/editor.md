@@ -46,6 +46,15 @@ Words follow Readline's rule: letters and digits. In `fix-bug_x`,
 Ctrl-Backspace removes only `x`, and in `/usr/local/share/` it removes
 `share/`.
 
+In the completion menu and the history panel, a lone Esc and the first byte of
+an arrow key are the same byte until the next one arrives. Binit waits 10 ms
+for it, as tmux does with `escape-time`, then treats the Esc as a key of its
+own. Terminals write a whole key sequence at once, so the wait only matters
+over links that split it, such as a slow SSH connection. There,
+`BINIT_ESCAPE_MS=50` widens it; values from 0 to 1000 are accepted, and
+anything else keeps 10. A sequence that arrives after the wait reaches the
+command line as typed text. Ctrl-G closes either panel without waiting.
+
 Suggestions use up to 1,000 recent entries from the current shell's Readline
 history. Entries with terminal control characters are not displayed. The
 overlays follow Readline's own line wrapping. On a wrapped line, highlighting

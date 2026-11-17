@@ -53,7 +53,7 @@ struct context {
     rl_getc_func_t *input_getc;
     rl_hook_func_t *input_event;
     int query_items, show_all, prefix_first;
-    bool transient_input, undo, captured, painted, resized, oversized, bare_escape, interrupted;
+    bool transient_input, undo, captured, painted, resized, oversized, bare_escape, interrupted, escape_wait;
     int row, column, rows, columns, height, cells, cell_width;
     int input[INPUT_LIMIT];
     size_t input_count, input_index;
@@ -416,10 +416,21 @@ static void terminal_size(int *rows, int *columns)
     }
 }
 
+/* How long a bare Esc waits for the rest of a key sequence, like tmux's escape-time. Terminals write
+ * a whole sequence at once, so the wait only matters for split transports; BINIT_ESCAPE_MS widens it. */
+static int escape_time(void)
+{
+    const char *value = get_string_value("BINIT_ESCAPE_MS");
+    intmax_t milliseconds_value;
+    if (value && *value && legal_number(value, &milliseconds_value) && milliseconds_value >= 0 && milliseconds_value <= 1000)
+        return (int)milliseconds_value;
+    return 10;
+}
+
 static int timed_getc(FILE *stream)
 {
     struct pollfd fd = {.fd = fileno(stream), .events = POLLIN};
-    int timeout = 50;
+    int timeout = active && active->escape_wait ? escape_time() : 50;
     if (active && active->input_deadline) {
         long now = milliseconds();
         if (!now || now >= active->input_deadline) return READERR;
@@ -611,7 +622,10 @@ static int read_key(struct context *ctx)
     if (ctx->resized) return key;
     ctx->sequence[ctx->sequence_length++] = 27;
     for (size_t i = 1; i < sizeof ctx->sequence; ++i) {
+        // Only the byte after Esc is ambiguous; later sequence bytes keep the normal wait.
+        ctx->escape_wait = i == 1;
         int next = input_key(ctx, true);
+        ctx->escape_wait = false;
         if (next < 0) {
             ctx->bare_escape = ctx->sequence_length == 1;
             return ctx->bare_escape ? 27 : KEY_REPLAY;

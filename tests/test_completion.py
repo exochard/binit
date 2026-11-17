@@ -345,6 +345,40 @@ class CompletionTests(unittest.TestCase):
             self.assertFalse((session.directory / "pasted").exists())
             self.assertIn("touch pasted", session.capture()[1])
 
+    def test_escape_wait_follows_binit_escape_ms(self):
+        with Session(extra="BINIT_ESCAPE_MS=400\n") as session:
+            session.open()
+            # An arrow split inside the configured wait is still an arrow.
+            session.send(b"\x1b")
+            time.sleep(.1)
+            session.send(b"[C")
+            session.wait(lambda: "Completions 2/40" in session.text)
+            # A bare Esc holds the menu for the configured wait, then closes it.
+            session.send(b"\x1b")
+            session.pump(.15)
+            self.assertTrue(session.panel)
+            session.wait(lambda: not session.panel)
+            self.assertEqual(session.capture()[1], 'printf "%s" al')
+
+    def test_invalid_escape_ms_keeps_the_short_default(self):
+        for value in ("", "abc", "-5", "5000"):
+            with self.subTest(value=value), Session(extra=f"BINIT_ESCAPE_MS={value}\n") as session:
+                session.open()
+                start = time.monotonic()
+                session.send(b"\x1b")
+                session.wait(lambda: not session.panel)
+                # The default is 10 ms; an accepted 5000 or the old 400 test value would hold far longer.
+                self.assertLess(time.monotonic() - start, .3)
+
+    def test_alt_key_in_one_write_reaches_readline(self):
+        with Session() as session:
+            session.open()
+            session.send(b"\x1bb")
+            session.wait(lambda: not session.panel)
+            point, line = session.capture()
+            self.assertEqual(line, 'printf "%s" al')
+            self.assertEqual(point, line.rindex("al"))
+
     def test_ordinary_brackets_after_escape_are_preserved(self):
         for text in ("[xyz", "[20x", "[200x"):
             with self.subTest(text=text), Session() as session:

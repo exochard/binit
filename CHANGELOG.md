@@ -19,7 +19,8 @@ as qualified on Linux x86-64 with Bash 5.2 and 5.3.
   completions a plugin added, if they are unchanged; assignments, exports and
   other side effects stay.
 - A native completion menu that reuses Bash's completion definitions and
-  quoting, with filtering, grid movement and hjkl keys.
+  quoting, with filtering, grid movement and hjkl keys. Esc closes it after
+  waiting 10 ms for the rest of a split key sequence (`BINIT_ESCAPE_MS`).
 - History search and history suggestions through the same native module, plus
   optional syntax highlighting when the build includes a grammar.
 - Isolated completion providers that run outside the shell process, so typing

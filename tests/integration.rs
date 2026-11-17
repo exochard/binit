@@ -352,6 +352,34 @@ fn prepared_plugins_are_snapshots_and_content_changes_are_detected() {
 }
 
 #[test]
+fn init_stamp_skips_rehashing_only_while_metadata_is_unchanged() {
+    let f = Fixture::new();
+    f.plugin("sample", "load='startup'", "BINIT_SAMPLE=original\n");
+    success(f.prepare(&["sample"]));
+    let generation = f.generation();
+    let id = generation.file_name().unwrap().to_str().unwrap().to_owned();
+    let stamp = generation.with_file_name(format!("{id}.verified"));
+    // A generation that changed within the last two seconds is verified but not stamped.
+    success(f.cli(&["init"]));
+    assert!(!stamp.exists());
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    success(f.cli(&["init"]));
+    assert!(stamp.exists());
+    success(f.cli(&["init"]));
+    // Same size and the original mtime: only ctime records the write, and init still rejects it.
+    let plugin = generation.join("plugins/sample/plugin.bash");
+    let modified = fs::metadata(&plugin).unwrap().modified().unwrap();
+    fs::write(&plugin, "BINIT_SAMPLE=tampered\n").unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&plugin)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    failure(f.cli(&["init"]), "content changed");
+}
+
+#[test]
 fn rollback_and_identical_prepare_preserve_the_previous_generation() {
     let f = Fixture::new();
     f.plugin("sample", "load='startup'", "BINIT_SAMPLE=one\n");

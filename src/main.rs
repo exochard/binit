@@ -15,6 +15,7 @@ mod engine;
 mod extensions;
 mod git;
 mod hooks;
+mod init_stamp;
 mod lazy_runtime;
 mod manager;
 mod package;
@@ -1000,7 +1001,14 @@ fn run() -> Result<()> {
                 }
             }
             let id = pointer(&state, "current")?;
-            verify_generation(&state, &id)?;
+            // A shell start re-hashes the generation only when its files' metadata has moved.
+            private_dir(&state)?;
+            private_dir(&state.join("generations"))?;
+            if !valid_digest(&id) || !init_stamp::unchanged(&state, &id) {
+                let lock = verify_generation(&state, &id)?;
+                // The stamp only saves time; a state directory it cannot be written to still starts.
+                let _ = init_stamp::record(&state, &id, lock.files.keys());
+            }
             let path = fs::canonicalize(state.join("generations").join(id).join("init.bash"))?;
             println!(
                 "source {}",

@@ -27,6 +27,27 @@ PLUGINS = ('git-prompt', 'git-completion', 'project-context', 'directory-jump',
            'history-search', 'syntax-highlighting', 'autosuggestions')
 PROMPT = b'BENCH> '
 
+# A comparison runs the candidate and the frozen reference, which draw different chrome for the
+# same state; each predicate accepts exactly the two presentations of its own state.
+CARET = '\u258f'
+
+
+def live_history_shown(display):
+    """The live history list under the input, before it takes focus."""
+    return any('History  Tab focus' in row or row.rstrip() == 'history' for row in display)
+
+
+def history_search_shown(display):
+    """The history panel with a search query being typed."""
+    return any('History SEARCH' in row or (row.startswith('history  ') and CARET in row)
+               for row in display)
+
+
+def completion_shown(display, word):
+    """The completion menu for `word`, never the history panel."""
+    state = re.compile(re.escape(word) + r'(?: /\S*)?  \d+/\d+   \?')
+    return any('Completions' in row or state.fullmatch(row.rstrip()) for row in display)
+
 
 class Shell:
     def __init__(self, bash, rc, work, environment, command=None):
@@ -194,7 +215,7 @@ def benchmark(args, work):
                 shell.cancel()
                 for character in b'git status ':
                     timings['typing'].append(shell.settled(bytes([character])))
-                if seven and not any('History  Tab focus' in row for row in shell.screen.display):
+                if seven and not live_history_shown(shell.screen.display):
                     raise RuntimeError('live history was not active during typing')
                 shell.cancel()
                 for character in b'no-history-match':
@@ -202,7 +223,7 @@ def benchmark(args, work):
                 shell.cancel()
                 timings['first_history'].append(shell.settled(b'\x12'))
                 if seven:
-                    shell.until(lambda: any('History SEARCH' in row for row in shell.screen.display))
+                    shell.until(lambda: history_search_shown(shell.screen.display))
                     shell.settled(b'\x1b')
                     shell.settled(b'\x1b')
                 shell.cancel()
@@ -221,12 +242,12 @@ def benchmark(args, work):
                             raise RuntimeError('plugin readiness mismatch: ' + str(before))
                     shell.settled(b'git sta')
                     timings['first_git_completion'].append(shell.settled(b'\t'))
-                    shell.until(lambda: any('Completions' in row for row in shell.screen.display))
+                    shell.until(lambda: completion_shown(shell.screen.display, 'sta'))
                     shell.settled(b'\x1b')
                     shell.cancel()
                     shell.settled(b'git sta')
                     timings['warm_git_completion'].append(shell.settled(b'\t'))
-                    shell.until(lambda: any('Completions' in row for row in shell.screen.display))
+                    shell.until(lambda: completion_shown(shell.screen.display, 'sta'))
                     shell.settled(b'\x1b')
                     shell.cancel()
                     after = profile(shell)

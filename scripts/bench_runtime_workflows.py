@@ -167,6 +167,14 @@ def make_fixture(case, directory, source, fault=None):
     return config, rc
 
 
+# `binit report` headers: the candidate's, and the frozen reference's from before the interface
+# voice. Each variant's report must match its own golden exactly.
+REPORTS = {
+    'candidate': ('report-golden', ['plugin workflow', 'state loaded']),
+    'reference': ('report-golden-before', ['Plugin: workflow', 'State: loaded']),
+}
+
+
 def golden_git(directory, rc, source, bash):
     """Source the unmodified pin in an independent same-interpreter shell."""
     env = {**environment(directory / 'home'), 'BINIT_BASH': bash}
@@ -180,10 +188,13 @@ def golden_git(directory, rc, source, bash):
     finally:
         shell.close(ready=ready)
     aliases = re.findall(r'^alias ([^=]+)=', (directory / 'aliases-golden').read_text(), re.M)
-    report = ['Plugin: workflow', 'State: loaded', 'function gdv', 'function get_default_branch']
-    report += ['alias ' + name for name in aliases if re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_-]*', name)
-               and name != 'wf_unrelated_alias']
-    (directory / 'report-golden').write_text(''.join(line + '\n' for line in sorted(report)))
+    effects = ['function gdv', 'function get_default_branch']
+    effects += ['alias ' + name for name in aliases if re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_-]*', name)
+                and name != 'wf_unrelated_alias']
+    # Both presentations of the same report, so paired fixtures stay identical; see REPORTS.
+    for name, header in REPORTS.values():
+        report = header + effects
+        (directory / name).write_text(''.join(line + '\n' for line in sorted(report)))
 
 
 def golden_watch(directory, source, bash):
@@ -238,7 +249,7 @@ def input_identity(binary, bash, source, directory):
     for name in ('plugin', 'state', 'repository'):
         if (directory / name).exists():
             result['fixture'][name] = inventory(directory / name)
-    for name in ('config.toml', 'rc', 'aliases-golden', 'functions-golden', 'report-golden', 'effects-golden'):
+    for name in ('config.toml', 'rc', 'aliases-golden', 'functions-golden', 'report-golden', 'report-golden-before', 'effects-golden'):
         if (directory / name).exists():
             result['fixture'][name] = digest(directory / name)
     return result
@@ -251,7 +262,7 @@ def comparison_signature(case, binary, bash, source, directory):
     files = {}
     paths = [directory / 'config.toml', directory / 'rc']
     paths.extend(path for path in (directory / 'plugin').rglob('*') if path.is_file())
-    paths.extend(directory / name for name in ('aliases-golden', 'functions-golden', 'report-golden', 'effects-golden')
+    paths.extend(directory / name for name in ('aliases-golden', 'functions-golden', 'report-golden', 'report-golden-before', 'effects-golden')
                  if (directory / name).exists())
     if (directory / 'repository').exists():
         paths.extend(path for path in (directory / 'repository').rglob('*') if path.is_file())
@@ -276,7 +287,7 @@ def verify_retained_inputs(rows):
             raise RuntimeError('retained watched fixture changed at run boundary')
 
 
-def observe(case, binary, bash, source, directory, fault=None, resources=False):
+def observe(case, binary, bash, source, directory, fault=None, resources=False, report='report-golden'):
     config, rc = make_fixture(case, directory, source, fault)
     env = {**environment(directory / 'home'), 'BINIT_BASH': bash}
     prepare(binary, config, directory / 'state', env)
@@ -297,11 +308,13 @@ def observe(case, binary, bash, source, directory, fault=None, resources=False):
     try:
         shell = BoundedShell(bash, rc, directory, env, receipt_path=directory / 'terminal.raw')
         native_expected = row['comparison_signature']['native_module_present']
-        native_probe = ('[[ $(builtin binit_complete status 2>/dev/null) == "Completion menu: on" ]]'
+        # The frozen reference reports `Completion menu: on`; the candidate reports `menu  on`.
+        native_probe = ('[[ $(builtin binit_complete status 2>/dev/null) == @("Completion menu: on"|"menu          on") ]]'
                         if native_expected else '! builtin binit_complete status >/dev/null 2>&1')
         action(shell, f'eval "$({shlex.quote(str(binary))} init --state {shlex.quote(str(directory / "state"))})" && {native_probe}')
         row['native_active'] = native_expected
-        action(shell, 'WF_FLAGS=$-; wf_state > "$WF_ROOT/state-before"')
+        # Untimed: which exact golden this variant's report must match.
+        action(shell, f'WF_REPORT={report}; WF_FLAGS=$-; wf_state > "$WF_ROOT/state-before"')
         if case == CASES[1]:
             action(shell, 'PROMPT_COMMAND+=(wf_prompt)')
             row['initial_watched_inputs'] = initial_watched
@@ -319,7 +332,7 @@ def observe(case, binary, bash, source, directory, fault=None, resources=False):
             # This must be a later accepted command: Bash expands aliases at parse time.
             row['commands_ms'].append(action(shell, 'cd -- "$WF_ROOT/repository" && wf_git_check && '
                 'binit report workflow | LC_ALL=C sort > "$WF_ROOT/report-actual" && '
-                'cmp -s -- "$WF_ROOT/report-golden" "$WF_ROOT/report-actual"'))
+                'cmp -s -- "$WF_ROOT/$WF_REPORT" "$WF_ROOT/report-actual"'))
         else:
             for number in range(1, 21):
                 row['commands_ms'].append(action(shell, f'wf_command {number}', prompt=number))
@@ -440,7 +453,8 @@ def main():
                         result['active_case'] = [run, pair, case, variant]
                         directory = args.work / f'{run}-{pair}-{case}-{variant}'
                         row = observe(case, binaries[variant], args.bash, args.git_source.resolve(), directory,
-                                      args.negative_control if variant == 'candidate' else None, args.resources)
+                                      args.negative_control if variant == 'candidate' else None, args.resources,
+                                      REPORTS[variant][0])
                         result['rows'].append({'run': run, 'pair': pair, 'variant': variant, **row})
                     same_pair = [row for row in result['rows'] if row['run'] == run and row['pair'] == pair and row['case'] == case]
                     if same_pair[0]['comparison_signature'] != same_pair[1]['comparison_signature']:

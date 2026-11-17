@@ -360,10 +360,10 @@ static int watch_metadata(const char *path, const char *output)
     }
     /* Bash may defer removing TZ from libc's environment after `export -n`.
        Fall back rather than rebuild the environment and evaluate dynamic vars. */
-    SHELL_VAR *timezone = var_lookup("TZ", shell_variables);
-    if (timezone && (nameref_p(timezone) || array_p(timezone) || assoc_p(timezone) ||
-                     timezone->dynamic_value || timezone->assign_func)) return EXECUTION_FAILURE;
-    const char *requested_zone = timezone && exported_p(timezone) && !invisible_p(timezone) ? value_cell(timezone) : NULL;
+    SHELL_VAR *tz_var = var_lookup("TZ", shell_variables);
+    if (tz_var && (nameref_p(tz_var) || array_p(tz_var) || assoc_p(tz_var) ||
+                   tz_var->dynamic_value || tz_var->assign_func)) return EXECUTION_FAILURE;
+    const char *requested_zone = tz_var && exported_p(tz_var) && !invisible_p(tz_var) ? value_cell(tz_var) : NULL;
     const char *current_zone = getenv("TZ"); // NOLINT(concurrency-mt-unsafe): Bash builtins run on the interpreter thread.
     if ((requested_zone == NULL) != (current_zone == NULL) ||
         (requested_zone && strcmp(requested_zone, current_zone) != 0)) return EXECUTION_FAILURE;

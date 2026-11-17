@@ -76,7 +76,7 @@ class DiagnosticsTests(unittest.TestCase):
         _, _, plan, state = self.prepare()
         result = self.command(state, 'diagnose', str(plan))
         self.assertEqual(result.returncode, 0, result.stderr)
-        for label in ('SELF_US', 'TOTAL_US', 'fixture_child', 'Run:', 'instrumented'):
+        for label in ('SELF_US', 'TOTAL_US', 'fixture_child', 'run         ', 'instrumented'):
             self.assertIn(label, result.stdout)
 
     def test_spaces_unicode_and_changed_ifs_do_not_corrupt_metadata(self):

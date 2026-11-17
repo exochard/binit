@@ -877,7 +877,11 @@ fn successful_changes_print_one_line_and_nothing_else() {
             f.write("custom/plugin.bash", "BINIT_CUSTOM=two\n");
         }
         let output = f.cli(arguments);
-        assert!(output.status.success(), "{arguments:?}: {}", stderr(&output));
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            stderr(&output)
+        );
         assert_eq!(stderr(&output), "", "{arguments:?}");
         let current = fs::read_to_string(f.state().join("current")).unwrap();
         assert_eq!(
@@ -2604,7 +2608,10 @@ fn first_sync_pins_the_default_branch_and_the_shell_loads_the_snapshot() {
         stderr(&output)
     );
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Source: {}", repo.url())), "{info}");
+    assert!(
+        info.contains(&format!("source        {}", repo.url())),
+        "{info}"
+    );
     assert!(info.contains("ver           default branch"), "{info}");
     assert!(info.contains(&format!("commit        {first}")), "{info}");
     let mirrors: Vec<_> = fs::read_dir(h.f.state().join("sources"))
@@ -2964,7 +2971,7 @@ fn editing_other_keys_of_a_synced_line_keeps_its_commit() {
     success(h.shell(&edited, "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
     assert!(info.contains(&format!("commit        {first}")), "{info}");
-    assert!(info.contains("Load: prompt"), "{info}");
+    assert!(info.contains("load          prompt"), "{info}");
     // The mirror may even be gone; the pin is kept and re-snapshotted.
     for entry in fs::read_dir(h.f.state().join("sources")).unwrap() {
         fs::remove_dir_all(entry.unwrap().path()).unwrap();
@@ -3319,7 +3326,7 @@ fn only_a_different_ver_or_id_resolves_again_while_other_keys_keep_the_pin() {
     success(h.shell(&line(&format!(" ver={first} load=prompt")), "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
     assert!(info.contains(&format!("commit        {first}")), "{info}");
-    assert!(info.contains("Load: prompt"), "{info}");
+    assert!(info.contains("load          prompt"), "{info}");
     // Removing ver= is a different ver: the current commit is resolved.
     success(h.shell(&line(""), "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
@@ -3603,7 +3610,10 @@ fn disabling_a_catalog_plugin_removes_its_command() {
     let run = "ctool || echo no-ctool\n";
     assert!(stdout(&h.shell("", run)).contains("ctool-ran"));
     let inspect = success(h.binit(&["inspect", "cat"]));
-    assert!(inspect.contains("programs      ctool (tool.sh)"), "{inspect}");
+    assert!(
+        inspect.contains("programs      ctool (tool.sh)"),
+        "{inspect}"
+    );
     success(h.binit(&["disable", "cat"]));
     assert!(!generation_dir(&h).join("bin").exists());
     assert!(stdout(&h.shell("", run)).contains("no-ctool"));

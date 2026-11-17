@@ -629,10 +629,7 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
     for line in report {
         println!("{line}");
     }
-    println!(
-        "applied {}; new shells use it",
-        &generation[..12]
-    );
+    println!("applied {}; new shells use it", &generation[..12]);
     Ok(())
 }
 

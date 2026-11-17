@@ -172,7 +172,11 @@ mod tests {
         let names: Vec<_> = files.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
-            ["runtime-load.bash", "runtime-unload.bash", "runtime-more.bash"]
+            [
+                "runtime-load.bash",
+                "runtime-unload.bash",
+                "runtime-more.bash"
+            ]
         );
         for line in RUNTIME.lines() {
             if let Some(name) = line.strip_suffix("() {") {

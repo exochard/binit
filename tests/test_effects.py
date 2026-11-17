@@ -16,6 +16,9 @@ class EffectsTests(unittest.TestCase):
         environment = dict(os.environ)
         environment.pop('BASH_ENV', None)
         environment.pop('ENV', None)
+        # Exported caller functions would appear as effects of the code under test.
+        for name in [name for name in environment if name.startswith('BASH_FUNC_')]:
+            del environment[name]
         result = subprocess.run([BASH, '--noprofile', '--norc', '-c',
                                  'enable -f ' + shlex.quote(str(MODULE)) + ' binit_complete\n' + body],
                                 env=environment, capture_output=True, text=True)

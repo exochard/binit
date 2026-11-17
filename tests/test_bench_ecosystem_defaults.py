@@ -136,6 +136,8 @@ class DefaultsIntegrityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
             root = Path(temporary)
             (root / 'empty').mkdir()
+            # A fixed starting mode keeps the later chmod a change under any umask.
+            (root / 'empty').chmod(0o700)
             (root / 'target').write_text('kept')
             (root / 'link').symlink_to('target')
             before = defaults.tree_identity(root)

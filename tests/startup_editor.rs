@@ -51,6 +51,8 @@ fn startup_plugins_can_activate_native_editor_features() {
         .env_remove("ENV")
         .env_remove("BINIT_SAFE")
         .env("BINIT_COMPLETION_MENU", "1")
+        // Editor features refuse an unset or dumb TERM; do not inherit the caller's.
+        .env("TERM", "xterm")
         .env("INPUTRC", "/dev/null")
         .env("HISTFILE", "/dev/null")
         .output()

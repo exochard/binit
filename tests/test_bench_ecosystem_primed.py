@@ -109,6 +109,8 @@ class PrimedFrameworkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as temporary:
             directory = Path(temporary)
             (directory / 'empty').mkdir()
+            # A fixed starting mode keeps the later chmod a change under any umask.
+            (directory / 'empty').chmod(0o700)
             (directory / 'fixture').write_text('fixture\n')
             (directory / 'link').symlink_to('fixture')
             first = primed.inventory_tree(directory)

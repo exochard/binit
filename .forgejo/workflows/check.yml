@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p .cache/ci/evidence
           sudo apt-get update
-          sudo apt-get install -y shellcheck cmake gcc clang make patch bison curl libncurses-dev python3-venv
+          sudo apt-get install -y shellcheck cmake gcc clang make patch bison curl libncurses-dev python3-venv zsh
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy --component rustfmt
           echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
           python3 -m venv .venv

@@ -66,7 +66,8 @@ class DemoEntry(unittest.TestCase):
             self.fail(f'demo did not reach {marker!r}: {data.decode(errors="replace")}')
 
         try:
-            until(b'$ ')
+            # Bash ends the prompt with # for root, as in CI containers.
+            until(b'# ' if os.geteuid() == 0 else b'$ ')
             # The demo opens on the prompt alone: no banner, status list or key guide before it.
             before = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Z0-9]|\x1b[=>]', '',
                             data[:data.index(b'$ ')].decode(errors='replace')).replace('\r', '')

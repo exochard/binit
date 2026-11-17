@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn returns_writer_failure_after_other_started_writers_finish() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         fs::create_dir(root.path().join("blocked")).unwrap();
         let packages = BTreeMap::from([
             ("blocked".into(), b"cannot replace directory".to_vec()),

@@ -220,6 +220,17 @@ fn private_dir(path: &Path) -> Result<()> {
 }
 use std::os::unix::fs::DirBuilderExt;
 
+/// Tests that hand a temporary directory to code requiring a private state
+/// directory must not depend on the caller's umask.
+#[cfg(test)]
+pub(crate) fn private_tempdir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
+
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     atomic_write_mode(path, bytes, 0o600)
 }

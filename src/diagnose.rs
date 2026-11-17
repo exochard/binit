@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn sidecar_budget_includes_namespace_bytes() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         let data = b"BINIT_DIAG_META\x001\x001\x00\x00end\x000\x000\x001\x00";
         std::fs::write(root.path().join("namespace.bin"), data).unwrap();
         let trace = crate::trace::analyze(Default::default(), 1, root.path(), root.path());
@@ -63,7 +63,7 @@ mod tests {
             .len();
         assert_eq!(summary.bytes, report_bytes);
         assert_eq!(summary.namespace_bytes, data.len() as u64);
-        let second = tempfile::tempdir().unwrap();
+        let second = crate::private_tempdir();
         std::fs::write(second.path().join("namespace.bin"), data).unwrap();
         let trace = crate::trace::analyze(Default::default(), 1, second.path(), second.path());
         assert!(super::save_report(second.path(), trace, data.len() as u64 + 16).is_err());

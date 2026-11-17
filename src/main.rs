@@ -585,7 +585,7 @@ fn install_generation(
     let state = fs::canonicalize(state)?;
     let executable = std::env::current_exe()?;
     let mut init = format!(
-        "# Generated initialization plan; changes require prepare.\n[[ $- == *i* && ${{BINIT_SAFE-0}} != 1 ]] || return 0\n[[ ${{__binit_active-0}} != 1 ]] || return 0\nBINIT_STATE_DIR={}\nif [[ -n ${{__binit_check_state-}} ]]; then BINIT_STATE_DIR=$__binit_check_state; fi\n__binit_manager={}\n__binit_generation_dir=${{BASH_SOURCE[0]%/*}}\nsource \"$__binit_generation_dir/runtime.bash\" || return\n",
+        "# Generated initialization plan; changes require prepare.\n[[ $- == *i* && ${{BINIT_SAFE-0}} != 1 ]] || return 0\n[[ ${{__binit_active-0}} != 1 ]] || return 0\nBINIT_STATE_DIR={}\nif [[ -n ${{__binit_check_state-}} ]]; then BINIT_STATE_DIR=$__binit_check_state; fi\n__binit_manager={}\n__binit_generation_dir=${{BASH_SOURCE[0]%/*}}\n[[ ${{BASH_SOURCE[0]}} == */* ]] || __binit_generation_dir=.\n[[ $__binit_generation_dir == /* ]] || __binit_generation_dir=$PWD/$__binit_generation_dir\nsource \"$__binit_generation_dir/runtime.bash\" || return\n",
         quote(state.to_str().ok_or("state path must be UTF-8")?),
         quote(executable.to_str().ok_or("binary path must be UTF-8")?)
     );
@@ -860,8 +860,14 @@ fn read_project(directory: &Path) -> Result<(PathBuf, Vec<u8>, Project)> {
     validate_project(&project)?;
     Ok((path, bytes, project))
 }
-fn trust(state: &Path, directory: &Path) -> Result<()> {
-    let (path, bytes, _) = read_project(directory)?;
+/// Approves a project file and prints what was approved. With `reviewed`, approves only content
+/// whose digest matches it, so a change between review and approval is refused.
+fn trust(state: &Path, directory: &Path, reviewed: Option<&str>) -> Result<()> {
+    let (path, bytes, project) = read_project(directory)?;
+    let digest = hash(&bytes);
+    if reviewed.is_some_and(|reviewed| reviewed != digest) {
+        return Err(format!("trust: content changed since review: sha256 {digest}").into());
+    }
     let path = path
         .to_str()
         .ok_or("project path must be UTF-8")?
@@ -870,7 +876,7 @@ fn trust(state: &Path, directory: &Path) -> Result<()> {
     private_dir(&state.join("trust"))?;
     let record = Trust {
         path: path.clone(),
-        sha256: hash(&bytes),
+        sha256: digest,
     };
     atomic_write(
         &state
@@ -879,6 +885,10 @@ fn trust(state: &Path, directory: &Path) -> Result<()> {
         toml::to_string_pretty(&record)?.as_bytes(),
     )?;
     println!("trusted {path} at {}", record.sha256);
+    println!("label  {}", project.label);
+    for (key, value) in &project.env {
+        println!("env    {key}={}", value.escape_default());
+    }
     Ok(())
 }
 fn project(state: &Path, directory: &Path) -> Result<()> {
@@ -892,7 +902,7 @@ fn project(state: &Path, directory: &Path) -> Result<()> {
             .join(format!("{}.toml", hash(name.as_bytes()))),
     )?)?;
     if record.path != name || record.sha256 != hash(&bytes) {
-        return Err("project content changed; review it and trust it again".into());
+        return Err("project content changed since it was trusted".into());
     }
     let mut out = std::io::stdout().lock();
     write!(out, ":label\0{}\0", project.label)?;
@@ -939,7 +949,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "usage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nstate: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in the shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  diagnose PLAN [--json] [--no-trace]  Check and diagnose reviewed fixtures\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select           Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "usage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nstate: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in the shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  diagnose PLAN [--json] [--no-trace]  Check and diagnose reviewed fixtures\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select           Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY [--sha256 HEX]  Approve .binit-project.toml content and show it\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }
@@ -1051,7 +1061,10 @@ fn run() -> Result<()> {
             atomic_write(&state.join("current"), previous.as_bytes())?;
             println!("activated {previous}; new shells use it");
         }
-        ("trust", 2) => trust(&state, Path::new(&args[1]))?,
+        ("trust", 2) => trust(&state, Path::new(&args[1]), None)?,
+        ("trust", 4) if args[2] == "--sha256" => {
+            trust(&state, Path::new(&args[1]), Some(&args[3]))?
+        }
         ("project", 2) => project(&state, Path::new(&args[1]))?,
         _ => return Err("unknown command or argument count; see binit --help".into()),
     }

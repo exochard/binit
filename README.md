@@ -193,7 +193,7 @@ for compatibility checks:
 | `git-completion` | Loads Git's installed Bash completion script on first use, including branches and options. Existing completion definitions take precedence. |
 | `project-context` | Applies explicitly trusted project variables on directory entry and restores their previous scalar/export state on exit. |
 
-Project profiles use `.binit-project.toml`. Values are literal data. Approval is bound to the canonical file path and its SHA-256 digest; edited content needs approval again. Changed files are checked on the next directory entry or after `binit trust`.
+Project profiles use `.binit-project.toml`. Values are literal data. Approval is bound to the canonical file path and its SHA-256 digest; edited content needs approval again. `binit trust` prints what it approves, and `--sha256 HEX` approves only the content you reviewed. Changed files are checked on the next directory entry or after `binit trust`.
 
 Local plugins are trusted Bash code with the shell's full authority. Their content hashes detect changes to a prepared generation; they do not establish the author's identity. See [the plugin interface](docs/plugins.md) for the supported contract.
 

@@ -608,6 +608,39 @@ fn unavailable_and_failing_plugins_leave_a_usable_shell() {
     "#)), "usable");
 }
 
+/// `trust` shows what it approves, and `--sha256` approves only the content that was reviewed.
+#[test]
+fn trust_shows_the_approved_content_and_refuses_unreviewed_changes() {
+    let f = Fixture::new();
+    f.write(
+        "project/.binit-project.toml",
+        "label='sample'\n[env]\nPROJECT_MODE='a\tb'\n",
+    );
+    let project = f.root().join("project");
+    let project = project.to_str().unwrap();
+    let shown = success(f.cli(&["trust", project]));
+    let reviewed = shown.split_whitespace().nth(3).unwrap().to_owned();
+    assert_eq!(
+        shown,
+        format!(
+            "trusted {project}/.binit-project.toml at {reviewed}\nlabel  sample\nenv    PROJECT_MODE=a\\tb\n"
+        )
+    );
+    success(f.cli(&["trust", project, "--sha256", &reviewed]));
+    f.write(
+        "project/.binit-project.toml",
+        "label='sample'\n[env]\nGIT_SSH_COMMAND='touch pwned'\n",
+    );
+    failure(
+        f.cli(&["trust", project, "--sha256", &reviewed]),
+        "content changed since review",
+    );
+    failure(
+        f.cli(&["project", project]),
+        "project content changed since it was trusted",
+    );
+}
+
 #[test]
 fn project_trust_is_bound_to_content_and_data_is_literal() {
     let f = Fixture::new();
@@ -1110,6 +1143,39 @@ load='startup'
     assert_eq!(success(f.bash(script)), "first:second");
     success(f.prepare(&["declarations/tools.toml"]));
     assert_eq!(success(f.bash(script)), "changed:second");
+}
+
+/// A plan sourced by a relative path keeps loading from its own directory after `cd`, so the
+/// working directory can never supply plugin code, programs or the native module.
+#[test]
+fn a_plan_sourced_by_a_relative_path_ignores_later_directory_changes() {
+    let f = Fixture::new();
+    f.plugin(
+        "tools",
+        "load='command'\ncommands=['tool']",
+        "tool() { printf genuine; }\n",
+    );
+    success(f.prepare(&["tools"]));
+    let generation = f.generation();
+    let parent = generation.parent().unwrap();
+    let name = generation.file_name().unwrap().to_str().unwrap();
+    // A planted copy of the same relative layout, where a later `cd` lands.
+    let planted = f.root().join("planted");
+    fs::create_dir_all(planted.join(name).join("plugins/tools")).unwrap();
+    for file in ["plugin.toml", "plugin.bash"] {
+        fs::write(
+            planted.join(name).join("plugins/tools").join(file),
+            "tool() { printf planted; }\n",
+        )
+        .unwrap();
+    }
+    let script = format!(
+        "cd '{}' && source ./{name}/init.bash && cd '{}' && \
+         [[ $__binit_generation_dir == /* ]] && tool",
+        parent.display(),
+        planted.display(),
+    );
+    assert_eq!(success(f.bash(&script)), "genuine");
 }
 
 #[test]

@@ -240,13 +240,13 @@ label = "example"
 PROJECT_MODE = "development"
 ```
 
-Run `binit trust DIRECTORY` after reviewing the file. Trust records belong to the selected private state directory. Project values use NUL-delimited transport and quoted assignment, without `eval`. Bash control variables such as `PATH` and `POSIXLY_CORRECT` are rejected. Arrays and integer variables are skipped, as are readonly variables and namerefs.
+`binit trust DIRECTORY` approves the file's current content and prints its digest, label and variables. `binit trust DIRECTORY --sha256 HEX` approves only content with the digest you reviewed, so a change made between review and approval is refused; use it for checkouts that other people or tools can write. Trust records belong to the selected private state directory. Project values use NUL-delimited transport and quoted assignment, without `eval`. Bash control variables such as `PATH` and `POSIXLY_CORRECT` are rejected. That list is not a sandbox: values such as `GIT_SSH_COMMAND`, `PAGER` or `NODE_OPTIONS` decide what other programs run, so approving a project file is as consequential as running its code. Arrays and integer variables are skipped, as are readonly variables and namerefs.
 
 The runtime restores prior values and export declarations on the next directory change. If a variable changes to an incompatible type while the project is active, restoration leaves it intact and reports the conflict. Project profiles explicitly configure environment variables. External programs retain their normal permissions.
 
 ## Trust and loading failures
 
-State directories must belong to the current user with mode 700. `binit init` verifies the selected generation's lock digest and every locked file before emitting a source command. Publishing a new plan changes an atomic generation pointer. Rollback verifies the previous generation before selecting it.
+State directories must belong to the current user with mode 700. `binit init` verifies the selected generation's lock digest and every locked file before emitting a source command. After a full verification it stores the inode, size, times, mode and owner of each locked file; later starts compare those with `lstat` and hash again when anything differs. This skips repeated hashing; it protects against other users, not against processes running as you. Publishing a new plan changes an atomic generation pointer. Rollback verifies the previous generation before selecting it.
 
 Sourced plugin code has full shell access and can bypass the interface. A failed `source` cannot be rolled back reliably. The runtime reports `failed`; use a new recovery shell if the plugin altered important state. An actor who can rewrite all same-user state is outside the integrity guarantee.
 

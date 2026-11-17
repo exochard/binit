@@ -184,6 +184,14 @@ def configuration(subject, count, directory, sources, binary, bash):
         if proc.returncode:
             raise RuntimeError(proc.stderr.decode(errors='replace'))
         preparation = (time.perf_counter_ns() - started) / 1e6
+        # `binit init` stamps a generation whose files settled at least 2 s earlier, and later
+        # starts compare the stamp instead of hashing. Record it now, outside timing and before the
+        # inputs are frozen, so every timed shell starts from the same primed state.
+        time.sleep(2.1)
+        primed = subprocess.run([str(binary), 'init', '--state', str(state)],
+                                env={**environment(home), 'BINIT_BASH': bash}, capture_output=True, timeout=30)
+        if primed.returncode:
+            raise RuntimeError(primed.stderr.decode(errors='replace'))
         setup += f'eval "$({shlex.quote(str(binary))} init --state {shlex.quote(str(state))})"\n'
     elif subject == 'bash-it':
         custom = directory / 'custom'

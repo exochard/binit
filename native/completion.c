@@ -579,15 +579,25 @@ static void paint_menu(struct context *ctx)
         snprintf(state, sizeof state, "history  %s%s", query, queried ? "\xe2\x96\x8f  " : "") :
         snprintf(state, sizeof state, "%s%s%s%s%s", ctx->word, *ctx->word && queried ? " " : "",
                  queried ? "/" : "", query, *ctx->word || queried ? "  " : "");
-    snprintf(state + used, sizeof state - (size_t)used, "%zu/%zu   ?", selected, ctx->menu.count);
+    // `?` is shown only where it works: once a query has text, `?` is part of the query.
+    bool help = !(ctx->filtering && ctx->menu.query[0]);
+    snprintf(state + used, sizeof state - (size_t)used, "%zu/%zu%s", selected, ctx->menu.count, help ? "   ?" : "");
     binit_text(text, sizeof text, state, ctx->columns - 1);
     move_cursor(ctx->row + ctx->list_rows + 1, 1);
     fprintf(rl_outstream, "\033[2K\033[2m%s\033[0m", text);
     if (keys_shown) {
-        const char *keys = ctx->history ?
-            ctx->filtering ? "enter insert  esc browse" : "jk move  / search  enter insert  esc close" :
-            ctx->filtering ? "enter insert  esc close" : "tab next  hjkl move  / filter  enter insert  esc close";
-        if (ctx->columns < 44) keys = "enter insert  esc close";
+        // The longest line that fits; shorter lines keep the keys nobody can guess.
+        static const char *const history_browse[] = {"jk move  / search  enter insert  esc close", "/ search  esc close"};
+        static const char *const history_search[] = {"enter insert  esc browse", "esc browse"};
+        static const char *const menu_browse[] = {"tab next  hjkl move  / filter  enter insert  esc close",
+                                                  "tab next  / filter  esc close", "/ filter  esc close"};
+        static const char *const menu_filter[] = {"enter insert  esc close", "esc close"};
+        const char *const *tiers = ctx->history ? ctx->filtering ? history_search : history_browse :
+                                   ctx->filtering ? menu_filter : menu_browse;
+        size_t count = tiers == menu_browse ? 3 : 2;
+        const char *keys = tiers[count - 1];
+        for (size_t i = 0; i < count; ++i)
+            if (strlen(tiers[i]) <= (size_t)ctx->columns - 1) {keys = tiers[i]; break;}
         binit_text(text, sizeof text, keys, ctx->columns - 1);
         move_cursor(ctx->row + ctx->list_rows + 2, 1);
         fprintf(rl_outstream, "\033[2K\033[2m%s\033[0m", text);
@@ -1054,8 +1064,14 @@ static void capture(char **matches, int count, int width)
     (void)width;
     if (active && count > 1 && count <= BINIT_MENU_LIMIT) {
         active->captured = binit_menu_init(&active->menu, (const char *const *)(matches + 1), (size_t)count) == 0;
-        // The common prefix Readline computed names what is being completed.
-        snprintf(active->word, sizeof active->word, "%s", matches[0] ? label(matches[0]) : "");
+        // The word as typed names what is being completed; Readline's common prefix can be longer.
+        const char *breaks = rl_completer_word_break_characters ? rl_completer_word_break_characters : " \t\n";
+        // Readline has already inserted the common prefix, so read the line saved before completion.
+        int start = active->point;
+        while (start > 0 && !strchr(breaks, active->line[start - 1])) --start;
+        char typed[sizeof active->word];
+        snprintf(typed, sizeof typed, "%.*s", active->point - start, active->line + start);
+        snprintf(active->word, sizeof active->word, "%s", label(typed));
         for (size_t end = strlen(active->word); end && active->word[end - 1] == ' '; --end) active->word[end - 1] = 0;
         active->oversized = !active->captured;
     } else if (active && count > BINIT_MENU_LIMIT) {
@@ -1405,27 +1421,30 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
 #ifdef BINIT_HIGHLIGHT
             printf("%-14s%s\n", "highlighting", highlighting_enabled ? "on" : "off");
 #else
-            printf("%-14s%s\n", "highlighting", "unavailable");
+            printf("%-14s%s\n", "highlighting", "not built");
 #endif
             Keymap map = rl_get_keymap_by_name(rl_editing_mode == 1 ? "emacs-standard" : "vi-insert");
             if (map) {
+                // One key per row under the value column, so narrow terminals never split a key.
+#define KEY_ROW "\n              "
                 char keys[256] = "";
                 rl_command_func_t *tab = bound_function(map, "\t");
                 strcat(keys, tab == native_complete || tab == rl_complete || tab == rl_menu_complete || tab == rl_backward_menu_complete ?
-                       "tab complete" : tab == history_tab ? "tab history" : "tab custom");
+                       "tab complete" : tab == history_tab ? "tab history or complete" : "tab custom");
                 if (suggestions_enabled && bound_function(map, "\033[C") == accept_or_forward_char)
-                    strcat(keys, ", right accept");
+                    strcat(keys, KEY_ROW "right accept");
                 rl_command_func_t *forward = bound_function(map, "\006");
                 if (suggestions_enabled && (forward == accept_or_forward_char || forward == accept_or_self_insert))
-                    strcat(keys, ", ctrl-f accept");
+                    strcat(keys, KEY_ROW "ctrl-f accept");
                 if (history_enabled && bound_function(map, "\022") == binit_history_search)
-                    strcat(keys, ", ctrl-r history");
+                    strcat(keys, KEY_ROW "ctrl-r history");
                 for (size_t i = 0; i < 2; ++i)
                     if (word_keys[i].owned && word_keys[i].map == map && bound_function(map, "\b") == rl_backward_kill_word) {
-                        strcat(keys, ", ctrl-backspace word");
+                        strcat(keys, KEY_ROW "ctrl-backspace word");
                         break;
                     }
                 printf("%-14s%s\n", "keys", keys);
+#undef KEY_ROW
             }
             return EXECUTION_SUCCESS;
         }
@@ -1468,7 +1487,8 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
                 return EXECUTION_SUCCESS;
             }
 #else
-            builtin_error("highlighting: built without BINIT_SYNTAX_SOURCE");
+            // A plugin asks for this at every start, so the line names Binit, not the builtin.
+            fputs("binit: highlighting: not built\n", stderr);
             return EXECUTION_FAILURE;
 #endif
         }

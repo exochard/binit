@@ -78,8 +78,8 @@ complete -F __lazy lazy_cmd
 
     @property
     def panel(self):
-        # The panel ends with its state line: position, then the dim `?` for keys.
-        return any(re.search(r"\d+/\d+   \?$", row.rstrip()) for row in self.screen.display)
+        # The panel ends with its state line: the position, then `?` unless a query is typed.
+        return any(re.search(r"(?:^|  )\d+/\d+(?:   \?)?$", row.rstrip()) for row in self.screen.display)
 
     def pump(self, seconds=.08):
         deadline = time.monotonic() + seconds
@@ -222,6 +222,14 @@ class CompletionTests(unittest.TestCase):
                                 (b"k", 1), (b"\x1b[Z", 40)):
                 session.send(keys)
                 session.wait(lambda: f" {index}/40   ?" in session.text)
+
+    def test_state_line_names_the_typed_word_and_shows_help_only_where_it_works(self):
+        with Session() as session:
+            # Readline's common prefix is `value `; the state line names what was typed.
+            session.open('demo_cmd v')
+            session.wait(lambda: any(row.rstrip() == "v  1/2   ?" for row in session.screen.display))
+            session.send("/tw")
+            session.wait(lambda: any(row.rstrip() == "v /tw  1/1" for row in session.screen.display))
 
     def test_filtering_and_empty_results(self):
         with Session() as session:

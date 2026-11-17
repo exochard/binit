@@ -45,7 +45,7 @@ def history_search_shown(display):
 
 def completion_shown(display, word):
     """The completion menu for `word`, never the history panel."""
-    state = re.compile(re.escape(word) + r'(?: /\S*)?  \d+/\d+   \?')
+    state = re.compile(re.escape(word) + r'(?: /\S*)?  \d+/\d+(?:   \?)?')
     return any('Completions' in row or state.fullmatch(row.rstrip()) for row in display)
 
 

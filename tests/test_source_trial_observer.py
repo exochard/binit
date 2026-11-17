@@ -40,7 +40,7 @@ class ChromeTests(unittest.TestCase):
                 ['History SEARCH /al  1/37', 'history  al\u258f  1/37   ?', 'history  \u258f  3/3   ?'],
                 ['History NAVIGATE 1/37', 'history  1/37   ?', 'history', 'sta /co  1/2   ?']),
             lambda display: terminal.completion_shown(display, 'sta'): (
-                ['Completions 1/3', 'sta  1/3   ?', 'sta /co  1/2   ?'],
+                ['Completions 1/3', 'sta  1/3   ?', 'sta /co  1/2'],
                 ['history  1/37   ?', 'history  sta\u258f  1/1   ?', 'History NAVIGATE 1/37', 'stash  1/3   ?']),
         }
         for predicate, (shown, other) in cases.items():

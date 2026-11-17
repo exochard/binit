@@ -2660,6 +2660,23 @@ impl Repo {
     }
 }
 
+/// A sync that leaves new shells on the generation they already had prints nothing.
+#[test]
+fn a_sync_that_changes_nothing_is_silent() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "plug", "init.bash", "BINIT_GIT_V=1\n");
+    let lines = format!("binit plugin {}\n", repo.url());
+    let first = h.shell(&lines, "binit sync\n");
+    assert!(
+        stdout(&first).contains("synced 1 plugin line into "),
+        "{}",
+        stderr(&first)
+    );
+    let again = h.shell(&lines, "binit sync\n");
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(!stdout(&again).contains("synced"), "{}", stdout(&again));
+}
+
 #[test]
 fn first_sync_pins_the_default_branch_and_the_shell_loads_the_snapshot() {
     let h = Home::new();

@@ -1006,7 +1006,12 @@ pub(super) fn sync_with_jobs(state: &Path, jobs: usize) -> Result<()> {
         plan.catalog.push(item);
         plan.packages.extend(files);
     }
+    let previous = pointer(state, "current").ok();
     let generation = publish(plan.catalog, plan.packages, state)?;
+    // Silent when new shells get the generation they already had.
+    if previous.as_deref() == Some(generation.as_str()) {
+        return Ok(());
+    }
     println!(
         "synced {} plugin line{} into {}; new shells use it",
         lines.len(),

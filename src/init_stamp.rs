@@ -17,9 +17,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// changed this close to the start of verification is stamped; a later start stamps it.
 const SETTLED_SECONDS: i64 = 2;
 
-/// The version ties a stamp to the verification rules that produced it.
-fn header(id: &str) -> String {
-    format!("binit-verified 2 {} {id}", env!("CARGO_PKG_VERSION"))
+/// Bump whenever `verify_generation` checks more, so stamps from builds with older rules lapse;
+/// development builds between releases share one package version.
+const VERIFY_RULES: u32 = 1;
+
+/// Ties a stamp to the rules and build that produced it, the generation and its path count.
+fn header(id: &str, paths: usize) -> String {
+    format!(
+        "binit-verified 2 {} rules-{VERIFY_RULES} {id} {paths}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 fn stamp_path(state: &Path, id: &str) -> PathBuf {
@@ -93,8 +100,9 @@ pub fn record<'a>(
     started: i64,
 ) -> crate::Result<()> {
     let root = state.join("generations").join(id);
-    let mut text = header(id) + "\n";
-    for relative in covered(files) {
+    let paths = covered(files);
+    let mut text = header(id, paths.len()) + "\n";
+    for relative in paths {
         let meta = metadata(&root, &relative).ok_or("generation changed during verification")?;
         if meta.ctime() > started - SETTLED_SECONDS || meta.mtime() > started - SETTLED_SECONDS {
             return Ok(());
@@ -114,7 +122,11 @@ pub fn unchanged(state: &Path, id: &str) -> bool {
         return false;
     };
     let mut lines = text.lines();
-    if lines.next() != Some(header(id).as_str()) {
+    let Some(first) = lines.next() else {
+        return false;
+    };
+    let count = text.lines().count() - 1;
+    if first != header(id, count) {
         return false;
     }
     let root = state.join("generations").join(id);

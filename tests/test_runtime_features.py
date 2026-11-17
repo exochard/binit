@@ -45,7 +45,8 @@ class RuntimeFeatures(unittest.TestCase):
     def sync(self):
         result = self.shell('binit sync')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertRegex(result.stdout, r'synced \d+ plugin lines? into [0-9a-f]{12}; new shells use it\n')
+        # One line when the generation changed, nothing when new shells keep theirs.
+        self.assertRegex(result.stdout, r'\A(synced \d+ plugin lines? into [0-9a-f]{12}; new shells use it\n)?\Z')
 
     def test_before_after_callbacks_run_in_order_in_calling_shell(self):
         self.plugin('sample', "printf 'plugin\\n'\ngreet() { printf 'greet:%s\\n' \"$1\"; }\n", 'load=command', 'commands=greet')

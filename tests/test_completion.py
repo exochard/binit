@@ -389,6 +389,20 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(line, 'printf "%s" al')
             self.assertEqual(point, line.rindex("al"))
 
+    @unittest.expectedFailure
+    def test_one_key_after_escape_appears_without_another_key(self):
+        # Known defect: a lone '[' typed after Esc closes the menu shows only with the next key.
+        # It reproduces on 1fa926a; the post-Esc paste-header read is not the cause.
+        for key in ("[", "x"):
+            with self.subTest(key=key), Session() as session:
+                session.open()
+                session.send(b"\x1b")
+                session.wait(lambda: not session.panel)
+                session.send(key)
+                # Watch the screen only: capture() sends keys, which would redraw the line.
+                session.wait(lambda: 'al' + key in session.text)
+                self.assertEqual(session.capture()[1], 'printf "%s" al' + key)
+
     def test_ordinary_brackets_after_escape_are_preserved(self):
         for text in ("[xyz", "[20x", "[200x"):
             with self.subTest(text=text), Session() as session:

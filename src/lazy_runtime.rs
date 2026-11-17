@@ -23,8 +23,25 @@ const EAGER: &[&str] = &[
     "__binit_wait_arm",
 ];
 
-/// Deferred functions used together and often alone, each group with its own file.
-const GROUPS: &[(&str, &[&str])] = &[("unload", &["__binit_unload", "__binit_provider_forget"])];
+/// Deferred functions used together and often alone, each group with its own file. `load` is
+/// every function a prompt, command or completion plugin's first load reaches, so those loads
+/// parse 14 KB instead of the whole deferred runtime.
+const GROUPS: &[(&str, &[&str])] = &[
+    (
+        "load",
+        &[
+            "__binit_load",
+            "__binit_invoke",
+            "__binit_complete",
+            "__binit_capture_names",
+            "__binit_capture_plugin_completions",
+            "__binit_drop_commands",
+            "__binit_notify",
+            "__binit_record_effects",
+        ],
+    ),
+    ("unload", &["__binit_unload", "__binit_provider_forget"]),
+];
 
 /// The file that holds every deferred function outside `GROUPS`.
 const REST: &str = "more";
@@ -153,7 +170,10 @@ mod tests {
     fn keeps_every_function_once_and_stubs_the_deferred_ones() {
         let (eager, files) = split(RUNTIME).unwrap();
         let names: Vec<_> = files.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(names, ["runtime-unload.bash", "runtime-more.bash"]);
+        assert_eq!(
+            names,
+            ["runtime-load.bash", "runtime-unload.bash", "runtime-more.bash"]
+        );
         for line in RUNTIME.lines() {
             if let Some(name) = line.strip_suffix("() {") {
                 let defined = |text: &str| text.lines().filter(|l| *l == line).count();
@@ -190,12 +210,13 @@ mod tests {
             }
         }
         assert!(eager.contains("__binit_activate_plugins() {\n"));
-        assert!(files[0].1.contains("__binit_unload() {\n"));
+        assert!(files[0].1.contains("__binit_load() {\n"));
+        assert!(files[1].1.contains("__binit_unload() {\n"));
     }
 
     #[test]
     fn a_failed_load_retries_and_spares_the_caller() {
-        let source = "binit() {\n    :\n}\n__binit_unload() {\n    echo unload\n}\n\
+        let source = "binit() {\n    :\n}\n__binit_load() {\n    :\n}\n__binit_unload() {\n    echo unload\n}\n\
                       __binit_provider_forget() {\n    :\n}\n__binit_other() {\n    echo other\n}\n";
         let (eager, files) = split(source).unwrap();
         let root = tempfile::tempdir().unwrap();

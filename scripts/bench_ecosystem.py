@@ -192,6 +192,10 @@ def configuration(subject, count, directory, sources, binary, bash):
                                 env={**environment(home), 'BINIT_BASH': bash}, capture_output=True, timeout=30)
         if primed.returncode:
             raise RuntimeError(primed.stderr.decode(errors='replace'))
+        # `init` succeeds without a stamp when it cannot write one, so require the file itself.
+        generation = (state / 'current').read_text().strip()
+        if not (state / 'generations' / f'{generation}.verified').is_file():
+            raise RuntimeError(f'{directory.name}: init stamp was not recorded before timing')
         setup += f'eval "$({shlex.quote(str(binary))} init --state {shlex.quote(str(state))})"\n'
     elif subject == 'bash-it':
         custom = directory / 'custom'

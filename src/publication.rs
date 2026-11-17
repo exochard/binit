@@ -4,6 +4,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn write_new_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     private_dir(path.parent().ok_or("missing package parent")?)?;
@@ -54,45 +55,49 @@ pub(super) fn write_staging(
         }
     }
 
-    // Bound file-sync concurrency independently of catalog size.
-    let count = entries.len().min(32);
-    let result: std::result::Result<(), String> = std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        let mut failure = None;
-        for worker in 0..count {
-            let entries = &entries;
-            match std::thread::Builder::new().spawn_scoped(scope, move || {
-                for (name, bytes) in entries.iter().skip(worker).step_by(count) {
-                    let mode = if name.starts_with("bin/") {
-                        0o700
-                    } else {
-                        0o600
-                    };
-                    write_new_file(&staging.join(name), bytes, mode)
-                        .map_err(|error| error.to_string())?;
-                }
-                Ok::<(), String>(())
-            }) {
-                Ok(handle) => handles.push(handle),
-                Err(error) => {
-                    failure = Some(error.to_string());
-                    break;
-                }
-            }
-        }
-        for handle in handles {
-            let outcome = match handle.join() {
-                Ok(result) => result,
-                Err(_) => Err("generation writer panicked".to_owned()),
-            };
-            if let Err(error) = outcome {
-                failure.get_or_insert(error);
-            }
-        }
-        failure.map_or(Ok(()), Err)
-    });
-    result.map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    write_entries(staging, &entries, WRITERS)?;
     write_new_file(&staging.join("lock.toml"), lock, 0o600)
+}
+
+/// Writers syncing at once. Concurrent fsyncs share filesystem commits, so this is most of
+/// prepare's speed; it is a ceiling, independent of catalog size and CPU count.
+const WRITERS: usize = 32;
+
+/// Writes and syncs every entry, and returns the first failure only after every write has
+/// finished. Up to `writers - 1` threads join the calling thread; when the system refuses a
+/// thread, the ones already running and the calling thread do the rest.
+fn write_entries(staging: &Path, entries: &[(String, Vec<u8>)], writers: usize) -> Result<()> {
+    let next = AtomicUsize::new(0);
+    let work = || -> std::result::Result<(), String> {
+        let mut outcome = Ok(());
+        while let Some((name, bytes)) = entries.get(next.fetch_add(1, Ordering::Relaxed)) {
+            let mode = if name.starts_with("bin/") {
+                0o700
+            } else {
+                0o600
+            };
+            if let Err(error) = write_new_file(&staging.join(name), bytes, mode) {
+                outcome = outcome.and(Err(error.to_string()));
+            }
+        }
+        outcome
+    };
+    let result = std::thread::scope(|scope| {
+        let handles: Vec<_> = (1..writers.min(entries.len()))
+            .map_while(|_| std::thread::Builder::new().spawn_scoped(scope, work).ok())
+            .collect();
+        let mut outcome = work();
+        for handle in handles {
+            let joined = handle
+                .join()
+                .unwrap_or_else(|_| Err("generation writer panicked".to_owned()));
+            if let Err(error) = joined {
+                outcome = outcome.and(Err(error));
+            }
+        }
+        outcome
+    });
+    result.map_err(|error| error.into())
 }
 
 #[cfg(test)]
@@ -101,6 +106,29 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn writes_every_entry_with_any_number_of_writers() {
+        let entries: Vec<_> = (0..70)
+            .map(|index| (format!("f{index}"), index.to_string().into_bytes()))
+            .collect();
+        // One writer is the calling thread alone, as when the system refuses every thread.
+        for writers in [1, 3, WRITERS, 200] {
+            let root = tempfile::tempdir().unwrap();
+            write_entries(root.path(), &entries, writers).unwrap();
+            for (name, bytes) in &entries {
+                assert_eq!(
+                    &fs::read(root.path().join(name)).unwrap(),
+                    bytes,
+                    "{writers}"
+                );
+            }
+        }
+        // A failed write fails the whole set, whichever thread meets it.
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("f40"), b"taken").unwrap();
+        assert!(write_entries(root.path(), &entries, 4).is_err());
+    }
 
     #[test]
     fn writes_nested_packages_with_private_directories_and_executable_modes() {

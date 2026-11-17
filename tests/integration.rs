@@ -1013,6 +1013,7 @@ fn schema_one_generations_migrate_without_losing_plugins() {
         "init.bash",
         "runtime.bash",
         "runtime-more.bash",
+        "runtime-unload.bash",
         "plugins/custom/plugin.toml",
         "plugins/custom/plugin.bash",
     ] {

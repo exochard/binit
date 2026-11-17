@@ -630,9 +630,11 @@ fn install_generation(
     }
     init.push_str("__binit_activate_shell\n");
     packages.insert("init.bash".into(), init.into_bytes());
-    let (runtime, runtime_more) = lazy_runtime::split(include_str!("../runtime/core.bash"))?;
+    let (runtime, deferred) = lazy_runtime::split(include_str!("../runtime/core.bash"))?;
     packages.insert("runtime.bash".into(), runtime.into_bytes());
-    packages.insert("runtime-more.bash".into(), runtime_more.into_bytes());
+    for (name, text) in deferred {
+        packages.insert(name, text.into_bytes());
+    }
     #[cfg(feature = "completion-menu")]
     packages.insert(
         "completion.so".into(),

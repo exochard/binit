@@ -55,7 +55,7 @@ pub(super) fn write_staging(
     }
 
     // Bound file-sync concurrency independently of catalog size.
-    let count = entries.len().min(8);
+    let count = entries.len().min(32);
     let result: std::result::Result<(), String> = std::thread::scope(|scope| {
         let mut handles = Vec::new();
         let mut failure = None;

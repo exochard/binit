@@ -1,8 +1,10 @@
 //! Splits the shell runtime so a shell start parses only what startup uses.
 //!
 //! Bash spends most of the runtime's load time building function bodies. Functions outside
-//! `EAGER` go to `runtime-more.bash`, and `runtime.bash` keeps a one-line stub for each; the
-//! first call of any stub sources the rest, which replaces every stub with its definition.
+//! `EAGER` go to deferred files, and `runtime.bash` keeps a one-line stub for each; the first call
+//! of a stub sources that function's file, which replaces every stub of the file with its
+//! definition. Functions in a `GROUPS` entry get a file of their own, so their first use parses
+//! only them; every other deferred function goes to `runtime-more.bash`.
 
 /// Functions a startup, its first prompt and plugin loads call; everything else loads on use.
 const EAGER: &[&str] = &[
@@ -21,11 +23,21 @@ const EAGER: &[&str] = &[
     "__binit_wait_arm",
 ];
 
-/// Returns the eager runtime, with the loader and stubs appended, and the deferred functions.
-pub fn split(source: &str) -> Result<(String, String), String> {
+/// Deferred functions used together and often alone, each group with its own file.
+const GROUPS: &[(&str, &[&str])] = &[("unload", &["__binit_unload", "__binit_provider_forget"])];
+
+/// The file that holds every deferred function outside `GROUPS`.
+const REST: &str = "more";
+
+/// Returns the eager runtime, with the loader and stubs appended, and each deferred file as
+/// `(name, text)`, named `runtime-<group>.bash`.
+pub fn split(source: &str) -> Result<(String, Vec<(String, String)>), String> {
     let mut eager = String::new();
-    let mut deferred = String::new();
-    let mut names = Vec::new();
+    let mut files: Vec<(&str, String, Vec<String>)> = GROUPS
+        .iter()
+        .map(|(group, _)| (*group, String::new(), Vec::new()))
+        .collect();
+    files.push((REST, String::new(), Vec::new()));
     let mut lines = source.split_inclusive('\n').peekable();
     // Comment lines directly above a function travel with it.
     let mut pending = String::new();
@@ -56,28 +68,52 @@ pub fn split(source: &str) -> Result<(String, String), String> {
         }
         if EAGER.contains(&name) {
             eager.push_str(&body);
-        } else {
-            deferred.push_str(&body);
-            names.push(name.to_owned());
+            continue;
         }
+        let group = GROUPS
+            .iter()
+            .find(|(_, names)| names.contains(&name))
+            .map_or(REST, |(group, _)| group);
+        let file = files.iter_mut().find(|(name, ..)| *name == group).unwrap();
+        file.1.push_str(&body);
+        file.2.push(name.to_owned());
     }
     eager.push_str(&pending);
-    if names.is_empty() {
-        return Err("runtime has no deferred functions".into());
+    if let Some((group, ..)) = files.iter().find(|(_, _, names)| names.is_empty()) {
+        return Err(format!("runtime has no deferred functions for {group}"));
     }
-    eager.push_str(
-        "\n# The functions below load from runtime-more.bash on first use; that file redefines each one.\n\
-         __binit_runtime_more_file=$__binit_generation_dir/runtime-more.bash\n\
-         [[ $__binit_runtime_more_file == /* ]] || __binit_runtime_more_file=$PWD/$__binit_runtime_more_file\n\
-         __binit_runtime_more() {\n    [[ -z ${__binit_runtime_more_loaded-} ]] || return 1\n    __binit_runtime_more_loaded=1\n    \
-         source \"$__binit_runtime_more_file\"\n}\n",
-    );
-    for name in &names {
-        eager.push_str(&format!(
-            "{name}() {{ __binit_runtime_more && {name} \"$@\"; }}\n"
-        ));
+    // A shell that needed the rest is already using the runtime at length, so loading the rest
+    // loads every group too, and a group's first use there costs nothing more.
+    let groups = GROUPS
+        .iter()
+        .map(|(group, _)| *group)
+        .collect::<Vec<_>>()
+        .join(" ");
+    eager.push_str(&format!(
+        "\n# The functions below load from runtime-<group>.bash on first use; each file redefines its own.\n\
+         __binit_runtime_dir=$__binit_generation_dir\n\
+         [[ $__binit_runtime_dir == /* ]] || __binit_runtime_dir=$PWD/$__binit_runtime_dir\n\
+         declare -gA __binit_runtime_loaded=()\n\
+         __binit_runtime_load() {{\n    [[ -z ${{__binit_runtime_loaded[$1]-}} ]] || return 1\n    \
+         __binit_runtime_loaded[$1]=1\n    source \"$__binit_runtime_dir/runtime-$1.bash\" || return\n    \
+         [[ $1 == {REST} ]] || return 0\n    local group\n    for group in {groups}; do\n        \
+         [[ -n ${{__binit_runtime_loaded[$group]-}} ]] || __binit_runtime_load \"$group\" || return\n    \
+         done\n}}\n"
+    ));
+    for (group, _, names) in &files {
+        for name in names {
+            eager.push_str(&format!(
+                "{name}() {{ __binit_runtime_load {group} && {name} \"$@\"; }}\n"
+            ));
+        }
     }
-    Ok((eager, deferred))
+    Ok((
+        eager,
+        files
+            .into_iter()
+            .map(|(group, text, _)| (format!("runtime-{group}.bash"), text))
+            .collect(),
+    ))
 }
 
 /// The name of a multi-line function definition that starts at column zero.
@@ -99,28 +135,46 @@ mod tests {
 
     #[test]
     fn keeps_every_function_once_and_stubs_the_deferred_ones() {
-        let (eager, deferred) = split(RUNTIME).unwrap();
+        let (eager, files) = split(RUNTIME).unwrap();
+        let names: Vec<_> = files.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["runtime-unload.bash", "runtime-more.bash"]);
         for line in RUNTIME.lines() {
             if let Some(name) = line.strip_suffix("() {") {
                 let defined = |text: &str| text.lines().filter(|l| *l == line).count();
-                assert_eq!(defined(&eager) + defined(&deferred), 1, "{name}");
-                let stub = format!("{name}() {{ __binit_runtime_more && {name} \"$@\"; }}");
-                assert_eq!(eager.contains(&stub), defined(&deferred) == 1, "{name}");
+                let deferred: Vec<_> = files
+                    .iter()
+                    .filter(|(_, text)| defined(text) == 1)
+                    .collect();
+                assert_eq!(defined(&eager) + deferred.len(), 1, "{name}");
+                for (file, _) in &deferred {
+                    let group = &file["runtime-".len()..file.len() - ".bash".len()];
+                    let stub =
+                        format!("{name}() {{ __binit_runtime_load {group} && {name} \"$@\"; }}");
+                    assert!(eager.contains(&stub), "{name}");
+                }
+                if deferred.is_empty() {
+                    assert!(
+                        !eager.contains(&format!("{name}() {{ __binit_runtime_load")),
+                        "{name}"
+                    );
+                }
             }
         }
         // Deferred text holds only functions and their comments.
-        let mut depth = 0;
-        for line in deferred.lines() {
-            if line.ends_with("() {") {
-                depth += 1;
-            } else if line == "}" {
-                depth -= 1;
-            } else if depth == 0 {
-                assert!(line.starts_with('#') || line.is_empty(), "{line}");
+        for (_, text) in &files {
+            let mut depth = 0;
+            for line in text.lines() {
+                if line.ends_with("() {") {
+                    depth += 1;
+                } else if line == "}" {
+                    depth -= 1;
+                } else if depth == 0 {
+                    assert!(line.starts_with('#') || line.is_empty(), "{line}");
+                }
             }
         }
         assert!(eager.contains("__binit_activate_plugins() {\n"));
-        assert!(deferred.contains("__binit_unload() {\n"));
+        assert!(files[0].1.contains("__binit_unload() {\n"));
     }
 
     #[test]

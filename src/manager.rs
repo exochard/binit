@@ -835,9 +835,9 @@ fn read_declared(state: &Path) -> Result<Vec<Vec<String>>> {
     parse_declared(&bytes)
 }
 
-/// Stores the list sent by a shell after checking it, so `sync` never reads
-/// a record this binary would refuse.
-pub(super) fn declare(state: &Path) -> Result<()> {
+/// Reads the list a shell sends on standard input and checks it, so neither
+/// `declare` nor `sync` stores a record this binary would refuse.
+fn declared_input() -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     std::io::stdin()
         .take(DECLARED_MAX + 1)
@@ -846,7 +846,11 @@ pub(super) fn declare(state: &Path) -> Result<()> {
         return Err("declared list exceeds 256 KiB".into());
     }
     parse_declared(&bytes)?;
-    atomic_write(&state.join("declared"), &bytes)
+    Ok(bytes)
+}
+
+pub(super) fn declare(state: &Path) -> Result<()> {
+    atomic_write(&state.join("declared"), &declared_input()?)
 }
 
 fn kept_git_pin(
@@ -868,10 +872,24 @@ fn kept_git_pin(
     })
 }
 
-pub(super) fn sync_with_jobs(state: &Path, jobs: usize) -> Result<()> {
+/// With `from_shell`, the invoking shell sends its lines on standard input and
+/// they are recorded under the mutation lock, so another shell writing its own
+/// list meanwhile cannot change what this sync publishes.
+pub(super) fn sync_with_jobs(state: &Path, jobs: usize, from_shell: bool) -> Result<()> {
+    let input = if from_shell {
+        Some(declared_input()?)
+    } else {
+        None
+    };
     let _guard = MutationGuard::acquire(state)?;
     git::clean_leftovers(state);
-    let lines = read_declared(state)?;
+    let lines = match input {
+        Some(bytes) => {
+            atomic_write(&state.join("declared"), &bytes)?;
+            parse_declared(&bytes)?
+        }
+        None => read_declared(state)?,
+    };
     let mut plan = current(state)?;
     let previous = plan.packages.clone();
     let old: Vec<Installed> = plan

@@ -2349,6 +2349,34 @@ fn a_dependency_must_be_declared_before_its_dependant() {
 }
 
 #[test]
+fn sync_publishes_the_lines_it_was_sent_not_another_shells_list() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let h = Home::new();
+    let mine = h.src("mine", "init.sh", "BINIT_MINE=1\n");
+    let other = h.src("other", "init.sh", "BINIT_OTHER=1\n");
+    // Another shell has stored its own list; this shell's sync sends its lines.
+    declare_lines(&h, &[&[&other]]);
+    let mut bytes = b"1\0".to_vec();
+    bytes.extend(mine.bytes());
+    bytes.push(0);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_binit"));
+    command.args(["sync", "--stdin"]).stdin(Stdio::piped());
+    let mut child = h.isolate(&mut command).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(&bytes).unwrap();
+    assert!(child.wait().unwrap().success());
+    let output = h.shell(
+        &format!("binit plugin {mine}\n"),
+        "echo \"vars:${BINIT_MINE-unset}${BINIT_OTHER-unset}\"\n",
+    );
+    assert!(
+        stdout(&output).contains("vars:1unset"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn changed_keys_are_reported_and_do_not_activate_the_old_plugin() {
     let h = Home::new();
     let one = h.src("one", "init.sh", "BINIT_ONE=1\n");

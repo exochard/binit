@@ -776,8 +776,7 @@ binit() {
             printf 'usage: binit sync [--jobs N]\n' >&2
             return 2
         fi
-        __binit_write_declared || return
-        command "$__binit_manager" sync "${@:2}" --state "$BINIT_STATE_DIR"
+        command "$__binit_manager" sync "${@:2}" --stdin --state "$BINIT_STATE_DIR" < <(__binit_declared_stream)
     else
         if command "$__binit_manager" "$@" --state "$BINIT_STATE_DIR"; then
             if [[ ${1-} == trust ]]; then __binit_last_directory=''; fi

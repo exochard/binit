@@ -954,7 +954,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "usage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nstate: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in the shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  diagnose PLAN [--json] [--no-trace]  Check and diagnose reviewed fixtures\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select           Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY [--sha256 HEX]  Approve .binit-project.toml content and show it\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "usage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nstate: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in the shell startup file\n  declare          Store plugin lines read from standard input (used at the first prompt)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  diagnose PLAN [--json] [--no-trace]  Check and diagnose reviewed fixtures\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select           Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY [--sha256 HEX]  Approve .binit-project.toml content and show it\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }
@@ -978,6 +978,15 @@ fn run() -> Result<()> {
         if args.iter().any(|s| s == "--jobs") {
             return Err("--jobs may only be specified once".into());
         }
+    }
+    // The shell's `binit sync` sends its plugin lines on standard input.
+    let mut from_shell = false;
+    if let Some(position) = args.iter().position(|s| s == "--stdin") {
+        if !args.first().is_some_and(|s| s == "sync") {
+            return Err("--stdin is supported only for sync".into());
+        }
+        args.remove(position);
+        from_shell = true;
     }
     let state = match args.iter().position(|s| s == "--state") {
         Some(pos) => {
@@ -1014,7 +1023,7 @@ fn run() -> Result<()> {
             let _guard = manager::MutationGuard::acquire(&state)?;
             println!("prepared {}", prepare(Path::new(&args[1]), &state)?);
         }
-        ("sync", 1) => manager::sync_with_jobs(&state, jobs)?,
+        ("sync", 1) => manager::sync_with_jobs(&state, jobs, from_shell)?,
         ("declare", 1) => manager::declare(&state)?,
         ("init", 1) => {
             if matches!(

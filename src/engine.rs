@@ -10,7 +10,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         .ok_or("run needs a script; see binit run --help")?;
     if script == "--help" || script == "-h" {
         println!(
-            "Usage: binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nDefault engine: /bin/bash"
+            "usage: binit run [--engine BASH] [--] SCRIPT [ARG...]\n\n--engine defaults to /bin/bash"
         );
         return Ok(());
     }

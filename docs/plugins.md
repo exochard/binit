@@ -25,7 +25,7 @@ At startup, a line whose exact arguments match a synced plugin activates it at o
 
 A synced plugin with no matching line is `undeclared` and never loads, including as a dependency; its dependants become unavailable. Declare a dependency before the plugin that needs it.
 
-When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync; run binit sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.
+When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.
 
 `files=` accepts bounded `*` and `?` patterns within a path component. Matches
 are sorted; duplicate or empty selections fail. Scans visit at most 8,192

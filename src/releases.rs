@@ -170,7 +170,7 @@ pub(super) fn command(args: &[String]) -> Result<()> {
     if tag.is_some_and(|wanted| wanted != "latest" && wanted != release.tag_name) {
         return Err("release metadata tag does not match the requested tag".into());
     }
-    println!("Release: {} {}", repo, release.tag_name);
+    println!("release  {} {}", repo, release.tag_name);
     let mut count = 0;
     for asset in release.assets {
         if pattern.is_some_and(|pattern| !matches(pattern, &asset.name)) {
@@ -195,7 +195,7 @@ pub(super) fn command(args: &[String]) -> Result<()> {
         count += 1;
     }
     if count == 0 {
-        println!("No matching assets");
+        println!("no matching assets");
     }
     Ok(())
 }

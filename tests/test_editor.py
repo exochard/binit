@@ -435,19 +435,19 @@ class SuggestionLifecycleTests(unittest.TestCase):
                     session.pump(.3)
                     self.assertEqual(input_row(session).rstrip(), PROMPT + 'echo sam^C')
                     self.assertNotIn(GHOST, session.text)
-                    self.assertNotIn('History', session.text)
+                    self.assertNotIn('history', session.text)
 
     def test_interrupt_in_the_middle_keeps_the_text_after_the_cursor(self):
         for mode in ('vi', 'emacs'):
             with self.subTest(mode=mode), Session(extra=SUGGEST + 'binit_complete editor history live\n', mode=mode) as session:
                 session.send('echo sample')
-                session.wait(lambda: 'History' in session.text)
+                session.wait(lambda: 'history' in session.text)
                 session.send(b'\x1b[D' * 3)
                 session.pump(.2)
                 session.send(b'\x03')
                 session.pump(.3)
                 self.assertEqual(input_row(session).rstrip(), PROMPT + 'echo sam^Ce')
-                self.assertNotIn('History', session.text)
+                self.assertNotIn('history', session.text)
                 self.assertNotIn(GHOST, session.text)
 
 
@@ -714,16 +714,16 @@ class WordKeyTests(unittest.TestCase):
                 result = edited(session, 'echo a/b-c', 0, CTRL_BACKSPACE)
                 self.assertEqual(result, (5, 'echo ') if mode == 'vi' else (9, 'echo a/b-'))
                 text = status(session, 'binit editor')
-                self.assertIn('Tab: complete', text)
-                self.assertEqual('Ctrl-Backspace: delete word' in text, mode == 'emacs')
+                self.assertIn('tab complete', text)
+                self.assertEqual('ctrl-backspace word' in text, mode == 'emacs')
 
     def test_framework_activation_takes_the_key_and_off_and_unload_restore_it(self):
         dump = "bind -m vi-insert -p > .binds-vi\nbind -m emacs-standard -p > .binds-emacs\n"
         with Session(framework=True) as session:
             self.assertEqual(edited(session, 'echo one two', 0, CTRL_BACKSPACE), (9, 'echo one '))
             text = status(session, 'binit editor')
-            self.assertIn('Ctrl-Backspace: delete word', text)
-            self.assertIn('Tab: complete', text)
+            self.assertIn('ctrl-backspace word', text)
+            self.assertIn('tab complete', text)
         for release in ('binit_complete editor keys off\n', 'enable -d binit_complete\n'):
             with self.subTest(release=release), Session(extra=KEYS_ON + release + dump) as session:
                 session.pump(.3)

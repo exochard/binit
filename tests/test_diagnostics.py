@@ -170,7 +170,7 @@ class DiagnosticsTests(unittest.TestCase):
         (self.root / 'check.bash').write_text('return 23\n')
         failed = self.command(state, 'diagnose', str(plan), '--no-trace')
         self.assertNotEqual(failed.returncode, 0)
-        self.assertIn('Tracing: off', failed.stdout)
+        self.assertIn('tracing     off', failed.stdout)
 
     def test_sample_receipts_account_for_both_sidecars(self):
         _, _, plan, state = self.prepare()

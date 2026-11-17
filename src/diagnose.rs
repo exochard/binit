@@ -256,13 +256,13 @@ fn reports(root: &Path) -> Result<Vec<serde_json::Value>> {
 }
 
 fn print_report(report: &serde_json::Value) {
-    println!("Timing: instrumented Bash wall time");
+    println!("timing      instrumented bash wall time");
     if let Some(phases) = report["trace"]["phases"].as_array() {
         for phase in phases.iter().filter(|phase| phase["process"] == 0) {
             let wall = phase["wall_us"].as_u64().unwrap_or(0);
             let attributed = phase["attributed_us"].as_u64().unwrap_or(0);
             println!(
-                "Phase: {}  wall_us={}  attributed_us={}  opaque_us={}",
+                "phase       {}  wall_us={}  attributed_us={}  opaque_us={}",
                 phase["name"].as_str().unwrap_or("unknown"),
                 wall,
                 attributed,
@@ -298,7 +298,7 @@ fn print_report(report: &serde_json::Value) {
     if let Some(conflicts) = report["namespace"]["conflicts"].as_array() {
         for conflict in conflicts {
             println!(
-                "Conflict: {} blocked by {}; existing owner: {}",
+                "conflict    {} blocked by {}; existing owner {}",
                 conflict["plugin"].as_str().unwrap_or("unknown"),
                 conflict["symbol"].as_str().unwrap_or("unknown"),
                 conflict["existing_owner"]
@@ -307,7 +307,6 @@ fn print_report(report: &serde_json::Value) {
             );
         }
     }
-    println!("Inclusive totals include children; sum exclusive time only.");
 }
 
 pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
@@ -352,21 +351,21 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
         );
     } else {
         println!(
-            "Diagnosis: {}",
+            "diagnosis   {}",
             if receipt.passed() {
                 "checks passed"
             } else {
                 "checks failed or evidence incomplete"
             }
         );
-        println!("Generation: {generation}");
+        println!("generation  {generation}");
         if !trace {
-            println!("Tracing: off");
+            println!("tracing     off");
         }
         for report in &reports {
             print_report(report);
         }
-        println!("Run: {id}");
+        println!("run         {id}");
     }
     if !receipt.passed() {
         return Err(receipt.failure_reason().into());

@@ -19,9 +19,9 @@ class HistoryContractTests(unittest.TestCase):
             with self.subTest(mode=mode), Session(extra=extra, mode=mode, framework=True) as session:
                 session.send('demo_cmd va')
                 session.pump(.15)
-                self.assertNotIn('History', session.text)
+                self.assertFalse(any(row.rstrip() == 'history' for row in session.screen.display))
                 session.send(b'\t')
-                session.wait(lambda: 'Completions' in session.text)
+                session.wait(lambda: session.panel)
                 session.send(b'\x1b')
                 session.pump(.1)
                 self.assertEqual(session.capture()[1], 'demo_cmd va')
@@ -43,13 +43,13 @@ class HistoryContractTests(unittest.TestCase):
     def test_editor_status_reports_actual_flags(self):
         with Session(framework=True) as session:
             session.send('binit editor\n')
-            session.wait(lambda: 'Suggestions: off' in session.text)
-            self.assertIn('History: off', session.text)
+            session.wait(lambda: 'suggestions   off' in session.text)
+            self.assertIn('history       off', session.text)
             session.send('binit_complete editor history on; binit editor\n')
-            session.wait(lambda: 'History: search' in session.text)
-            self.assertIn('Suggestions: on', session.text)
+            session.wait(lambda: 'history       search' in session.text)
+            self.assertIn('suggestions   on', session.text)
             session.send('binit_complete editor history off; binit editor\n')
-            session.wait(lambda: session.text.count('History: off') == 2)
+            session.wait(lambda: session.text.count('history       off') == 2)
 
     def test_completion_menu_does_not_display_a_history_suggestion_as_input(self):
         extra = "history -s 'demo_cmd value history'\nbinit_complete editor history on\n"
@@ -57,7 +57,7 @@ class HistoryContractTests(unittest.TestCase):
             session.send('demo_cmd va')
             session.wait(lambda: 'demo_cmd value history' in session.text)
             session.send(b'\t')
-            session.wait(lambda: 'Completions' in session.text)
+            session.wait(lambda: session.panel)
             self.assertNotIn('demo_cmd value history', session.text)
             session.send(b'\x1b')
             session.pump(.1)
@@ -69,7 +69,7 @@ class HistoryContractTests(unittest.TestCase):
                  "binit_complete editor history on\n")
         with Session(extra=extra) as session:
             session.open('demo_cmd va')
-            self.assertIn('Completions', session.text)
+            self.assertTrue(session.panel)
         extra += ("__custom() { READLINE_LINE=custom; READLINE_POINT=6; }\n"
                   "bind -m emacs-standard -x '\"\\t\": __custom'\n"
                   "bind -m emacs-standard -x '\"\\C-r\": __custom'\n"
@@ -87,13 +87,13 @@ class HistoryContractTests(unittest.TestCase):
                  "binit_complete editor history on\n")
         with Session(extra=extra, framework=True) as session:
             session.send('binit editor\n')
-            session.wait(lambda: 'History: search' in session.text)
-            self.assertIn('Suggestions: on', session.text)
+            session.wait(lambda: 'history       search' in session.text)
+            self.assertIn('suggestions   on', session.text)
 
     def test_editor_status_reports_fallback_without_loading_a_module(self):
         with Session(framework=True) as session:
             session.send('enable -n binit_complete; binit editor; printf "STATUS:%s\\n" "$?"\n')
-            session.wait(lambda: 'Native editor: unavailable in this shell' in session.text)
+            session.wait(lambda: 'binit: native editor unavailable in this shell' in session.text)
             self.assertIn('STATUS:1', session.text)
 
     def test_editor_status_only_advertises_owned_accept_and_search_keys(self):
@@ -105,10 +105,10 @@ class HistoryContractTests(unittest.TestCase):
                  "bind -m emacs-standard -x '\"\\e[C\": __custom'\n")
         with Session(extra=extra, framework=True) as session:
             session.send('binit editor\n')
-            session.wait(lambda: 'Tab: custom binding' in session.text)
-            self.assertNotIn('Right: accept suggestion', session.text)
-            self.assertNotIn('Ctrl-F: accept suggestion', session.text)
-            self.assertNotIn('Ctrl-R: history search', session.text)
+            session.wait(lambda: 'tab custom' in session.text)
+            self.assertNotIn('right accept', session.text)
+            self.assertNotIn('ctrl-f accept', session.text)
+            self.assertNotIn('ctrl-r history', session.text)
 
 
 if __name__ == '__main__':

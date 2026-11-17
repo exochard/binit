@@ -102,8 +102,8 @@ prepares the pinned editor build dependencies; later builds reuse its local
 `build.mk`. Core installation still installs no plugins.
 
 Typing shows the newest matching history entry as a dim suggestion; Right,
-Ctrl-F or End accepts it. Tab opens command completion. Ctrl-R opens history
-SEARCH, Esc switches to NAVIGATE with j/k, and Enter inserts without
+Ctrl-F or End accepts it. Tab opens command completion. Ctrl-R searches
+history, Esc switches to browsing with j/k, and Enter inserts without
 executing. Home and End move to the line's edges, Ctrl-Delete deletes the
 next word and Ctrl-Backspace the previous one. See
 [history controls](docs/history.md) and [editing keys](docs/editor.md) for

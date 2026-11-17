@@ -878,7 +878,7 @@ fn trust(state: &Path, directory: &Path) -> Result<()> {
             .join(format!("{}.toml", hash(path.as_bytes()))),
         toml::to_string_pretty(&record)?.as_bytes(),
     )?;
-    println!("Trusted {path} at {}", record.sha256);
+    println!("trusted {path} at {}", record.sha256);
     Ok(())
 }
 fn project(state: &Path, directory: &Path) -> Result<()> {
@@ -939,7 +939,7 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Binit: Bash environment and plugin framework\n\nUsage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nState: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in your shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver now names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  diagnose PLAN [--json] [--no-trace]  Check and diagnose reviewed fixtures\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select           Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "usage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nstate: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in the shell startup file\n  declare          Store plugin lines read from standard input (used by binit sync)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  diagnose PLAN [--json] [--no-trace]  Check and diagnose reviewed fixtures\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select           Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY  Approve the current .binit-project.toml content\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
         );
         return Ok(());
     }
@@ -997,7 +997,7 @@ fn run() -> Result<()> {
         ("apply", 1) => manager::apply(&state)?,
         ("prepare", 2) => {
             let _guard = manager::MutationGuard::acquire(&state)?;
-            println!("Prepared {}", prepare(Path::new(&args[1]), &state)?);
+            println!("prepared {}", prepare(Path::new(&args[1]), &state)?);
         }
         ("sync", 1) => manager::sync_with_jobs(&state, jobs)?,
         ("declare", 1) => manager::declare(&state)?,
@@ -1031,7 +1031,8 @@ fn run() -> Result<()> {
         ("status", 1) => {
             let id = pointer(&state, "current")?;
             let lock = verify_generation(&state, &id)?;
-            println!("Generation {id}\n{:20} {:12} REQUIRES", "PLUGIN", "LOAD");
+            println!("generation  {id}");
+            println!("{:20} {:12} REQUIRES", "PLUGIN", "LOAD");
             for plugin in lock.plugins {
                 println!(
                     "{:20} {:12} {}",
@@ -1048,7 +1049,7 @@ fn run() -> Result<()> {
             let current = pointer(&state, "current")?;
             atomic_write(&state.join("previous"), current.as_bytes())?;
             atomic_write(&state.join("current"), previous.as_bytes())?;
-            println!("Activated {previous}; start a new shell to use it");
+            println!("activated {previous}; new shells use it");
         }
         ("trust", 2) => trust(&state, Path::new(&args[1]))?,
         ("project", 2) => project(&state, Path::new(&args[1]))?,

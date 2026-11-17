@@ -584,7 +584,7 @@ __binit_provider_complete() {
 
 __binit_provider_register() {
     if (( $# < 2 || $# > 4096 )) || [[ ! $1 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ ]]; then
-        printf 'Usage: binit completions register NAME PROGRAM [ARG...]\n' >&2
+        printf 'usage: binit completions register NAME PROGRAM [ARG...]\n' >&2
         return 2
     fi
     local __binit_provider_name=$1 __binit_provider_current __binit_provider_index=0 __binit_provider_bytes=0 __binit_provider_value
@@ -635,7 +635,7 @@ __binit_provider_register() {
 
 __binit_provider_unregister() {
     if (( $# != 1 )) || [[ ! $1 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_provider_count[$1] ]]; then
-        printf 'Usage: binit completions unregister NAME\n' >&2
+        printf 'usage: binit completions unregister NAME\n' >&2
         return 2
     fi
     local __binit_provider_name=$1 __binit_provider_current
@@ -659,7 +659,7 @@ binit() {
         done
     elif [[ ${1-} == on || ${1-} == off ]]; then
         if (( $# != 4 )) || [[ ! $2 =~ ^(before-load|after-load)$ || ! $3 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$3] || ! $4 =~ ^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$ ]] || ! declare -F -- "$4" >/dev/null; then
-            printf 'Usage: binit on|off before-load|after-load ID FUNCTION\n' >&2
+            printf 'usage: binit on|off before-load|after-load ID FUNCTION\n' >&2
             return 2
         fi
         local __binit_callbacks_array=__binit_before_callbacks
@@ -675,7 +675,7 @@ binit() {
         local IFS=,
         __binit_callbacks[$3]=${__binit_callback_keep[*]}
     elif [[ ${1-} == emit ]]; then
-        if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ ]]; then printf 'Usage: binit emit EVENT\n' >&2; return 2; fi
+        if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ ]]; then printf 'usage: binit emit EVENT\n' >&2; return 2; fi
         local __binit_emit_id
         for __binit_emit_id in "${__binit_ids[@]}"; do
             if [[ ${__binit_state[$__binit_emit_id]} == pending && ${__binit_load_kind[$__binit_emit_id]} == event && ${__binit_event[$__binit_emit_id]} == "$2" ]]; then
@@ -683,12 +683,12 @@ binit() {
             fi
         done
     elif [[ ${1-} == dispatch ]]; then
-        (( $# == 1 )) || { printf 'Usage: binit dispatch\n' >&2; return 2; }
+        (( $# == 1 )) || { printf 'usage: binit dispatch\n' >&2; return 2; }
         __binit_dispatch
     elif [[ ${1-} == report ]]; then
-        if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then printf 'Usage: binit report ID\n' >&2; return 2; fi
+        if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then printf 'usage: binit report ID\n' >&2; return 2; fi
         local __binit_report_key
-        printf 'Plugin: %s\nState: %s\n' "$2" "${__binit_state[$2]}"
+        printf 'plugin %s\nstate %s\n' "$2" "${__binit_state[$2]}"
         for __binit_report_key in "${!__binit_owned_functions[@]}"; do [[ $__binit_report_key == "$2:"* ]] && printf 'function %s\n' "${__binit_report_key#*:}"; done
         for __binit_report_key in "${!__binit_owned_aliases[@]}"; do [[ $__binit_report_key == "$2:"* ]] && printf 'alias %s\n' "${__binit_report_key#*:}"; done
         for __binit_report_key in "${!__binit_segment_owner[@]}"; do [[ ${__binit_segment_owner[$__binit_report_key]} == "$2" ]] && printf 'segment %s\n' "$__binit_report_key"; done
@@ -696,7 +696,7 @@ binit() {
         for __binit_report_key in "${!__binit_completion_owner[@]}"; do [[ ${__binit_completion_owner[$__binit_report_key]} == "$2" && -v __binit_completion_spec[$__binit_report_key] ]] && printf 'completion %s\n' "$__binit_report_key"; done
         return 0
     elif [[ ${1-} == unload ]]; then
-        if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then printf 'Usage: binit unload ID\n' >&2; return 2; fi
+        if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then printf 'usage: binit unload ID\n' >&2; return 2; fi
         __binit_unload "$2"
     elif [[ ${1-} == completions ]]; then
         local __binit_admin_name __binit_admin_current __binit_admin_spec __binit_admin_action=${2-list}
@@ -712,7 +712,7 @@ binit() {
             done
             return 0
         fi
-        if (( $# != 3 )) || [[ ! $__binit_admin_action =~ ^(enable|disable)$ || ! $3 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ( ! -v __binit_completion_owner[$3] && ! -v __binit_provider_count[$3] ) ]]; then printf 'Usage: binit completions list|enable|disable|register|unregister [NAME] [PROGRAM ARG...]\n' >&2; return 2; fi
+        if (( $# != 3 )) || [[ ! $__binit_admin_action =~ ^(enable|disable)$ || ! $3 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ( ! -v __binit_completion_owner[$3] && ! -v __binit_provider_count[$3] ) ]]; then printf 'usage: binit completions list|enable|disable|register|unregister [NAME] [PROGRAM ARG...]\n' >&2; return 2; fi
         __binit_admin_name=$3
         __binit_admin_spec=${__binit_provider_spec[$__binit_admin_name]-${__binit_completion_spec[$__binit_admin_name]-}}
         __binit_admin_current=$( { builtin complete -p -- "$__binit_admin_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_admin_current=''
@@ -732,7 +732,7 @@ binit() {
         fi
     elif [[ ${1-} == load ]]; then
         if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then
-            printf 'Usage: binit load ID\n' >&2
+            printf 'usage: binit load ID\n' >&2
             return 2
         fi
         if [[ ${__binit_state[$2]} == unloaded ]]; then __binit_state[$2]=pending; fi
@@ -742,18 +742,18 @@ binit() {
         fi
     elif [[ ${1-} == editor ]]; then
         if (( $# > 2 )) || [[ ${2-status} != status ]]; then
-            printf 'Usage: binit editor [status]\n' >&2
+            printf 'usage: binit editor [status]\n' >&2
             return 2
         fi
         if __binit_has_completion; then
             builtin binit_complete editor status
         else
-            printf 'Native editor: unavailable in this shell\n' >&2
+            printf 'binit: native editor unavailable in this shell\n' >&2
             return 1
         fi
     elif [[ ${1-} == completion ]]; then
         if (( $# > 2 )) || [[ ! ${2-status} =~ ^(on|off|status)$ ]]; then
-            printf 'Usage: binit completion [on|off|status]\n' >&2
+            printf 'usage: binit completion [on|off|status]\n' >&2
             return 2
         fi
         if [[ ${2-status} == on ]]; then __binit_load_completion || return 1; fi
@@ -764,7 +764,7 @@ binit() {
                 return "$?"
             fi
         else
-            printf 'Completion menu: unavailable in this shell\n' >&2
+            printf 'binit: completion menu unavailable in this shell\n' >&2
             return 1
         fi
     elif [[ ${1-} == run ]]; then
@@ -773,7 +773,7 @@ binit() {
         __binit_plugin_line "${@:2}"
     elif [[ ${1-} == sync ]]; then
         if (( $# != 1 )) && { (( $# != 3 )) || [[ $2 != --jobs ]]; }; then
-            printf 'Usage: binit sync [--jobs N]\n' >&2
+            printf 'usage: binit sync [--jobs N]\n' >&2
             return 2
         fi
         __binit_write_declared || return
@@ -882,7 +882,7 @@ __binit_plugin_line() {
     local __binit_plugin_arg __binit_plugin_key __binit_plugin_id
     local -A __binit_plugin_keys=()
     if (( $# == 0 )); then
-        printf 'Usage: binit plugin SOURCE [id=ID] [files=A,B] [load=startup|prompt|wait|command|completion]\n' >&2
+        printf 'usage: binit plugin SOURCE [id=ID] [files=A,B] [load=startup|prompt|wait|command|completion]\n' >&2
         printf '                          [commands=A,B] [completions=A,B] [requires=A,B] [depends=A,B]\n                          [ver=TAG|BRANCH|COMMIT] [asset=NAME] [sha256=HEX] [format=raw|tar|tar.gz|zip]\n                          [atclone=SCRIPT] [atpull=SCRIPT]\n' >&2
         return 2
     fi
@@ -956,7 +956,7 @@ __binit_first_prompt_work() {
     # An edited line is one change: it leaves one line and one plugin unmatched.
     if (( __binit_first_missing > __binit_first_changed )); then __binit_first_changed=$__binit_first_missing; fi
     (( __binit_first_changed > 0 )) || return 0
-    printf 'binit: %d plugin line%s changed since the last sync; run binit sync\n' \
+    printf 'binit: %d plugin line%s changed since the last sync\n' \
         "$__binit_first_changed" "$( ((__binit_first_changed == 1)) || printf s )" >&2
     if [[ ${__binit_has_bin-0} == 1 ]] && (( __binit_first_missing > 0 )); then
         printf 'binit: commands of a removed line stay on PATH until binit sync\n' >&2

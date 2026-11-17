@@ -95,8 +95,8 @@ fn prepare_candidate(state: &Path, config: &Path) -> Result<()> {
         &state.join("candidate.json"),
         &serde_json::to_vec_pretty(&candidate)?,
     )?;
-    println!("Candidate: {}", candidate.generation);
-    println!("State: prepared");
+    println!("candidate  {}", candidate.generation);
+    println!("state      prepared");
     Ok(())
 }
 
@@ -220,9 +220,9 @@ fn check_candidate(state: &Path, plan: &Path) -> Result<()> {
         .ok_or("missing check run")?
         .receipt_sha256 = Some(hash(&bytes));
     save(&state, &candidate)?;
-    println!("Candidate: {}", candidate.generation);
+    println!("candidate  {}", candidate.generation);
     println!(
-        "Checks: {}",
+        "checks     {}",
         if checked.passed() { "passed" } else { "failed" }
     );
     if !checked.passed() {
@@ -248,8 +248,7 @@ fn select_candidate(state: &Path) -> Result<()> {
     if current.as_deref() != Some(&candidate.generation) {
         select_generation(&state, &candidate.generation)?;
     }
-    println!("Selected: {}", candidate.generation);
-    println!("Open a new shell to use it");
+    println!("selected {}; new shells use it", candidate.generation);
     Ok(())
 }
 
@@ -260,8 +259,8 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
         [action] if action == "select" => select_candidate(state),
         [action] if action == "status" => {
             let candidate = load(state)?;
-            println!("Candidate: {}", candidate.generation);
-            println!("State: {}", state_label(state, &candidate)?);
+            println!("candidate  {}", candidate.generation);
+            println!("state      {}", state_label(state, &candidate)?);
             Ok(())
         }
         [action, flag] if action == "status" && flag == "--json" => {

@@ -156,8 +156,8 @@ class EditorCorpusTests(unittest.TestCase):
         self.assertTrue(editor.history_query_acknowledged(shell([
             "BENCH> printf 'wf-history-recent:editor-recent-needle'", f"(20: << !64 ) `{needle}'"]), 'blesh', needle))
         self.assertFalse(editor.history_query_acknowledged(shell([
-            'History SEARCH /e 1/1', 'wf-history-recent:editor-recent-needle']), 'binit', needle))
-        self.assertTrue(editor.history_query_acknowledged(shell([f'History SEARCH /{needle} 1/1']), 'binit', needle))
+            'history  e▏  1/1   ?', 'wf-history-recent:editor-recent-needle']), 'binit', needle))
+        self.assertTrue(editor.history_query_acknowledged(shell([f'history  {needle}▏  1/1   ?']), 'binit', needle))
         self.assertFalse(editor.history_query_acknowledged(shell([
             "(reverse-i-search)`e': wf-history-recent:editor-recent-needle"]), 'readline', needle))
         self.assertTrue(editor.history_query_acknowledged(shell([

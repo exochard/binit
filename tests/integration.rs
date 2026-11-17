@@ -816,7 +816,7 @@ fn plugin_add_update_and_inspect_use_reviewed_snapshots() {
     success(f.cli(&["add", source.to_str().unwrap()]));
     assert!(success(f.cli(&["plugins"])).contains("custom"));
     let info = success(f.cli(&["inspect", "custom"]));
-    assert!(info.contains("Entry SHA256:"));
+    assert!(info.contains("entry sha256  "));
     assert!(info.contains(source.to_str().unwrap()));
     f.write("custom/plugin.bash", "BINIT_CUSTOM=two\n");
     assert_eq!(
@@ -853,7 +853,39 @@ fn disabled_plugins_can_be_enabled_without_the_original_source() {
         "absent"
     );
     success(f.cli(&["remove", "custom"]));
-    assert_eq!(success(f.cli(&["plugins"])).trim(), "No plugins installed");
+    assert_eq!(success(f.cli(&["plugins"])).trim(), "no plugins");
+}
+
+/// A successful change prints one line: what changed, the generation, and the one consequence
+/// the user cannot see. Nothing goes to stderr.
+#[test]
+fn successful_changes_print_one_line_and_nothing_else() {
+    let f = Fixture::new();
+    f.plugin("custom", "load='startup'", "BINIT_CUSTOM=one\n");
+    let source = f.root().join("custom");
+    let source = source.to_str().unwrap();
+    let steps: [(&[&str], &str); 6] = [
+        (&["add", source, "--disabled"], "added custom (disabled)"),
+        (&["enable", "custom"], "enabled custom"),
+        (&["disable", "custom"], "disabled custom"),
+        (&["enable", "custom"], "enabled custom"),
+        (&["update", "custom"], "updated custom"),
+        (&["remove", "custom"], "removed custom"),
+    ];
+    for (arguments, change) in steps {
+        if arguments[0] == "update" {
+            f.write("custom/plugin.bash", "BINIT_CUSTOM=two\n");
+        }
+        let output = f.cli(arguments);
+        assert!(output.status.success(), "{arguments:?}: {}", stderr(&output));
+        assert_eq!(stderr(&output), "", "{arguments:?}");
+        let current = fs::read_to_string(f.state().join("current")).unwrap();
+        assert_eq!(
+            stdout(&output),
+            format!("{change} in {}; new shells use it\n", &current.trim()[..12]),
+            "{arguments:?}"
+        );
+    }
 }
 
 #[test]
@@ -1740,7 +1772,7 @@ fn releases_expose_large_programs_and_keep_apply_and_removal_transactional() {
     success(h.shell_env(&line, "binit sync\n", &envs));
     assert_eq!(fs::read_to_string(&calls).unwrap(), "x");
     let info = success(h.binit(&["inspect", "tool"]));
-    assert!(info.contains(&fixture_digest(&bytes)) && info.contains("Format: raw"));
+    assert!(info.contains(&fixture_digest(&bytes)) && info.contains("format        raw"));
     success(h.shell_env("", "binit sync\n", &envs));
     assert!(
         stdout(&h.shell_env("", "command -v downloaded-tool || echo absent\n", &envs))
@@ -1994,7 +2026,7 @@ fn hook_git_commands_cannot_discover_an_unrelated_or_inherited_repository() {
         ],
     ));
 }
-const NOTICE: &str = "changed since the last sync; run binit sync";
+const NOTICE: &str = "changed since the last sync\n";
 
 #[test]
 fn default_state_follows_binit_state_then_xdg_then_home() {
@@ -2060,7 +2092,7 @@ fn init_publishes_an_empty_generation_only_when_none_exists() {
     assert!(first.starts_with("source '"), "{first}");
     let generation = h.current();
     assert!(fs::metadata(h.f.state()).unwrap().permissions().mode() & 0o077 == 0);
-    assert_eq!(success(h.binit(&["plugins"])), "No plugins installed\n");
+    assert_eq!(success(h.binit(&["plugins"])), "no plugins\n");
     assert_eq!(success(h.binit(&["init"])), first);
     assert_eq!(h.current(), generation);
     assert!(!h.f.state().join("previous").exists());
@@ -2121,11 +2153,11 @@ fn lines_wait_for_sync_then_load_in_the_next_shell() {
     let synced = h.shell(&lines, "binit sync\n");
     let text = stdout(&synced);
     assert!(
-        text.contains("Synced 3 plugin lines"),
+        text.contains("synced 3 plugin lines"),
         "{text}{}",
         stderr(&synced)
     );
-    assert!(text.contains("Open a new shell to use it"), "{text}");
+    assert!(text.contains("; new shells use it"), "{text}");
     // The file was just written from this shell, so it need not be rewritten.
     fs::remove_file(h.declared()).unwrap();
 
@@ -2305,7 +2337,7 @@ fn a_directory_with_plugin_toml_and_no_keys_uses_its_manifest() {
     let lines = format!("binit plugin {dir}\n");
     let synced = h.shell(&lines, "binit sync\n");
     assert!(
-        stdout(&synced).contains("Synced 1 plugin line"),
+        stdout(&synced).contains("synced 1 plugin line"),
         "{}",
         stderr(&synced)
     );
@@ -2411,7 +2443,7 @@ fn paths_with_spaces_quotes_brackets_and_newlines_survive_sync() {
     let lines = format!("binit plugin {} id=weird\n", sh_quote(&dir));
     let output = h.shell(&lines, "binit sync\n");
     assert!(
-        stdout(&output).contains("Synced 1 plugin line"),
+        stdout(&output).contains("synced 1 plugin line"),
         "{}",
         stderr(&output)
     );
@@ -2567,14 +2599,14 @@ fn first_sync_pins_the_default_branch_and_the_shell_loads_the_snapshot() {
     let output = h.shell(&lines, "binit sync\n");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
-        stdout(&output).contains("Synced 1 plugin line"),
+        stdout(&output).contains("synced 1 plugin line"),
         "{}",
         stderr(&output)
     );
     let info = success(h.binit(&["inspect", "plug"]));
     assert!(info.contains(&format!("Source: {}", repo.url())), "{info}");
-    assert!(info.contains("Ver: default branch"), "{info}");
-    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains("ver           default branch"), "{info}");
+    assert!(info.contains(&format!("commit        {first}")), "{info}");
     let mirrors: Vec<_> = fs::read_dir(h.f.state().join("sources"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -2625,7 +2657,7 @@ fn sync_keeps_pins_while_update_check_previews_and_update_applies() {
     assert!(applied.contains("plug  "), "{applied}");
     assert_ne!(h.current(), pinned);
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {third}")), "{info}");
+    assert!(info.contains(&format!("commit        {third}")), "{info}");
     let output = h.shell(&lines, "echo \"v:$BINIT_GIT_V\"\n");
     assert!(stdout(&output).contains("v:3"), "{}", stderr(&output));
     let again = success(h.binit(&["update", "--check", "plug"]));
@@ -2650,9 +2682,9 @@ fn ver_selects_a_tag_and_a_full_commit_never_moves() {
     success(h.shell(&lines, "binit sync\n"));
     for id in ["tagged", "exact"] {
         let info = success(h.binit(&["inspect", id]));
-        assert!(info.contains(&format!("Commit: {first}")), "{info}");
+        assert!(info.contains(&format!("commit        {first}")), "{info}");
     }
-    assert!(success(h.binit(&["inspect", "tagged"])).contains("Ver: v1"));
+    assert!(success(h.binit(&["inspect", "tagged"])).contains("ver           v1"));
     // A pinned commit needs no remote.
     git_in(&repo.dir, &["tag", "-f", "v1"]);
     let moved = repo.commit("init.bash", "BINIT_GIT_V=3\n", "third");
@@ -2670,9 +2702,9 @@ fn ver_selects_a_tag_and_a_full_commit_never_moves() {
     assert!(output.contains("exact  pinned to commit"), "{output}");
     assert!(output.contains("tagged  "), "{output}");
     let info = success(h.binit(&["inspect", "tagged"]));
-    assert!(info.contains(&format!("Commit: {moved}")), "{info}");
+    assert!(info.contains(&format!("commit        {moved}")), "{info}");
     let info = success(h.binit(&["inspect", "exact"]));
-    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains(&format!("commit        {first}")), "{info}");
 }
 
 #[test]
@@ -2871,7 +2903,7 @@ fn repository_attributes_and_user_filters_never_touch_snapshot_bytes() {
             ("GIT_CONFIG_NOSYSTEM", "1"),
         ],
     );
-    assert!(stdout(&output).contains("Synced 1"), "{}", stderr(&output));
+    assert!(stdout(&output).contains("synced 1"), "{}", stderr(&output));
     assert!(!marker.exists());
     let stored = fs::read(
         h.f.state()
@@ -2931,7 +2963,7 @@ fn editing_other_keys_of_a_synced_line_keeps_its_commit() {
     let edited = format!("binit plugin {} load=prompt\n", repo.url());
     success(h.shell(&edited, "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains(&format!("commit        {first}")), "{info}");
     assert!(info.contains("Load: prompt"), "{info}");
     // The mirror may even be gone; the pin is kept and re-snapshotted.
     for entry in fs::read_dir(h.f.state().join("sources")).unwrap() {
@@ -2940,7 +2972,7 @@ fn editing_other_keys_of_a_synced_line_keeps_its_commit() {
     let again = format!("binit plugin {} load=startup\n", repo.url());
     success(h.shell(&again, "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains(&format!("commit        {first}")), "{info}");
 }
 
 #[test]
@@ -3001,7 +3033,7 @@ fn a_commit_that_is_on_no_branch_or_tag_is_rejected() {
     // The same commit is fine once a branch contains it.
     git_in(&repo.dir, &["branch", "kept", &hidden]);
     let output = h.shell(&lines, "binit sync\n");
-    assert!(stdout(&output).contains("Synced 1"), "{}", stderr(&output));
+    assert!(stdout(&output).contains("synced 1"), "{}", stderr(&output));
 }
 
 #[test]
@@ -3233,7 +3265,7 @@ fn a_dangling_remote_head_only_breaks_lines_without_ver() {
     success(h.shell(&lines, "binit sync\n"));
     let first = git_in(&repo.dir, &["rev-parse", "v1^{commit}"]);
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains(&format!("commit        {first}")), "{info}");
     let next = git_in(
         &repo.dir,
         &["commit-tree", "main^{tree}", "-p", "main", "-m", "next"],
@@ -3242,7 +3274,7 @@ fn a_dangling_remote_head_only_breaks_lines_without_ver() {
     git_in(&repo.dir, &["tag", "-f", "v1", &next]);
     success(h.binit(&["update", "plug"]));
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {next}")), "{info}");
+    assert!(info.contains(&format!("commit        {next}")), "{info}");
     let before = h.current();
     declare_lines(&h, &[&[&repo.url()]]);
     failure(
@@ -3270,8 +3302,8 @@ fn a_new_id_resolves_fresh_and_never_borrows_a_pin_from_the_same_repository() {
     success(h.shell(&(line("c") + &line("b")), "binit sync\n"));
     let c = success(h.binit(&["inspect", "c"]));
     let b = success(h.binit(&["inspect", "b"]));
-    assert!(c.contains(&format!("Commit: {third}")), "{c}");
-    assert!(b.contains(&format!("Commit: {first}")), "{b}");
+    assert!(c.contains(&format!("commit        {third}")), "{c}");
+    assert!(b.contains(&format!("commit        {first}")), "{b}");
     assert_ne!(second, third);
 }
 
@@ -3286,20 +3318,20 @@ fn only_a_different_ver_or_id_resolves_again_while_other_keys_keep_the_pin() {
     // Other keys change freely and keep the pin.
     success(h.shell(&line(&format!(" ver={first} load=prompt")), "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {first}")), "{info}");
+    assert!(info.contains(&format!("commit        {first}")), "{info}");
     assert!(info.contains("Load: prompt"), "{info}");
     // Removing ver= is a different ver: the current commit is resolved.
     success(h.shell(&line(""), "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {second}")), "{info}");
+    assert!(info.contains(&format!("commit        {second}")), "{info}");
     // A branch pin stays while an unrelated key changes.
     let third = repo.commit("init.bash", "BINIT_GIT_V=3\n", "third");
     success(h.shell(&line(" load=startup"), "binit sync\n"));
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {second}")), "{info}");
+    assert!(info.contains(&format!("commit        {second}")), "{info}");
     success(h.binit(&["update", "plug"]));
     let info = success(h.binit(&["inspect", "plug"]));
-    assert!(info.contains(&format!("Commit: {third}")), "{info}");
+    assert!(info.contains(&format!("commit        {third}")), "{info}");
 }
 
 #[test]
@@ -3315,7 +3347,7 @@ fn spelling_the_same_source_differently_keeps_the_pin_without_the_remote() {
         success(h.shell(&line(&respelled), "binit sync\n"));
         let info = success(h.binit(&["inspect", "plug"]));
         assert!(
-            info.contains(&format!("Commit: {first}")),
+            info.contains(&format!("commit        {first}")),
             "{suffix} {info}"
         );
     }
@@ -3382,7 +3414,7 @@ fn wait_lines_load_by_the_first_prompt_without_the_native_module() {
     );
     let sync = h.shell(&lines, "binit sync\n");
     assert!(
-        stdout(&sync).contains("Synced 2 plugin lines"),
+        stdout(&sync).contains("synced 2 plugin lines"),
         "{}{}",
         stdout(&sync),
         stderr(&sync)
@@ -3457,7 +3489,7 @@ fn bin_lines_expose_commands_with_arguments_status_and_rename() {
     assert!(text.contains("no-other"), "{text}");
     let inspect = success(h.binit(&["inspect", "tools"]));
     assert!(
-        inspect.contains("Programs: mytool (bin/mytool), renamed (other.sh)"),
+        inspect.contains("programs      mytool (bin/mytool), renamed (other.sh)"),
         "{inspect}"
     );
 }
@@ -3571,7 +3603,7 @@ fn disabling_a_catalog_plugin_removes_its_command() {
     let run = "ctool || echo no-ctool\n";
     assert!(stdout(&h.shell("", run)).contains("ctool-ran"));
     let inspect = success(h.binit(&["inspect", "cat"]));
-    assert!(inspect.contains("Programs: ctool (tool.sh)"), "{inspect}");
+    assert!(inspect.contains("programs      ctool (tool.sh)"), "{inspect}");
     success(h.binit(&["disable", "cat"]));
     assert!(!generation_dir(&h).join("bin").exists());
     assert!(stdout(&h.shell("", run)).contains("no-ctool"));

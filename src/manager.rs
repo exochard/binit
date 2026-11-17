@@ -318,11 +318,9 @@ fn require_catalog(entry: &Installed) -> Result<()> {
     .into())
 }
 
-fn announce(action: &str, id: &str, generation: &str) {
-    println!(
-        "{action}: {id}\nGeneration: {}\nApply: binit shell",
-        &generation[..12]
-    );
+/// One line per change: what happened, in which generation, and that new shells use it.
+fn announce(change: &str, generation: &str) {
+    println!("{change} in {}; new shells use it", &generation[..12]);
 }
 
 pub(super) fn add(state: &Path, path: &Path, enabled: bool) -> Result<()> {
@@ -337,8 +335,7 @@ pub(super) fn add(state: &Path, path: &Path, enabled: bool) -> Result<()> {
     plan.packages.extend(files);
     let generation = publish(plan.catalog, plan.packages, state)?;
     announce(
-        if enabled { "Added" } else { "Added disabled" },
-        &id,
+        &format!("added {id}{}", if enabled { "" } else { " (disabled)" }),
         &generation,
     );
     Ok(())
@@ -364,15 +361,12 @@ pub(super) fn change(state: &Path, id: &str, action: &str) -> Result<()> {
         _ => return Err("unknown plugin action".into()),
     }
     let generation = publish(plan.catalog, plan.packages, state)?;
-    announce(
-        match action {
-            "enable" => "Enabled",
-            "disable" => "Disabled",
-            _ => "Removed",
-        },
-        id,
-        &generation,
-    );
+    let verb = match action {
+        "enable" => "enabled",
+        "disable" => "disabled",
+        _ => "removed",
+    };
+    announce(&format!("{verb} {id}"), &generation);
     Ok(())
 }
 
@@ -496,7 +490,7 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
             }
         }
         if targets.is_empty() {
-            println!("No Git plugins to update");
+            println!("no git plugins to update");
             return Ok(());
         }
     }
@@ -636,7 +630,7 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
         println!("{line}");
     }
     println!(
-        "Generation: {}\nOpen a new shell to use it",
+        "applied {}; new shells use it",
         &generation[..12]
     );
     Ok(())
@@ -664,14 +658,14 @@ pub(super) fn update(state: &Path, id: &str, path: Option<&Path>) -> Result<()> 
     plan.packages.extend(files);
     plan.catalog[position] = item;
     let generation = publish(plan.catalog, plan.packages, state)?;
-    announce("Updated", id, &generation);
+    announce(&format!("updated {id}"), &generation);
     Ok(())
 }
 
 pub(super) fn list(state: &Path) -> Result<()> {
     let plan = current(state)?;
     if plan.catalog.is_empty() {
-        println!("No plugins installed");
+        println!("no plugins");
         return Ok(());
     }
     println!("{:<20} {:<12} LOAD", "PLUGIN", "NEXT_SHELL");
@@ -700,7 +694,7 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
         .get(&file)
         .ok_or("plugin entry is missing from the lock")?;
     println!(
-        "Plugin: {id}\nNext shell: {}\nLoad: {}\nCommands: {}\nRequires: {}\nDepends: {}\nSource: {}\nEntry SHA256: {digest}",
+        "plugin        {id}\nnext shell    {}\nload          {}\ncommands      {}\nrequires      {}\ndepends       {}\nsource        {}\nentry sha256  {digest}",
         if entry.enabled { "enabled" } else { "disabled" },
         entry.plugin.load,
         entry.plugin.commands.join(", "),
@@ -721,21 +715,21 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
             .map(|(path, name)| format!("{name} ({})", path.strip_prefix("files/").unwrap_or(path)))
             .collect::<Vec<_>>();
         println!(
-            "Programs: {}{}",
+            "programs      {}{}",
             programs.join(", "),
             if entry.enabled { "" } else { " (disabled)" }
         );
     }
     if let Some(origin) = &entry.origin {
         println!(
-            "Ver: {}\nCommit: {}",
+            "ver           {}\ncommit        {}",
             origin.ver.as_deref().unwrap_or("default branch"),
             origin.commit
         );
     }
     if let Some(asset) = &entry.asset {
         println!(
-            "Remote: {}\nSHA256: {}\nFormat: {}",
+            "remote        {}\nsha256        {}\nformat        {}",
             asset.url, asset.sha256, asset.format
         );
     }
@@ -771,7 +765,7 @@ pub(super) fn apply(state: &Path) -> Result<()> {
     let _guard = MutationGuard::acquire(state)?;
     let plan = current(state)?;
     let generation = publish(plan.catalog, plan.packages, state)?;
-    println!("Applied {generation}; start a new shell to use it");
+    println!("applied {generation}; new shells use it");
     Ok(())
 }
 
@@ -1017,7 +1011,7 @@ pub(super) fn sync_with_jobs(state: &Path, jobs: usize) -> Result<()> {
     }
     let generation = publish(plan.catalog, plan.packages, state)?;
     println!(
-        "Synced {} plugin line{}\nGeneration: {}\nOpen a new shell to use it",
+        "synced {} plugin line{} into {}; new shells use it",
         lines.len(),
         if lines.len() == 1 { "" } else { "s" },
         &generation[..12]

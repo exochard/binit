@@ -447,7 +447,7 @@ fn release_discovery_uses_bounded_metadata_and_lists_matching_assets() {
         .env("BINIT_FIXTURE_JSON", body);
     f.env(&mut command);
     let output = success(command.output().unwrap());
-    assert!(output.contains("Release: example/tool v1.2.3"), "{output}");
+    assert!(output.contains("release  example/tool v1.2.3"), "{output}");
     assert!(
         output.contains("tool-linux-amd64.tar.gz\t123 bytes\tlinux/x86_64"),
         "{output}"

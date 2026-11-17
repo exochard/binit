@@ -54,7 +54,7 @@ struct context {
     rl_hook_func_t *input_event;
     int query_items, show_all, prefix_first;
     bool transient_input, undo, captured, painted, resized, oversized, bare_escape, interrupted, escape_wait;
-    int row, column, rows, columns, height, cells, cell_width;
+    int row, column, rows, columns, height, list_rows, cells, cell_width;
     int input[INPUT_LIMIT];
     size_t input_count, input_index;
     long input_deadline;
@@ -62,6 +62,7 @@ struct context {
     size_t sequence_length;
     struct binit_menu menu;
     bool filtering, history;
+    char word[64];
 };
 
 struct binding {
@@ -88,6 +89,8 @@ static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
 static char history_line[4097];
 static struct binding history_tabs[2], history_searches[2], word_keys[2];
 static bool keys_enabled;
+/* Whether `?` has shown the panel keys; remembered for the shell session. */
+static bool keys_shown;
 static size_t history_matches;
 static bool poll_installed;
 static bool poll_running;
@@ -547,25 +550,17 @@ static void clear_panel(struct context *ctx)
 
 static void paint_menu(struct context *ctx)
 {
-    char text[2048], heading[2048];
+    char text[2048], state[2048];
     size_t selected = ctx->menu.count ? ctx->menu.selected + 1 : 0;
-    if (ctx->filtering) {
-        char query[sizeof ctx->menu.query * 6];
-        binit_text(query, sizeof query, ctx->menu.query, ctx->columns - 18);
-        snprintf(heading, sizeof heading, "%s/%s  %zu/%zu", ctx->history ? "History SEARCH " : "", query, selected, ctx->menu.count);
-    } else snprintf(heading, sizeof heading, "%s %zu/%zu", ctx->history ? "History NAVIGATE" : "Completions", selected, ctx->menu.count);
-    binit_text(text, sizeof text, heading, ctx->columns - 1);
-    move_cursor(ctx->row + 1, 1);
-    fprintf(rl_outstream, "\033[2K\033[2m%s\033[0m", text);
-    size_t page_size = (size_t)(ctx->height - 2) * (size_t)ctx->cells;
+    size_t page_size = (size_t)ctx->list_rows * (size_t)ctx->cells;
     size_t first = ctx->menu.count ? ctx->menu.selected / page_size * page_size : 0;
-    for (int row = 0; row < ctx->height - 2; ++row) {
-        move_cursor(ctx->row + 2 + row, 1);
+    for (int row = 0; row < ctx->list_rows; ++row) {
+        move_cursor(ctx->row + 1 + row, 1);
         fputs("\033[2K", rl_outstream);
         for (int column = 0; column < ctx->cells; ++column) {
             size_t item = first + (size_t)(row * ctx->cells + column);
             if (item >= ctx->menu.count) break;
-            move_cursor(ctx->row + 2 + row, column * ctx->cell_width + 1);
+            move_cursor(ctx->row + 1 + row, column * ctx->cell_width + 1);
             const char *value = ctx->menu.values[ctx->menu.visible[item]];
             int width = binit_text(text, sizeof text, ctx->history ? value : label(value), ctx->cell_width - 3);
             bool chosen = item == ctx->menu.selected;
@@ -574,19 +569,29 @@ static void paint_menu(struct context *ctx)
             if (chosen) fputs("\033[0m", rl_outstream);
         }
     }
-    const char *hint = ctx->filtering ? "Type to filter  Backspace erase  Enter insert  Esc cancel" :
-                       "Tab next  arrows/hjkl move  / filter  Enter insert  Esc cancel";
-    if (ctx->history) hint = ctx->filtering ?
-        "Type to search  Backspace erase  Enter insert  Esc navigate" :
-        "j/k select  / search  Enter insert  Esc close";
-    if (ctx->columns < 65) hint = "Tab move  / filter  Enter insert  Esc cancel";
-    if (ctx->history && ctx->columns < 65) hint = ctx->filtering ?
-        "Type search  Enter insert  Esc navigate" : "j/k select  / search  Enter insert  Esc close";
-    if (ctx->columns < 44) hint = "Enter insert  Esc cancel";
-    if (ctx->columns < 25) hint = "Enter insert  Esc";
-    binit_text(text, sizeof text, hint, ctx->columns - 1);
-    move_cursor(ctx->row + ctx->height, 1);
+    // State only: what is browsed, the query and the position. Keys appear on `?`.
+    // History searching shows its query with a caret; browsing keeps the filter but shows only the
+    // position. A completion filter shows as `/query`, since typing there always filters.
+    char query[sizeof ctx->menu.query * 6] = "";
+    bool queried = ctx->history ? ctx->filtering : ctx->filtering || ctx->menu.query[0];
+    if (queried) binit_text(query, sizeof query, ctx->menu.query, ctx->columns / 2);
+    int used = ctx->history ?
+        snprintf(state, sizeof state, "history  %s%s", query, queried ? "\xe2\x96\x8f  " : "") :
+        snprintf(state, sizeof state, "%s%s%s%s%s", ctx->word, *ctx->word && queried ? " " : "",
+                 queried ? "/" : "", query, *ctx->word || queried ? "  " : "");
+    snprintf(state + used, sizeof state - (size_t)used, "%zu/%zu   ?", selected, ctx->menu.count);
+    binit_text(text, sizeof text, state, ctx->columns - 1);
+    move_cursor(ctx->row + ctx->list_rows + 1, 1);
     fprintf(rl_outstream, "\033[2K\033[2m%s\033[0m", text);
+    if (keys_shown) {
+        const char *keys = ctx->history ?
+            ctx->filtering ? "enter insert  esc browse" : "jk move  / search  enter insert  esc close" :
+            ctx->filtering ? "enter insert  esc close" : "tab next  hjkl move  / filter  enter insert  esc close";
+        if (ctx->columns < 44) keys = "enter insert  esc close";
+        binit_text(text, sizeof text, keys, ctx->columns - 1);
+        move_cursor(ctx->row + ctx->list_rows + 2, 1);
+        fprintf(rl_outstream, "\033[2K\033[2m%s\033[0m", text);
+    }
     move_cursor(ctx->row, ctx->column);
     fflush(rl_outstream);
 }
@@ -668,6 +673,18 @@ static void replay_input(struct context *ctx, const char *prefix, size_t length)
     else free(macro);
 }
 
+static void reserve_panel(struct context *ctx)
+{
+    ctx->height = ctx->list_rows + 1 + keys_shown;
+    int scroll = ctx->row + ctx->height - ctx->rows;
+    if (scroll > 0) {
+        move_cursor(ctx->rows, 1);
+        for (int i = 0; i < scroll; ++i) fputc('\n', rl_outstream);
+        ctx->row -= scroll;
+    }
+    ctx->painted = true;
+}
+
 static int picker(struct context *ctx)
 {
     rl_point = rl_end;
@@ -699,14 +716,8 @@ static int picker(struct context *ctx)
     if (rows > (ctx->history ? 5 : 6)) rows = ctx->history ? 5 : 6;
     if (rows > ctx->rows / 3) rows = ctx->rows / 3;
     if (rows < 1) rows = 1;
-    ctx->height = rows + 2;
-    int scroll = ctx->row + ctx->height - ctx->rows;
-    if (scroll > 0) {
-        move_cursor(ctx->rows, 1);
-        for (int i = 0; i < scroll; ++i) fputc('\n', rl_outstream);
-        ctx->row -= scroll;
-    }
-    ctx->painted = true;
+    ctx->list_rows = rows;
+    reserve_panel(ctx);
     int choice = 0;
     while (ctx->history ? history_enabled : enabled) {
         paint_menu(ctx);
@@ -729,9 +740,14 @@ static int picker(struct context *ctx)
         else if (key == KEY_RIGHT || (!ctx->filtering && key == 'l')) binit_menu_grid_move(&ctx->menu, 1, 0, (size_t)ctx->cells);
         else if (key == KEY_HOME) ctx->menu.selected = 0;
         else if (key == KEY_END && ctx->menu.count) ctx->menu.selected = ctx->menu.count - 1;
-        else if (key == KEY_PAGE_UP) binit_menu_move(&ctx->menu, -(ptrdiff_t)(ctx->height - 2) * ctx->cells);
-        else if (key == KEY_PAGE_DOWN) binit_menu_move(&ctx->menu, (ptrdiff_t)(ctx->height - 2) * ctx->cells);
-        else if (!ctx->filtering && key == '/') ctx->filtering = true;
+        else if (key == KEY_PAGE_UP) binit_menu_move(&ctx->menu, -(ptrdiff_t)ctx->list_rows * ctx->cells);
+        else if (key == KEY_PAGE_DOWN) binit_menu_move(&ctx->menu, (ptrdiff_t)ctx->list_rows * ctx->cells);
+        else if (key == '?' && !(ctx->filtering && ctx->menu.query[0])) {
+            // While a query is typed, `?` is text to match; otherwise it shows or hides the keys.
+            clear_panel(ctx);
+            keys_shown = !keys_shown;
+            reserve_panel(ctx);
+        } else if (!ctx->filtering && key == '/') ctx->filtering = true;
         else if (ctx->filtering && (key == 127 || key == 8)) binit_menu_backspace(&ctx->menu);
         else if (ctx->filtering && key == 21) binit_menu_clear(&ctx->menu);
         else if (key >= 32 && key <= 255 && key != 127 && (ctx->filtering || !ctx->history)) {
@@ -828,7 +844,7 @@ static size_t history_panel(const char **items, const struct binit_layout *layou
 static void history_draw(const char **items, size_t count, int columns, int *row)
 {
     char text[4097];
-    binit_text(text, sizeof text, "History  Tab focus  Ctrl-R search", columns - 1);
+    binit_text(text, sizeof text, "history", columns - 1);
     fprintf(rl_outstream, "\r\n\033[2K\033[2m%s\033[0m", text);
     for (size_t i = 0; i < count; ++i) {
         binit_text(text, sizeof text, items[i], columns - 3);
@@ -1038,6 +1054,9 @@ static void capture(char **matches, int count, int width)
     (void)width;
     if (active && count > 1 && count <= BINIT_MENU_LIMIT) {
         active->captured = binit_menu_init(&active->menu, (const char *const *)(matches + 1), (size_t)count) == 0;
+        // The common prefix Readline computed names what is being completed.
+        snprintf(active->word, sizeof active->word, "%s", matches[0] ? label(matches[0]) : "");
+        for (size_t end = strlen(active->word); end && active->word[end - 1] == ' '; --end) active->word[end - 1] = 0;
         active->oversized = !active->captured;
     } else if (active && count > BINIT_MENU_LIMIT) {
         active->oversized = true;
@@ -1379,30 +1398,34 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
         WORD_LIST *feature = arguments->next;
         WORD_LIST *setting = feature ? feature->next : NULL;
         if (feature && !setting && strcmp(feature->word->word, "status") == 0) {
-            printf("Native editor: available\n");
-            printf("Completion menu: %s\n", enabled ? terminal_support < 0 ? "unavailable in this terminal" : "on" : "off");
-            printf("Suggestions: %s\n", suggestions_enabled ? "on" : "off");
-            printf("History: %s\n", history_enabled ? history_live ? "live" : "search" : "off");
+            // A table of state, as ps and git config print theirs: names and values, nothing about Binit itself.
+            const char *menu = enabled ? terminal_support < 0 ? "unavailable" : "on" : "off";
+            printf("%-14s%s\n%-14s%s\n%-14s%s\n", "menu", menu, "suggestions", suggestions_enabled ? "on" : "off",
+                   "history", history_enabled ? history_live ? "live" : "search" : "off");
 #ifdef BINIT_HIGHLIGHT
-            printf("Highlighting: %s\n", highlighting_enabled ? "on" : "off");
+            printf("%-14s%s\n", "highlighting", highlighting_enabled ? "on" : "off");
 #else
-            printf("Highlighting: unavailable\n");
+            printf("%-14s%s\n", "highlighting", "unavailable");
 #endif
             Keymap map = rl_get_keymap_by_name(rl_editing_mode == 1 ? "emacs-standard" : "vi-insert");
             if (map) {
+                char keys[256] = "";
                 rl_command_func_t *tab = bound_function(map, "\t");
-                printf("Tab: %s\n", tab == native_complete || tab == rl_complete || tab == rl_menu_complete || tab == rl_backward_menu_complete ?
-                       "complete" : tab == history_tab ? "history" : "custom binding");
+                strcat(keys, tab == native_complete || tab == rl_complete || tab == rl_menu_complete || tab == rl_backward_menu_complete ?
+                       "tab complete" : tab == history_tab ? "tab history" : "tab custom");
                 if (suggestions_enabled && bound_function(map, "\033[C") == accept_or_forward_char)
-                    printf("Right: accept suggestion\n");
+                    strcat(keys, ", right accept");
                 rl_command_func_t *forward = bound_function(map, "\006");
                 if (suggestions_enabled && (forward == accept_or_forward_char || forward == accept_or_self_insert))
-                    printf("Ctrl-F: accept suggestion\n");
+                    strcat(keys, ", ctrl-f accept");
                 if (history_enabled && bound_function(map, "\022") == binit_history_search)
-                    printf("Ctrl-R: history search\n");
+                    strcat(keys, ", ctrl-r history");
                 for (size_t i = 0; i < 2; ++i)
-                    if (word_keys[i].owned && word_keys[i].map == map && bound_function(map, "\b") == rl_backward_kill_word)
-                        printf("Ctrl-Backspace: delete word\n");
+                    if (word_keys[i].owned && word_keys[i].map == map && bound_function(map, "\b") == rl_backward_kill_word) {
+                        strcat(keys, ", ctrl-backspace word");
+                        break;
+                    }
+                printf("%-14s%s\n", "keys", keys);
             }
             return EXECUTION_SUCCESS;
         }
@@ -1445,7 +1468,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
                 return EXECUTION_SUCCESS;
             }
 #else
-            builtin_error("highlighting unavailable: rebuild with BINIT_SYNTAX_SOURCE");
+            builtin_error("highlighting: built without BINIT_SYNTAX_SOURCE");
             return EXECUTION_FAILURE;
 #endif
         }
@@ -1458,7 +1481,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
     if (strcmp(action, "poll-off") == 0) {remove_poll_hook(); return EXECUTION_SUCCESS;}
     if (strcmp(action, "off") == 0) {disable_menu(); return EXECUTION_SUCCESS;}
     if (strcmp(action, "status") != 0) return EX_USAGE;
-    printf("Completion menu: %s\n", enabled ? terminal_support < 0 ? "unavailable in this terminal" : "on" : "off");
+    printf("%-14s%s\n", "menu", enabled ? terminal_support < 0 ? "unavailable" : "on" : "off");
     return EXECUTION_SUCCESS;
 }
 
@@ -1497,7 +1520,7 @@ EXPORT void binit_complete_builtin_unload(char *name)
 
 static char *documentation[] = {
     "Control Binit's completion menu in the current shell.",
-    "Bash completion providers supply candidates; Enter inserts, Esc cancels.", NULL
+    "Bash completion providers supply candidates; enter inserts, esc closes.", NULL
 };
 EXPORT struct builtin binit_complete_struct = {
     "binit_complete", binit_complete_builtin, BUILTIN_ENABLED,

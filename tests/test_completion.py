@@ -1,3 +1,4 @@
+import re
 import codecs
 import importlib.util
 import os
@@ -77,7 +78,8 @@ complete -F __lazy lazy_cmd
 
     @property
     def panel(self):
-        return any("Esc cancel" in row or "Enter insert  Esc" in row for row in self.screen.display)
+        # The panel ends with its state line: position, then the dim `?` for keys.
+        return any(re.search(r"\d+/\d+   \?$", row.rstrip()) for row in self.screen.display)
 
     def pump(self, seconds=.08):
         deadline = time.monotonic() + seconds
@@ -139,7 +141,7 @@ class CompletionTests(unittest.TestCase):
     def test_debug_stdout_does_not_hide_the_native_builtin(self):
         with Session(framework=True, extra="set -T\ntrap 'printf \"TRACE:%s\\n\" \"$BASH_COMMAND\"' DEBUG\n") as session:
             session.send("binit completion\n")
-            session.wait(lambda: "Completion menu: on" in session.text)
+            session.wait(lambda: "menu          on" in session.text)
             session.open()
 
     def test_missing_cursor_reply_preserves_input_received_during_probe(self):
@@ -167,13 +169,13 @@ class CompletionTests(unittest.TestCase):
     def test_verified_generation_enables_menu_and_current_shell_controls(self):
         with Session(framework=True) as session:
             session.send("binit completion\n")
-            session.wait(lambda: "Completion menu: on" in session.text)
+            session.wait(lambda: "menu          on" in session.text)
             session.open()
             session.send(b"\r")
             session.wait(lambda: not session.panel)
             self.assertEqual(shlex.split(session.capture()[1])[-1], "alpha 00.txt")
             session.send(b"\x01\x0bbinit completion off\n")
-            session.wait(lambda: "Completion menu: off" in session.text)
+            session.wait(lambda: "menu          off" in session.text)
             session.send(b'printf "%s" al\t')
             session.pump()
             self.assertFalse(session.panel)
@@ -181,7 +183,7 @@ class CompletionTests(unittest.TestCase):
     def test_disabled_startup_can_enable_the_menu_in_the_current_shell(self):
         with Session(framework=True, menu=False) as session:
             session.send("binit completion on\n")
-            session.wait(lambda: "Completion menu: on" in session.text)
+            session.wait(lambda: "menu          on" in session.text)
             session.open()
 
     def test_recovery_skips_a_corrupted_native_generation(self):
@@ -205,9 +207,9 @@ class CompletionTests(unittest.TestCase):
             history = len(session.screen.history.top)
             for i in range(1, 30):
                 session.send(b"\t")
-                session.wait(lambda: f"Completions {i + 1}/40" in session.text)
+                session.wait(lambda: f" {i + 1}/40   ?" in session.text)
             self.assertEqual(len(session.screen.history.top), history)
-            self.assertEqual(session.text.count("Completions"), 1)
+            self.assertEqual(sum(bool(re.search(r"\d+/\d+   \?$", row.rstrip())) for row in session.screen.display), 1)
             session.send(b"\x1b")
             session.wait(lambda: not session.panel)
             self.assertEqual(session.capture()[1], 'printf "%s" al')
@@ -219,7 +221,7 @@ class CompletionTests(unittest.TestCase):
                                 (b"\x1b[A", 1), (b"l", 2), (b"h", 1), (b"j", 5),
                                 (b"k", 1), (b"\x1b[Z", 40)):
                 session.send(keys)
-                session.wait(lambda: f"Completions {index}/40" in session.text)
+                session.wait(lambda: f" {index}/40   ?" in session.text)
 
     def test_filtering_and_empty_results(self):
         with Session() as session:
@@ -352,7 +354,7 @@ class CompletionTests(unittest.TestCase):
             session.send(b"\x1b")
             time.sleep(.1)
             session.send(b"[C")
-            session.wait(lambda: "Completions 2/40" in session.text)
+            session.wait(lambda: " 2/40   ?" in session.text)
             # A bare Esc holds the menu for the configured wait, then closes it.
             session.send(b"\x1b")
             session.pump(.15)

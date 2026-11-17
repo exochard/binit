@@ -5,19 +5,22 @@ suggestions in the current shell. `off` removes the panel and restores the
 bindings it still owns. The history plugin calls these commands when loaded.
 
 While typing, only the inline suggestion is shown. Tab keeps its completion
-binding. Ctrl-R opens history in **SEARCH** mode, including from an empty
-line. Matching ignores ASCII letter case, removes exact duplicates, and
+binding. Ctrl-R opens the history panel with a search query, including from an
+empty line. Matching ignores ASCII letter case, removes exact duplicates, and
 searches at most the 1,000 newest in-memory Bash history entries. Suggestion
 keys are described in [editor integration](editor.md).
 
-In SEARCH, letters including `j` and `k` filter entries. Enter inserts the
-selected command without executing it. Esc changes to **NAVIGATE** mode:
-use `j` and `k` or the arrow keys to choose an entry, and `/` to search again.
-Esc from NAVIGATE closes the panel without changing the command.
+While searching, the panel's last line shows the query and the position, as in
+`history  al▏  1/37   ?`. Letters including `j` and `k` extend the query. Enter
+inserts the selected command without executing it. Esc keeps the matches and
+switches to browsing, shown as `history  1/37   ?`: `j` and `k` or the arrow
+keys choose an entry, and `/` searches again. Esc while browsing closes the
+panel without changing the command. `?` shows the keys for the current state
+on a second line; `?` again hides it.
 
-Custom Tab, Enter, and Ctrl-R bindings take precedence. `binit editor` reports
-whether history, suggestions and highlighting are enabled, alongside native
-module availability and completion status.
+Custom Tab, Enter, and Ctrl-R bindings take precedence. `binit editor` prints
+one row each for the menu, suggestions, history, highlighting and the keys
+Binit binds.
 
 The previous live panel remains available explicitly with
 `binit_complete editor history live`, or `BINIT_HISTORY_MODE=live` before

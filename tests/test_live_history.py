@@ -1,3 +1,4 @@
+import re
 import unittest
 import fcntl
 import os
@@ -16,13 +17,13 @@ class LiveHistoryTests(unittest.TestCase):
         for mode in ('vi', 'emacs'):
             with self.subTest(mode=mode), Session(extra=extra, mode=mode, framework=True) as session:
                 session.send('demo_cmd va')
-                session.wait(lambda: 'History  Tab focus' in session.text)
+                session.wait(lambda: any(row.rstrip() == 'history' for row in session.screen.display))
                 session.send(b'\t')
-                session.wait(lambda: 'History NAVIGATE' in session.text)
+                session.wait(lambda: re.search(r'history  \d+/\d+', session.text))
                 session.send(b'\x1b')
                 session.pump(.1)
                 session.send(b'\t')
-                session.wait(lambda: 'Completions' in session.text)
+                session.wait(lambda: session.panel)
                 session.send(b'\x1b')
                 session.pump(.1)
                 self.assertEqual(session.capture()[1], 'demo_cmd va')
@@ -30,9 +31,9 @@ class LiveHistoryTests(unittest.TestCase):
     def test_cancel_keeps_a_single_prompt_on_the_input_row(self):
         with Session(extra="history -s 'echo git-status'\nbinit_complete editor history on\n") as session:
             session.send('echo git')
-            session.wait(lambda: 'History  Tab focus' in session.text)
+            session.wait(lambda: any(row.rstrip() == 'history' for row in session.screen.display))
             session.send(b'\t')
-            session.wait(lambda: 'History NAVIGATE' in session.text)
+            session.wait(lambda: re.search(r'history  \d+/\d+', session.text))
             session.send(b'\x1b')
             session.pump(.1)
             row = session.screen.display[session.screen.cursor.y]
@@ -47,7 +48,7 @@ class LiveHistoryTests(unittest.TestCase):
             session.send('echo git')
             session.wait(lambda: 'echo git-status' in session.text and 'echo git-jump' in session.text)
             session.send(b'\t')
-            session.wait(lambda: 'History' in session.text)
+            session.wait(lambda: 'history  1/2' in session.text)
             session.send('j\n')
             self.assertEqual(session.capture()[1], 'echo git-jump')
 
@@ -65,9 +66,15 @@ class LiveHistoryTests(unittest.TestCase):
             session.send('echo uni')
             session.wait(lambda: 'echo unique-jk' in session.text)
             session.send(b'\t/jk')
-            session.wait(lambda: '/jk' in session.text)
+            session.wait(lambda: 'history  jk▏' in session.text)
             session.send(b'\x1b')
-            session.wait(lambda: 'History NAVIGATE 1/1' in session.text)
+            # Past the Esc wait, so j is not read as Alt-j.
+            session.pump(.1)
+            # Browsing hides the query; j now moves instead of extending it.
+            session.send('j')
+            session.pump(.2)
+            self.assertIn('history  1/1', session.text)
+            self.assertNotIn('jkj▏', session.text)
             session.send(b'\x1b')
             session.pump(.2)
             self.assertEqual(session.capture()[1], 'echo uni')
@@ -76,7 +83,7 @@ class LiveHistoryTests(unittest.TestCase):
         extra = "history -s 'echo unique-jk'\nbinit_complete editor history on\n"
         with Session(extra=extra) as session:
             session.send(b'\x12')
-            session.wait(lambda: 'Type to search' in session.text)
+            session.wait(lambda: '▏' in session.text)
             session.send(b'unique-jk\n')
             self.assertEqual(session.capture()[1], 'echo unique-jk')
 
@@ -84,7 +91,7 @@ class LiveHistoryTests(unittest.TestCase):
         extra = "history -s 'echo unique-jk'\nbinit_complete editor history on\n"
         with Session(extra=extra, mode='vi') as session:
             session.send(b'\x12')
-            session.wait(lambda: 'History SEARCH' in session.text)
+            session.wait(lambda: '▏' in session.text)
             session.send(b'unique-jk\n')
             self.assertEqual(session.capture()[1], 'echo unique-jk')
 
@@ -105,7 +112,7 @@ class LiveHistoryTests(unittest.TestCase):
             session.send('demo_cmd va')
             session.wait(lambda: 'demo_cmd value one' in session.text)
             session.send(b'\t')
-            session.wait(lambda: 'History NAVIGATE' in session.text)
+            session.wait(lambda: re.search(r'history  \d+/\d+', session.text))
             session.send(b'\x1b')
             session.pump(.2)
             session.send(b'\t')
@@ -138,7 +145,7 @@ class LiveHistoryTests(unittest.TestCase):
             session.send('echo git')
             session.wait(lambda: 'echo git-status' in session.text)
             session.send(b'\t')
-            session.wait(lambda: 'History NAVIGATE 1/1' in session.text)
+            session.wait(lambda: 'history  1/1' in session.text)
             session.send(b'\x1b')
             session.pump(.2)
             self.assertEqual(session.capture()[1], 'echo git')
@@ -149,7 +156,7 @@ class LiveHistoryTests(unittest.TestCase):
             session.send('echo git')
             session.wait(lambda: 'echo git-status' in session.text)
             session.send(b'\x02\t')
-            session.wait(lambda: 'History NAVIGATE' in session.text)
+            session.wait(lambda: re.search(r'history  \d+/\d+', session.text))
             session.send(b'\x1b')
             session.pump(.2)
             self.assertEqual(session.capture(), (7, 'echo git'))
@@ -169,7 +176,7 @@ class LiveHistoryTests(unittest.TestCase):
             session.send('echo git')
             session.wait(lambda: 'echo git-status' in session.text)
             session.send(b'\t')
-            session.wait(lambda: 'History NAVIGATE 1/1' in session.text)
+            session.wait(lambda: 'history  1/1' in session.text)
             fcntl.ioctl(session.terminal.fd, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
             os.kill(session.terminal.pid, signal.SIGWINCH)
             session.pump(.3)
@@ -309,7 +316,7 @@ def typed(session):
 
 
 def headers(session):
-    return [y for y, row in enumerate(session.screen.display) if 'History  Tab focus' in row]
+    return [y for y, row in enumerate(session.screen.display) if row.rstrip() == 'history']
 
 
 @patch.dict(os.environ, BINIT_HISTORY_MODE='live')
@@ -410,4 +417,4 @@ class LivePanelLayoutTests(unittest.TestCase):
 
 
 def headers_prefix(session):
-    return [y for y, row in enumerate(session.screen.display) if row.startswith('History')]
+    return [y for y, row in enumerate(session.screen.display) if row.startswith('history')]

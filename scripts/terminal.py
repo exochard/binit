@@ -219,8 +219,8 @@ def smoke(directory):
     (directory / 'Cargo.toml').write_text('[workspace]\n')
     terminal = Terminal(rcfile, directory, state=state)
     try:
-        assert 'Added: workspace' in terminal.command(f"binit add '{source}'")
-        assert 'Entry SHA256:' in terminal.command('binit inspect workspace')
+        assert 'added workspace in ' in terminal.command(f"binit add '{source}'")
+        assert 'entry sha256  ' in terminal.command('binit inspect workspace')
     finally:
         terminal.close()
     terminal = Terminal(rcfile, directory, state=state)
@@ -228,19 +228,19 @@ def smoke(directory):
         assert '[Rust]' in terminal.command(':')
         (source / 'plugin.bash').write_text("workspace_directory() { binit_segment workspace Updated; }\nbinit_on directory workspace_directory\n")
         assert '[Rust]' in terminal.command(':')
-        assert 'Updated: workspace' in terminal.command('binit update workspace')
+        assert 'updated workspace in ' in terminal.command('binit update workspace')
     finally:
         terminal.close()
     terminal = Terminal(rcfile, directory, state=state)
     try:
         assert '[Updated]' in terminal.command(':')
-        assert 'Disabled: workspace' in terminal.command('binit disable workspace')
+        assert 'disabled workspace in ' in terminal.command('binit disable workspace')
     finally:
         terminal.close()
     terminal = Terminal(rcfile, directory, state=state)
     try:
         assert '[Updated]' not in terminal.command(':')
-        assert 'Enabled: workspace' in terminal.command('binit enable workspace')
+        assert 'enabled workspace in ' in terminal.command('binit enable workspace')
     finally:
         terminal.close()
     # Exercise the actual demo entrypoint with isolated state; it must not reset it.
@@ -248,7 +248,7 @@ def smoke(directory):
     try:
         assert '[Updated]' in terminal.command(':')
         assert 'workspace' in terminal.command('binit plugins')
-        assert 'Removed: workspace' in terminal.command('binit remove workspace')
+        assert 'removed workspace in ' in terminal.command('binit remove workspace')
     finally:
         terminal.close()
     terminal = Terminal(rcfile, directory, state=state)

@@ -291,7 +291,7 @@ def history_query_acknowledged(shell, subject, needle):
             if re.search(r'^\s*\(\d+:.*\)\s*`' + re.escape(needle) + r"'\s*$", row):
                 return True
         elif subject in NATIVE_SUBJECTS:
-            if f'History SEARCH /{needle}' in row:
+            if re.match(r'history  ' + re.escape(needle) + '\u258f' + r'  \d+/\d+', row):
                 return True
         elif re.search(r'\((?:failed )?reverse-i-search\)`' + re.escape(needle) + r"':", row):
             return True

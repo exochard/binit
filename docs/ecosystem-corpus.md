@@ -19,6 +19,13 @@ upstream versions. Archive hashes and exact extracted-file inventories are
 checked before execution and after measurement. ble.sh's build outputs are
 declared derivatives, hashed separately and checked for changes.
 
+On 2026-11-17 the archive hashes were re-pinned. GitHub builds archives on
+request and the new downloads differ in container bytes, while every
+extracted file, executable bit and link target matches the tree kept from the
+earlier runs. Receipts from before that date name the previous hashes; the
+[re-pin receipt](../benchmarks/results/ecosystem-source-repin.json) records
+both and the check.
+
 ## Framework effects
 
 The common fixture defines one function and one alias per plugin, appends its

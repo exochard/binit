@@ -48,7 +48,7 @@ static bool simple_name(const char *name, bool function)
 
 static bool tracked(const char *name)
 {
-    return simple_name(name, true) && strncmp(name, "__binit_", 8) != 0 &&
+    return strncmp(name, "__binit_", 8) != 0 && simple_name(name, true) &&
         strcmp(name, "binit") != 0 && strcmp(name, "binit_on") != 0 && strcmp(name, "binit_segment") != 0;
 }
 
@@ -61,15 +61,23 @@ static bool valid_id(const char *id)
     return true;
 }
 
-static bool function_owned(HASH_TABLE *owners, const char *name)
+static int compare_name_keys(const void *key, const void *element)
 {
+    return strcmp((const char *)key, *(char *const *)element);
+}
+
+/* Marks each of the sorted names that an owner key ("id:name", or a bare name) already holds. */
+static void mark_owned(HASH_TABLE *owners, char **names, size_t count, bool *owned)
+{
+    memset(owned, 0, count * sizeof *owned);
+    if (!count) return;
     for (int bucket = 0; bucket < owners->nbuckets; ++bucket) {
         for (BUCKET_CONTENTS *entry = owners->bucket_array[bucket]; entry; entry = entry->next) {
             const char *suffix = strchr(entry->key, ':');
-            if (strcmp(suffix ? suffix + 1 : entry->key, name) == 0) return true;
+            char **found = bsearch(suffix ? suffix + 1 : entry->key, names, count, sizeof *names, compare_name_keys);
+            if (found) owned[found - names] = true;
         }
     }
-    return false;
 }
 
 /* Raw lookup is important: even rejecting a dynamic output must not call it. */
@@ -94,6 +102,64 @@ static HASH_TABLE *before_names(const char *before_name)
     return assoc_cell(before);
 }
 
+/* A set of names in one text arena with open addressing. A snapshot holds a few hundred names and is built
+   once per plugin load, so avoiding an allocation and a bucket per name is most of its cost. */
+struct name_set {
+    char *text;
+    size_t text_used, text_size;
+    size_t *slots; /* offset + 1 into text; 0 is empty */
+    size_t mask;
+};
+
+static size_t name_hash(const char *name)
+{
+    size_t hash = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)name; *p; ++p) hash = (hash ^ *p) * 16777619u;
+    return hash;
+}
+
+static void set_init(struct name_set *set, int expected)
+{
+    size_t capacity = 16;
+    while (capacity < (size_t)(expected > 0 ? expected : 0) * 2) capacity *= 2;
+    set->mask = capacity - 1;
+    set->slots = xmalloc(capacity * sizeof *set->slots);
+    memset(set->slots, 0, capacity * sizeof *set->slots);
+    set->text_size = 1024;
+    set->text = xmalloc(set->text_size);
+    set->text_used = 0;
+}
+
+static void set_free(struct name_set *set)
+{
+    free(set->slots);
+    free(set->text);
+    set->slots = NULL;
+    set->text = NULL;
+}
+
+static bool set_has(const struct name_set *set, const char *name)
+{
+    for (size_t i = name_hash(name) & set->mask; set->slots[i]; i = (i + 1) & set->mask)
+        if (strcmp(set->text + set->slots[i] - 1, name) == 0) return true;
+    return false;
+}
+
+/* Names come from one Bash table, so they are distinct and the set never needs to grow past its sizing. */
+static void set_add(struct name_set *set, const char *name)
+{
+    size_t length = strlen(name) + 1;
+    if (set->text_used + length > set->text_size) {
+        while (set->text_used + length > set->text_size) set->text_size *= 2;
+        set->text = xrealloc(set->text, set->text_size);
+    }
+    memcpy(set->text + set->text_used, name, length);
+    size_t i = name_hash(name) & set->mask;
+    while (set->slots[i]) i = (i + 1) & set->mask;
+    set->slots[i] = set->text_used + 1;
+    set->text_used += length;
+}
+
 static int compare_names(const void *left, const void *right)
 {
     return strcmp(*(char *const *)left, *(char *const *)right);
@@ -101,14 +167,16 @@ static int compare_names(const void *left, const void *right)
 
 /* Names in table that previous lacks, sorted as all_visible_functions and all_aliases order them.
    Checking previous first keeps the walk cheap: almost every name is already there. */
-static char **new_names(HASH_TABLE *table, HASH_TABLE *previous, bool functions, size_t *count)
+static char **new_names(HASH_TABLE *table, HASH_TABLE *previous, const struct name_set *snapshot, bool functions, size_t *count)
 {
     *count = 0;
     if (!table || !table->nentries) return NULL;
     char **names = xmalloc((size_t)table->nentries * sizeof *names);
     for (int bucket = 0; bucket < table->nbuckets; ++bucket)
         for (BUCKET_CONTENTS *entry = table->bucket_array[bucket]; entry; entry = entry->next) {
-            if (!entry->data || assoc_reference(previous, entry->key) != NULL) continue;
+            /* Binit's own functions are never tracked; skipping them first avoids half the lookups. */
+            if (!entry->data || strncmp(entry->key, "__binit_", 8) == 0 ||
+                (snapshot ? set_has(snapshot, entry->key) : assoc_reference(previous, entry->key) != NULL)) continue;
             const char *name = functions ? ((SHELL_VAR *)entry->data)->name : ((alias_t *)entry->data)->name;
             if (functions && invisible_p((SHELL_VAR *)entry->data)) continue;
             if (tracked(name)) names[(*count)++] = (char *)name;
@@ -117,15 +185,17 @@ static char **new_names(HASH_TABLE *table, HASH_TABLE *previous, bool functions,
     return names;
 }
 
-static void insert_functions(const char *id, HASH_TABLE *previous, SHELL_VAR *target)
+static void insert_functions(const char *id, HASH_TABLE *previous, const struct name_set *snapshot, SHELL_VAR *target)
 {
     HASH_TABLE *owners = assoc_cell(target);
     size_t count;
-    char **names = new_names(shell_functions, previous, true, &count);
+    char **names = new_names(shell_functions, previous, snapshot, true, &count);
+    bool *owned = xmalloc((count ? count : 1) * sizeof *owned);
+    mark_owned(owners, names, count, owned);
     const size_t id_length = strlen(id);
     for (size_t i = 0; i < count; ++i) {
         const char *name = names[i];
-        if (function_owned(owners, name)) continue;
+        if (owned[i]) continue;
         SHELL_VAR *function = find_function(name);
         if (!function) continue;
         char *definition = named_function_string((char *)name, function_cell(function), FUNC_MULTILINE | FUNC_EXTERNAL);
@@ -136,6 +206,7 @@ static void insert_functions(const char *id, HASH_TABLE *previous, SHELL_VAR *ta
         assoc_insert(owners, key, definition);
         VUNSETATTR(target, att_invisible);
     }
+    free(owned);
     free(names);
 }
 
@@ -149,7 +220,7 @@ static int record_functions(WORD_LIST *args)
     if (!valid_id(id) || !target || !previous || previous == assoc_cell(target))
         return EXECUTION_FAILURE;
     /* All validation precedes insertion; existing ownership is never removed. */
-    insert_functions(id, previous, target);
+    insert_functions(id, previous, NULL, target);
     return EXECUTION_SUCCESS;
 }
 
@@ -185,16 +256,18 @@ static int check_functions(WORD_LIST *args)
 
 /* An owned alias keeps its value. Unload compares it with BASH_ALIASES, so later aliases from other
    plugins do not change the ownership signature. */
-static void insert_aliases(const char *id, HASH_TABLE *previous, SHELL_VAR *target)
+static void insert_aliases(const char *id, HASH_TABLE *previous, const struct name_set *snapshot, SHELL_VAR *target)
 {
     HASH_TABLE *owners = assoc_cell(target);
     size_t count;
-    char **names = new_names(aliases, previous, false, &count);
+    char **names = new_names(aliases, previous, snapshot, false, &count);
+    bool *owned = xmalloc((count ? count : 1) * sizeof *owned);
+    mark_owned(owners, names, count, owned);
     const size_t id_length = strlen(id);
     for (size_t i = 0; i < count; ++i) {
         const char *name = names[i];
         alias_t *value = find_alias((char *)name);
-        if (!value || function_owned(owners, name)) continue;
+        if (!value || owned[i]) continue;
         size_t key_size = id_length + strlen(name) + 2;
         char *key = xmalloc(key_size);
         snprintf(key, key_size, "%s:%s", id, name);
@@ -202,6 +275,7 @@ static void insert_aliases(const char *id, HASH_TABLE *previous, SHELL_VAR *targ
         assoc_insert(owners, key, value->value ? value->value : "");
         VUNSETATTR(target, att_invisible);
     }
+    free(owned);
     free(names);
 }
 
@@ -214,34 +288,23 @@ static int record_aliases(WORD_LIST *args)
     HASH_TABLE *previous = before_names(args->next->word->word);
     if (!valid_id(id) || !target || !previous || previous == assoc_cell(target))
         return EXECUTION_FAILURE;
-    insert_aliases(id, previous, target);
+    insert_aliases(id, previous, NULL, target);
     return EXECUTION_SUCCESS;
 }
 
 /* Entry snapshots of tracked function and alias names for plugin loads. The stack keeps nested loads apart;
    a token is the stack depth after the push, and release drops that entry and anything left above it. */
 #define SNAPSHOT_LIMIT 64
-static HASH_TABLE *snapshot_functions[SNAPSHOT_LIMIT], *snapshot_aliases[SNAPSHOT_LIMIT];
+static struct name_set snapshot_functions[SNAPSHOT_LIMIT], snapshot_aliases[SNAPSHOT_LIMIT];
 static int snapshot_depth;
-
-/* Entries share one static marker; hash_flush would otherwise free each item's data. */
-static void keep_marker(PTR_T data) {(void)data;}
 
 static void snapshot_drop(int depth)
 {
     while (snapshot_depth > depth) {
         --snapshot_depth;
-        hash_flush(snapshot_functions[snapshot_depth], keep_marker);
-        hash_dispose(snapshot_functions[snapshot_depth]);
-        hash_flush(snapshot_aliases[snapshot_depth], keep_marker);
-        hash_dispose(snapshot_aliases[snapshot_depth]);
+        set_free(&snapshot_functions[snapshot_depth]);
+        set_free(&snapshot_aliases[snapshot_depth]);
     }
-}
-
-static void snapshot_add(HASH_TABLE *table, const char *name)
-{
-    BUCKET_CONTENTS *item = hash_insert(savestring(name), table, HASH_NOSRCH);
-    item->data = (PTR_T)"1";
 }
 
 static bool scalar_output(const char *output)
@@ -259,19 +322,19 @@ static int snapshot_mark(WORD_LIST *args)
     if (!args || args->next) return EX_USAGE;
     /* Outside a plain context the caller uses the shell snapshot that trap code can observe. */
     if (!plain_context() || !scalar_output(args->word->word) || snapshot_depth >= SNAPSHOT_LIMIT) return EXECUTION_FAILURE;
-    HASH_TABLE *functions = hash_create(128), *names = hash_create(64);
+    struct name_set *functions = &snapshot_functions[snapshot_depth], *names = &snapshot_aliases[snapshot_depth];
+    set_init(functions, shell_functions ? shell_functions->nentries : 0);
+    set_init(names, aliases ? aliases->nentries : 0);
     for (int bucket = 0; shell_functions && bucket < shell_functions->nbuckets; ++bucket)
         for (BUCKET_CONTENTS *entry = shell_functions->bucket_array[bucket]; entry; entry = entry->next) {
             SHELL_VAR *function = (SHELL_VAR *)entry->data;
-            if (function && !invisible_p(function) && tracked(function->name)) snapshot_add(functions, function->name);
+            if (function && !invisible_p(function) && tracked(function->name)) set_add(functions, function->name);
         }
     for (int bucket = 0; aliases && bucket < aliases->nbuckets; ++bucket)
         for (BUCKET_CONTENTS *entry = aliases->bucket_array[bucket]; entry; entry = entry->next) {
             alias_t *value = (alias_t *)entry->data;
-            if (value && tracked(value->name)) snapshot_add(names, value->name);
+            if (value && tracked(value->name)) set_add(names, value->name);
         }
-    snapshot_functions[snapshot_depth] = functions;
-    snapshot_aliases[snapshot_depth] = names;
     ++snapshot_depth;
     char token[16];
     snprintf(token, sizeof token, "%d", snapshot_depth);
@@ -298,8 +361,8 @@ static int snapshot_record(WORD_LIST *args)
     SHELL_VAR *names = owner_array(args->next->next->next->word->word);
     if (!token || !valid_id(id) || !functions || !names || functions == names || !plain_context())
         return EXECUTION_FAILURE;
-    insert_functions(id, snapshot_functions[token - 1], functions);
-    insert_aliases(id, snapshot_aliases[token - 1], names);
+    insert_functions(id, NULL, &snapshot_functions[token - 1], functions);
+    insert_aliases(id, NULL, &snapshot_aliases[token - 1], names);
     snapshot_drop(token - 1);
     return EXECUTION_SUCCESS;
 }
@@ -312,11 +375,10 @@ static int snapshot_names(WORD_LIST *args)
     const char *kind = args->next->word->word;
     SHELL_VAR *target = owner_array(args->next->next->word->word);
     if (!token || !target || (strcmp(kind, "function") != 0 && strcmp(kind, "alias") != 0)) return EXECUTION_FAILURE;
-    HASH_TABLE *source = strcmp(kind, "function") == 0 ? snapshot_functions[token - 1] : snapshot_aliases[token - 1];
+    const struct name_set *source = strcmp(kind, "function") == 0 ? &snapshot_functions[token - 1] : &snapshot_aliases[token - 1];
     assoc_flush(assoc_cell(target));
-    for (int bucket = 0; bucket < source->nbuckets; ++bucket)
-        for (BUCKET_CONTENTS *entry = source->bucket_array[bucket]; entry; entry = entry->next)
-            assoc_insert(assoc_cell(target), savestring(entry->key), "1");
+    for (size_t offset = 0; offset < source->text_used; offset += strlen(source->text + offset) + 1)
+        assoc_insert(assoc_cell(target), savestring(source->text + offset), "1");
     return EXECUTION_SUCCESS;
 }
 

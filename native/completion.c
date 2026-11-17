@@ -1242,9 +1242,12 @@ static void run_wait_dispatch(const char *command, bool always_redraw)
     add_unwind_protect(restore_readline_signals, NULL);
 #ifdef SEVAL_NOTIFY
     int flags = SEVAL_NOTIFY | SEVAL_NOHIST;
-#else
+#elif defined SEVAL_NOOPTIMIZE
     /* Bash 5.2 uses this combination for Readline's bind -x callbacks. */
     int flags = SEVAL_NONINT | SEVAL_NOHIST | SEVAL_NOOPTIMIZE;
+#else
+    /* Early Bash 5.2 releases predate SEVAL_NOOPTIMIZE; their bind -x callbacks run without it. */
+    int flags = SEVAL_NONINT | SEVAL_NOHIST;
 #endif
     parse_and_execute(savestring(command), "binit_wait", flags);
     rl_set_signals();

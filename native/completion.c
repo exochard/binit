@@ -1257,8 +1257,27 @@ static void remove_wait_hook(void)
     previous_pre_input = NULL;
 }
 
+/* Readline 8.3 before its patch 1 (still the copy bundled with Bash 5.3) reports "nothing to read" when
+ * select finds input while an event hook is installed, so the hook runs forever and typed keys are never
+ * read. rl_read_key checks its own buffer before each hook call, so moving ready input there unblocks it.
+ * A fixed Readline calls the hook only when no input is ready, and this finds nothing. */
+static void pump_ready_input(void)
+{
+    if (rl_readline_version != 0x0803 || !rl_instream) return;
+    int saved_errno = errno;
+    struct pollfd fd = {.fd = fileno(rl_instream), .events = POLLIN};
+    unsigned char byte;
+    if (poll(&fd, 1, 0) > 0) {
+        ssize_t count = read(fd.fd, &byte, 1);
+        if (count == 1) rl_stuff_char(byte);
+        else if (count == 0) rl_stuff_char(EOF);
+    }
+    errno = saved_errno;
+}
+
 static int poll_hook(void)
 {
+    pump_ready_input();
     if (poll_running) return 0;
     poll_running = true;
     if (previous_event_hook && previous_event_hook != poll_hook) previous_event_hook();

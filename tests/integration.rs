@@ -359,9 +359,6 @@ fn init_stamp_skips_rehashing_only_while_metadata_is_unchanged() {
     let generation = f.generation();
     let id = generation.file_name().unwrap().to_str().unwrap().to_owned();
     let stamp = generation.with_file_name(format!("{id}.verified"));
-    // A generation that changed within the last two seconds is verified but not stamped.
-    success(f.cli(&["init"]));
-    assert!(!stamp.exists());
     std::thread::sleep(std::time::Duration::from_millis(2200));
     success(f.cli(&["init"]));
     assert!(stamp.exists());
@@ -376,6 +373,35 @@ fn init_stamp_skips_rehashing_only_while_metadata_is_unchanged() {
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(modified))
         .unwrap();
+    failure(f.cli(&["init"]), "content changed");
+    // The failed check removed the stamp, so the next start verifies in full again.
+    assert!(!stamp.exists());
+    failure(f.cli(&["init"]), "content changed");
+}
+
+#[test]
+fn init_stamp_must_name_the_lock_and_the_generation_directory() {
+    let f = Fixture::new();
+    f.plugin("sample", "load='startup'", "BINIT_SAMPLE=original\n");
+    success(f.prepare(&["sample"]));
+    let generation = f.generation();
+    let id = generation.file_name().unwrap().to_str().unwrap().to_owned();
+    let stamp = generation.with_file_name(format!("{id}.verified"));
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    success(f.cli(&["init"]));
+    // Without the lock and directory lines, the remaining lines all match, yet the stamp is refused.
+    let text = fs::read_to_string(&stamp).unwrap();
+    let kept: Vec<_> = text
+        .lines()
+        .filter(|line| {
+            !line.ends_with(" lock.toml")
+                && !line.ends_with(" .")
+                && !line.ends_with(" plugins/sample/plugin.bash")
+        })
+        .collect();
+    fs::write(&stamp, kept.join("\n") + "\n").unwrap();
+    let plugin = generation.join("plugins/sample/plugin.bash");
+    fs::write(&plugin, "BINIT_SAMPLE=tampered\n").unwrap();
     failure(f.cli(&["init"]), "content changed");
 }
 

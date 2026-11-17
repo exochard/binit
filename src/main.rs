@@ -691,7 +691,17 @@ fn pointer(state: &Path, name: &str) -> Result<String> {
     }
     Ok(value)
 }
+/// Full verification. A failure also drops the generation's init stamp, so `binit init` cannot keep
+/// skipping checks that any other command has seen fail.
 fn verify_generation(state: &Path, id: &str) -> Result<Lock> {
+    let result = verify_generation_checks(state, id);
+    if result.is_err() && valid_digest(id) {
+        init_stamp::forget(state, id);
+    }
+    result
+}
+
+fn verify_generation_checks(state: &Path, id: &str) -> Result<Lock> {
     if !valid_digest(id) {
         return Err("invalid generation".into());
     }
@@ -1005,9 +1015,10 @@ fn run() -> Result<()> {
             private_dir(&state)?;
             private_dir(&state.join("generations"))?;
             if !valid_digest(&id) || !init_stamp::unchanged(&state, &id) {
+                let started = init_stamp::now();
                 let lock = verify_generation(&state, &id)?;
                 // The stamp only saves time; a state directory it cannot be written to still starts.
-                let _ = init_stamp::record(&state, &id, lock.files.keys());
+                let _ = init_stamp::record(&state, &id, lock.files.keys(), started);
             }
             let path = fs::canonicalize(state.join("generations").join(id).join("init.bash"))?;
             println!(

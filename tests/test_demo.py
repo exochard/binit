@@ -69,10 +69,12 @@ class DemoEntry(unittest.TestCase):
             # Bash ends the prompt with # for root, as in CI containers.
             prompt_end = b'# ' if os.geteuid() == 0 else b'$ '
             until(prompt_end)
-            # The demo opens on the prompt alone: no banner, status list or key guide before it.
+            # The demo opens on the prompt alone: no banner, status list or key guide before it. Without
+            # the native module, its one stderr line says the editor falls back to Readline.
             before = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Z0-9]|\x1b[=>]', '',
                             data[:data.index(prompt_end)].decode(errors='replace')).replace('\r', '')
-            self.assertEqual([line for line in before.split('\n')[:-1] if line.strip()], [],
+            fallback = ['binit: native editor unavailable, using Readline'] if os.environ.get('BINIT_NATIVE') == '0' else []
+            self.assertEqual([line for line in before.split('\n')[:-1] if line.strip()], fallback,
                              'text printed before the first prompt')
             os.write(descriptor, b'binit profile; [[ -o vi ]] && printf "\\036VI\\036"; bind -v; printf "\\036DONE\\036"\n')
             until(b'\x1eDONE\x1e')

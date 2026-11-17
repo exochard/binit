@@ -948,6 +948,7 @@ fn schema_one_generations_migrate_without_losing_plugins() {
     for file in [
         "init.bash",
         "runtime.bash",
+        "runtime-more.bash",
         "plugins/custom/plugin.toml",
         "plugins/custom/plugin.bash",
     ] {

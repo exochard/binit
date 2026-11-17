@@ -15,6 +15,7 @@ mod engine;
 mod extensions;
 mod git;
 mod hooks;
+mod lazy_runtime;
 mod manager;
 mod package;
 mod process;
@@ -628,10 +629,9 @@ fn install_generation(
     }
     init.push_str("__binit_activate_shell\n");
     packages.insert("init.bash".into(), init.into_bytes());
-    packages.insert(
-        "runtime.bash".into(),
-        include_bytes!("../runtime/core.bash").to_vec(),
-    );
+    let (runtime, runtime_more) = lazy_runtime::split(include_str!("../runtime/core.bash"))?;
+    packages.insert("runtime.bash".into(), runtime.into_bytes());
+    packages.insert("runtime-more.bash".into(), runtime_more.into_bytes());
     #[cfg(feature = "completion-menu")]
     packages.insert(
         "completion.so".into(),

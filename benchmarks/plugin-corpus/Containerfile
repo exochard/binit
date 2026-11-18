@@ -1,0 +1,24 @@
+# Pinned image for the cross-framework plugin corpus (benchmarks/plugin-corpus.json).
+# scripts/plugin_corpus.bash stages and hashes every input into the build context first.
+ARG BASE=ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+FROM ${BASE}
+ARG SNAPSHOT=20261115T000000Z
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update --snapshot "$SNAPSHOT" -qq \
+ && apt-get install --snapshot "$SNAPSHOT" -y --no-install-recommends bash-completion git build-essential \
+      bash-builtins libreadline-dev libclang-dev pkg-config cmake python3 xz-utils ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY . /opt/corpus/
+RUN tar -xzf /opt/corpus/fzf.tar.gz -C /usr/local/bin fzf \
+ && mkdir -p /opt/fzf && cp -r /opt/corpus/fzf-shell /opt/fzf/shell \
+ && mkdir /tmp/rust && tar -xf /opt/corpus/rust.tar.xz -C /tmp/rust \
+ && bash /tmp/rust/rust-*/install.sh --prefix=/opt/rust --disable-ldconfig \
+      --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu > /dev/null \
+ && rm -rf /tmp/rust && mkdir /src && tar -xf /opt/corpus/binit-source.tar -C /src
+RUN useradd --create-home corpus && chown -R corpus:corpus /src
+USER corpus
+WORKDIR /src
+RUN PATH=/opt/rust/bin:$PATH cargo build --release --locked && cp target/release/binit /tmp/binit
+USER root
+RUN install -m 755 /tmp/binit /usr/local/bin/binit && rm /tmp/binit
+USER corpus

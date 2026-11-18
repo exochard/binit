@@ -1100,50 +1100,69 @@ static void completion_cleanup(void *data)
     active = NULL;
 }
 
-struct header_read {
-    rl_getc_func_t *getc_function;
-    rl_hook_func_t *event_hook;
+/* Bytes of a possible late paste header, drawn on the line while they wait and removed before they go
+ * to Readline. The drawing keeps its own undo list, so undo never sees it. */
+struct held_text {
+    int start;
+    int length;
+    UNDO_LIST *undo;
 };
 
-static void restore_header_read(void *data)
+static void drop_held_text(void *data)
 {
-    struct header_read *saved = data;
-    rl_getc_function = saved->getc_function;
-    rl_event_hook = saved->event_hook;
+    struct held_text *held = data;
+    if (held->length) {
+        rl_delete_text(held->start, held->start + held->length);
+        rl_point = held->start;
+        held->length = 0;
+    }
+    rl_free_undo_list();
+    rl_undo_list = held->undo;
 }
 
-/* The byte after a possible paste header's '['. Held input returns at once; otherwise this waits as
- * long as read_key waits for a later sequence byte and gives READERR, so a typed '[' reaches Readline
- * instead of waiting for a key that may never come. A jump to top level restores the reader. */
-static int read_header_byte(void)
+/* readline.h exports rl_insert_mode; its values live in Readline's private rldefs.h. */
+#ifndef RL_IM_INSERT
+#define RL_IM_INSERT 1
+#endif
+
+static bool inserts_itself(int key)
 {
-    struct header_read saved = {rl_getc_function, rl_event_hook};
-    begin_unwind_frame("binit-header");
-    add_unwind_protect(restore_header_read, &saved);
-    rl_getc_function = timed_getc;
-    rl_event_hook = NULL;
-    int key = rl_read_key();
-    run_unwind_frame("binit-header");
-    // As in read_timed: an interrupt during the wait takes effect now, not at the next key.
-    if ((interrupt_state || terminating_signal) && rl_signal_event_hook) (*rl_signal_event_hook)();
-    return key;
+    char sequence[2] = {(char)key, '\0'};
+    int type = 0;
+    return rl_insert_mode == RL_IM_INSERT &&
+           rl_function_of_keyseq(sequence, rl_get_keymap(), &type) == rl_insert && type == ISFUNC;
 }
 
 static bool resume_after_escape(void)
 {
-    // Retain a possible paste header across reads; replay other bytes through
-    // Readline so custom bindings, overwrite mode, and undo keep their meaning.
+    // Retain a possible paste header across reads, however late its bytes arrive, so a delayed paste
+    // cannot run as typed lines. Held bytes that would insert themselves are shown meanwhile; all held
+    // bytes are then replayed through Readline so custom bindings, overwrite mode, and undo keep
+    // their meaning.
     static const char header[] = "[200~";
     char buffered[sizeof header + 1];
     int next = rl_read_key();
     size_t length = 0;
     if (next == '[') {
+        struct held_text held = {rl_point, 0, rl_undo_list};
+        bool shown = true;
+        rl_undo_list = NULL;
+        begin_unwind_frame("binit-held");
+        add_unwind_protect(drop_held_text, &held);
         for (size_t i = 0; i < sizeof header - 1; ++i) {
             buffered[length++] = (char)next;
+            shown = shown && inserts_itself(next);
+            if (shown) {
+                char text[2] = {(char)next, '\0'};
+                rl_insert_text(text);
+                ++held.length;
+                rl_redisplay();
+            }
             if (i + 1 == sizeof header - 1) break;
-            next = read_header_byte();
+            next = rl_read_key();
             if (next != header[i + 1]) break;
         }
+        run_unwind_frame("binit-held");
         if (length == sizeof header - 1) {
             char *paste = xmalloc(sizeof header + 1);
             paste[0] = 27;

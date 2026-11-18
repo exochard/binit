@@ -411,7 +411,8 @@ class CompletionTests(unittest.TestCase):
                 session.send(b"\x1b")
                 session.wait(lambda: not session.panel)
                 session.send(b"[")
-                time.sleep(.01)
+                # Interrupt while the held '[' is drawn, so the unwind must remove it.
+                session.wait(lambda: 'al[' in session.text, seconds=1)
                 session.send(b"\x03")
                 session.wait(lambda: session.text.count("READY>") >= 2)
                 # Idle past the header wait, so a reader left behind would now fail the next read.
@@ -429,19 +430,38 @@ class CompletionTests(unittest.TestCase):
                 baseline.pump(.2)
                 expected = baseline.capture()
             self.assertEqual(expected[1].count("touch pasted"), 1)
-            # The header arrives after the Esc closed the menu, whole or split after its bracket.
-            for parts in ((paste[1:],), (paste[1:2], paste[2:])):
-                with self.subTest(mode=mode, parts=len(parts)), Session(mode=mode) as session:
+            # The header arrives after the Esc closed the menu: whole, split after its bracket, or split
+            # with gaps far longer than any key-sequence wait.
+            for parts, gap in (((paste[1:],), 0), ((paste[1:2], paste[2:]), .005),
+                               ((paste[1:2], paste[2:]), .3), ((paste[1:2], paste[2:4], paste[4:]), .3)):
+                with self.subTest(mode=mode, parts=len(parts), gap=gap), Session(mode=mode) as session:
                     session.open()
                     session.send(b"\x1b")
                     session.wait(lambda: not session.panel)
                     session.pump(.2)
                     for part in parts:
                         session.send(part)
-                        time.sleep(.005)
+                        time.sleep(gap)
                     session.pump(.2)
                     self.assertFalse((session.directory / "pasted").exists())
+                    self.assertEqual(session.text.count("READY>"), 1)
                     self.assertEqual(session.capture(), expected)
+
+    def test_undo_after_a_held_bracket_matches_readline(self):
+        for mode in ("emacs", "vi"):
+            for typed in (b"[x\x1f", b"[\x1f", b"[2\x1f"):
+                with self.subTest(mode=mode, typed=typed):
+                    with Session(mode=mode, extra="binit_complete off\n") as baseline:
+                        baseline.send(b'printf "%s" al' + typed)
+                        baseline.pump()
+                        expected = baseline.capture()
+                    with Session(mode=mode) as session:
+                        session.open()
+                        session.send(b"\x1b")
+                        session.wait(lambda: not session.panel)
+                        session.send(typed)
+                        session.pump()
+                        self.assertEqual(session.capture(), expected)
 
     def test_ordinary_brackets_after_escape_are_preserved(self):
         for text in ("[xyz", "[20x", "[200x"):
@@ -473,9 +493,11 @@ class CompletionTests(unittest.TestCase):
                     session.send(b"\x1b")
                     session.wait(lambda: not session.panel)
                     session.send(typed)
-                    # The screen must settle before capture() sends its keys.
+                    # The screen must settle before capture() sends its keys. A lone rebound '[' is not
+                    # drawn while a late paste header may follow; as in Readline after Esc, the next key
+                    # (here capture()'s) resolves it.
                     session.wait(lambda: line + typed.decode().replace("[", "ZZ") in session.text
-                                 if "ZZ" in extra else True)
+                                 if "ZZ" in extra and typed != b"[" else True)
                     session.pump()
                     self.assertEqual(session.capture(), expected)
 

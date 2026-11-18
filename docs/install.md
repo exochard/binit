@@ -49,5 +49,6 @@ fallback. Build with matching headers to enable native completion for another
 supported Bash version; CONTRIBUTING.md describes those inputs.
 
 This installer supports local use of the development build. Installation
-does not grant release qualification: remote CI, ARM64 receipts and the
-remaining product gates are recorded in [qualification](qualification.md).
+does not grant release qualification. See [qualification](qualification.md)
+for CI evidence and [release requirements](release-0.1.md) for the supported
+platform and release gates.

@@ -709,7 +709,12 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
             .bin
             .iter()
             .filter_map(|item| item.rsplit_once(':'))
-            .map(|(path, name)| format!("{name} ({})", path.strip_prefix("files/").unwrap_or(path)))
+            .map(|(path, name)| {
+                crate::releases::plain_text(&format!(
+                    "{name} ({})",
+                    path.strip_prefix("files/").unwrap_or(path)
+                ))
+            })
             .collect::<Vec<_>>();
         println!(
             "programs      {}{}",

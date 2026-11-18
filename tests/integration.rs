@@ -765,6 +765,23 @@ fn prompt_segment_data_does_not_become_prompt_code() {
 }
 
 #[test]
+fn prompt_segments_drop_c1_controls_and_bidirectional_marks() {
+    let f = Fixture::new();
+    f.demo();
+    // A Git branch name can carry UTF-8 C1 controls (here an OSC ... ST pair) and a right-to-left override.
+    assert_eq!(
+        success(f.bash(
+            r#"
+        source "$BINIT_TEST_INIT"
+        binit_segment test $'main\xc2\x9d0;t\xc2\x9c\xe2\x80\xae\x1b[2J\xe2\x81\xa7\xd8\x9cx \xc3\xa9'
+        printf '%s' "${__binit_segment_value[test]}"
+    "#
+        )),
+        "main0;t[2Jx \u{e9}"
+    );
+}
+
+#[test]
 fn completion_dependencies_respect_existing_user_specs() {
     let f = Fixture::new();
     f.plugin(
@@ -3795,36 +3812,34 @@ fn errors_print_plugin_supplied_text_without_terminal_controls() {
 }
 
 #[test]
-fn manifests_and_projects_cannot_carry_terminal_controls_into_review_output() {
+fn review_output_prints_package_and_project_names_without_terminal_controls() {
     let f = Fixture::new();
-    // A program path with an OSC title sequence would print raw in `inspect`.
+    // A program path with an OSC title sequence is a valid file name; `inspect` must print it plainly.
     f.write(
-        "evil/plugin.toml",
-        "schema=1\nid='evil'\nentry='plugin.bash'\nload='startup'\nbin=[\"files/a\\u001b]0;PWNED\\u0007x:tool\"]\n",
+        "named/plugin.toml",
+        "schema=1\nid='named'\nentry='plugin.bash'\nload='startup'\nbin=[\"files/a\\u001b]0;PWNED\\u0007x:tool\"]\n",
     );
-    f.write("evil/plugin.bash", ": harmless\n");
-    f.write("evil/files/a\u{1b}]0;PWNED\u{7}x", "#!/bin/sh\n");
-    failure(
-        f.cli(&["add", f.root().join("evil").to_str().unwrap()]),
-        "invalid package path",
+    f.write("named/plugin.bash", ": harmless\n");
+    f.write("named/files/a\u{1b}]0;PWNED\u{7}x", "#!/bin/sh\n");
+    success(f.cli(&["add", f.root().join("named").to_str().unwrap()]));
+    let shown = success(f.cli(&["inspect", "named"]));
+    assert!(
+        shown.contains("programs      tool (a?]0;PWNED?x)"),
+        "{shown:?}"
     );
-    // A bidirectional override in a project label is refused, and a hostile directory name prints plainly.
-    f.write("bidi/.binit-project.toml", "label='ok\u{202e}txt.exe'\n");
-    failure(
-        f.cli(&["trust", f.root().join("bidi").to_str().unwrap()]),
-        "invalid project label",
-    );
+    // A hostile project directory name and a bidirectional override in the label print plainly.
+    let directory = f.root().join("proj\u{1b}]0;T\u{7}dir");
     f.write(
         "proj\u{1b}]0;T\u{7}dir/.binit-project.toml",
-        "label='sample'\n",
+        "label='ok\u{202e}txt.exe'\n",
     );
-    let shown = success(f.cli(&[
-        "trust",
-        f.root().join("proj\u{1b}]0;T\u{7}dir").to_str().unwrap(),
-    ]));
+    let shown = success(f.cli(&["trust", directory.to_str().unwrap()]));
     assert!(
         shown.contains("proj?]0;T?dir/.binit-project.toml"),
         "{shown:?}"
     );
-    assert!(!shown.contains(['\u{1b}', '\u{7}']), "{shown:?}");
+    assert!(shown.contains("label  ok?txt.exe"), "{shown:?}");
+    for text in [&shown, &success(f.cli(&["inspect", "named"]))] {
+        assert!(!text.contains(['\u{1b}', '\u{7}', '\u{202e}']), "{text:?}");
+    }
 }

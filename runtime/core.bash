@@ -308,6 +308,11 @@ binit_segment() {
         [[ -z $owner ]] || __binit_segment_owner[$id]=$owner
     fi
     value=${value//[$'\001'-$'\037'$'\177']/}
+    # UTF-8 C1 controls and bidirectional marks, as the manager filters them.
+    value=${value//$'\xc2'[$'\x80'-$'\x9f']/}
+    value=${value//$'\xd8\x9c'/}
+    value=${value//$'\xe2\x80'[$'\x8e\x8f\xaa'-$'\xae']/}
+    value=${value//$'\xe2\x81'[$'\xa6'-$'\xa9']/}
     __binit_segment_value[$id]=${value:0:80}
     if [[ -n $owner && ${__binit_segment_owner[$id]-} == "$owner" ]]; then
         __binit_owned_segment_value[$id]=${__binit_segment_value[$id]}

@@ -19,7 +19,7 @@ git archive --format=tar "$commit" > "$context/binit-source.tar"
 printf '%s\n' "$commit" > "$context/binit-commit"
 cp -- "$2" "$context/rust.tar.xz"
 check 231fcae47ee950621374725b5fc3b5441d2fbda2955ac45dd7dc816d8876cfe7 "$context/rust.tar.xz"
-tag=v0.75.0 fzf_commit=838f46b476eb66b2e034c7fbb4ade86d1c973c66
+tag=v0.75.0 fzf_commit=c7bf2b8eea25952dd257a466c0afa72faae206fb
 fetch "https://github.com/junegunn/fzf/releases/download/$tag/fzf-0.75.0-linux_amd64.tar.gz" "$context/fzf.tar.gz" \
   "$(value plugins fzf binary_archive_sha256)"
 mkdir "$context/fzf-shell"

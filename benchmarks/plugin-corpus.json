@@ -52,7 +52,7 @@
       "effect": "BASH_COMPLETION_VERSINFO is at least 2, _comp_initialize or _init_completion exists, a default completion loader is registered, and calling it for make registers make's completion."
     },
     "fzf": {
-      "release": "junegunn/fzf v0.75.0 (tag commit 838f46b476eb66b2e034c7fbb4ade86d1c973c66)",
+      "release": "junegunn/fzf v0.75.0 (commit c7bf2b8eea25952dd257a466c0afa72faae206fb, tag object 838f46b476eb66b2e034c7fbb4ade86d1c973c66)",
       "binary_archive": "fzf-0.75.0-linux_amd64.tar.gz",
       "binary_archive_sha256": "0d6640f83582d991cf429754baad64b07e3a4e439a6019670f4b91da1314141c",
       "shell_files_sha256": {

@@ -148,6 +148,14 @@ def install(binary_source, prefix, rc_path=None):
         raise ValueError('startup file must differ from the executable and receipt')
     block = decode_block(receipt) if receipt else b''
     rc = rc_update(rc_path, block, startup(binary)) if rc_path else None
+    # With the default prefix, the receipt directory is also Binit's state directory.
+    receipt_dir = receipt_path.parent
+    receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if receipt:
+        metadata = receipt_dir.stat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if metadata.st_uid == os.getuid() and mode & 0o077:
+            receipt_dir.chmod(mode & ~0o077)
     if receipt and digest(source_data) == receipt['sha256'] and (not rc or rc[1] == rc[3]):
         print(startup(binary))
         return

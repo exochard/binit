@@ -72,23 +72,37 @@ class InstallerTests(unittest.TestCase):
     def test_installed_binary_initializes_a_real_private_shell(self):
         built = Path(os.environ.get('BINIT_TEST_BINARY', ROOT / 'target/release/binit'))
         self.assertTrue(built.is_file(), 'release binary required before installer smoke test')
-        result = subprocess.run([sys.executable, str(ROOT / 'scripts/install.py'), '--binary', str(built),
-                                 '--prefix', str(self.prefix), '--rc-file', str(self.rc)],
-                                capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
         home = self.root / 'home'
         home.mkdir()
-        env = dict(os.environ, HOME=str(home), XDG_DATA_HOME=str(home / 'data'), TERM='dumb', HISTFILE='/dev/null')
-        for key in ('BASH_ENV', 'ENV', 'BINIT_STATE', 'BINIT_SAFE'):
+        env = dict(os.environ, HOME=str(home), TERM='dumb', HISTFILE='/dev/null')
+        for key in ('BASH_ENV', 'ENV', 'BINIT_STATE', 'BINIT_SAFE', 'XDG_DATA_HOME'):
             env.pop(key, None)
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/install.py'), '--binary', str(built),
+                                 '--rc-file', str(self.rc)], env=env, umask=0o022,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
         bash = env.get('BINIT_BASH', '/bin/bash')
         shell = subprocess.run([bash, '--noprofile', '--rcfile', str(self.rc), '-ic',
                                 'type -t binit; binit profile; printf "state=%s\\n" "$BINIT_STATE_DIR"'],
                                env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(shell.returncode, 0, shell.stderr)
-        self.assertIn('function\n', shell.stdout)
+        self.assertIn('function\n', shell.stdout, shell.stderr)
         self.assertIn('PLUGIN', shell.stdout)
-        self.assertIn(f'state={home}/data/binit', shell.stdout)
+        state = home / '.local/share/binit'
+        self.assertIn(f'state={state}', shell.stdout)
+        self.assertEqual(state.stat().st_mode & 0o777, 0o700)
+
+    def test_reinstallation_repairs_legacy_receipt_directory_mode(self):
+        self.assertEqual(self.cli().returncode, 0)
+        self.receipt.parent.chmod(0o755)
+        state = self.receipt.parent / 'state-fixture'
+        state.write_bytes(b'preserved')
+        original_receipt = self.receipt.read_bytes()
+
+        self.assertEqual(self.cli().returncode, 0)
+        self.assertEqual(self.receipt.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.receipt.read_bytes(), original_receipt)
+        self.assertEqual(state.read_bytes(), b'preserved')
 
     def test_nonexecutable_source_and_changed_installed_mode_are_rejected(self):
         self.source.chmod(0o644)

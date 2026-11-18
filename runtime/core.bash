@@ -312,7 +312,7 @@ binit_segment() {
     # Deletions can join bytes into a new sequence. Use a positional parameter
     # for the previous length so localvar_inherit cannot change its attributes.
     while
-        set -- "${#value}"
+        builtin set -- "${#value}" || return
         value=${value//$'\xc2'[$'\x80'-$'\x9f']/}
         value=${value//$'\xd8\x9c'/}
         value=${value//$'\xe2\x80'[$'\x8e\x8f\xaa'-$'\xae']/}

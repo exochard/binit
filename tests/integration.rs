@@ -797,8 +797,11 @@ fn prompt_segments_drop_c1_controls_and_bidirectional_marks() {
             source "$BINIT_TEST_INIT"
             shopt -s localvar_inherit
             declare -i before=1
+            builtin set -- "first arg" second
+            set() { :; }
             binit_segment test READY
-            [[ $before == 1 ]] && printf "%s" "${__binit_segment_value[test]}"
+            [[ $before == 1 && $# == 2 && $1 == "first arg" && $2 == second ]] || exit 1
+            printf "%s" "${__binit_segment_value[test]}"
         '
     "#
         )),

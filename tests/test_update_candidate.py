@@ -114,6 +114,34 @@ class UpdateCandidateTests(unittest.TestCase):
         self.assertEqual(result.stdout, '')
         self.assert_selected_generation_usable(self.first)
 
+    def test_selection_changed_while_staging_reports_no_identities(self):
+        self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.source('v3', BASE + 'tool_version() { echo 3; }\n')
+        (self.root / 'other.toml').write_text('schema=1\n[[plugins]]\npath="v3"\n')
+        # Another shell selects a new generation after this review read the base and before it prepares.
+        wrapper = self.root / 'binit-reselect'
+        wrapper.write_text(f'#!/bin/bash\n[[ $1 == diagnose ]] && {shlex.quote(str(BINARY))} prepare '
+                           f'{shlex.quote(str(self.root / "other.toml"))} "${{@: -2}}" >/dev/null\n'
+                           f'exec {shlex.quote(str(BINARY))} "$@"\n')
+        wrapper.chmod(0o700)
+        result = subprocess.run([sys.executable, str(SCRIPT), '--binit', str(wrapper), '--state', str(self.state), 'stage',
+                                 str(self.root / 'config.toml'), 'tool', str(self.root / 'v2'),
+                                 str(self.root / 'checks.toml')],
+                                capture_output=True, text=True, env=self.environment, cwd=self.root, timeout=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('changed during this review', result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertNotEqual(self.current(), self.first)
+
+    def test_unreadable_new_source_leaves_no_review_configuration(self):
+        unreadable = self.source('v2', BASE)
+        (unreadable / 'init.bash').chmod(0)
+        self.addCleanup((unreadable / 'init.bash').chmod, 0o600)
+        result = self.update('stage', str(self.root / 'config.toml'), 'tool', str(unreadable), str(self.root / 'checks.toml'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('PermissionError', result.stderr)
+        self.assertEqual(sorted(p.name for p in self.root.glob('.config.update-*')), [])
+
     def test_failed_preparation_leaves_no_review_configuration(self):
         broken = self.root / 'v2'
         broken.mkdir()

@@ -54,4 +54,5 @@ nice -n 19 docker build --iidfile "$out/image.id" -f benchmarks/plugin-corpus/Co
 # The receipt leaves on stdout, so no host directory needs to be writable by the image's user.
 docker run --rm --network none "$(<"$out/image.id")" bash -c \
   'nice -n 19 python3 scripts/check_plugin_corpus.py --work /tmp/corpus --output /tmp/receipt.json >&2 && cat /tmp/receipt.json' \
-  > "$out/run/receipt.json"
+  > "$out/run/receipt.json.partial"
+mv -- "$out/run/receipt.json.partial" "$out/run/receipt.json"

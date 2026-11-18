@@ -67,17 +67,22 @@ def summary(samples):
 
 def stage(args):
     old_source, proposed = proposed_config(args.config, args.plugin, args.new_source)
-    before, after = files(old_source), files(args.new_source)
-    changed = {"added": sorted(set(after) - set(before)), "removed": sorted(set(before) - set(after)),
-               "changed": sorted(k for k in before.keys() & after.keys() if before[k] != after[k])}
-    current = args.state / "current"
-    base = current.read_text() if current.exists() else None
     try:
+        before, after = files(old_source), files(args.new_source)
+        changed = {"added": sorted(set(after) - set(before)), "removed": sorted(set(before) - set(after)),
+                   "changed": sorted(k for k in before.keys() & after.keys() if before[k] != after[k])}
+        current = args.state / "current"
+        base = current.read_text() if current.exists() else None
         selected = json.loads(binit(args.binit, args.state, "diagnose", str(args.checks), "--json", check=False).stdout)
         binit(args.binit, args.state, "candidate", "prepare", str(proposed))
     except BaseException:
-        # No candidate refers to this configuration yet.
-        proposed.unlink()
+        # Keep the configuration if an interrupted prepare still recorded a candidate from it.
+        try:
+            stored = json.loads(binit(args.binit, args.state, "candidate", "status", "--json", check=False).stdout)
+        except (ValueError, OSError):
+            stored = {}
+        if stored.get("config") != str(proposed.resolve()):
+            proposed.unlink()
         raise
     checked = binit(args.binit, args.state, "candidate", "check", str(args.checks), check=False)
     status = json.loads(binit(args.binit, args.state, "candidate", "status", "--json").stdout)

@@ -51,5 +51,7 @@ revisions = {name: subprocess.check_output(['git', '-C', str(c / name), 'rev-par
 print(json.dumps({'files': files, 'revisions': revisions}, indent=1, sort_keys=True))
 PY
 nice -n 19 docker build --iidfile "$out/image.id" -f benchmarks/plugin-corpus/Containerfile "$context" > "$out/build.log" 2>&1
-docker run --rm --network none -v "$out/run:/out" "$(<"$out/image.id")" \
-  nice -n 19 python3 scripts/check_plugin_corpus.py --work /tmp/corpus --output /out/receipt.json
+# The receipt leaves on stdout, so no host directory needs to be writable by the image's user.
+docker run --rm --network none "$(<"$out/image.id")" bash -c \
+  'nice -n 19 python3 scripts/check_plugin_corpus.py --work /tmp/corpus --output /tmp/receipt.json >&2 && cat /tmp/receipt.json' \
+  > "$out/run/receipt.json"

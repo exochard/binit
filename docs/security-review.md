@@ -70,3 +70,18 @@ running them. It found no critical or high issue.
 The reviewer found the mutation lock, the candidate receipt and base checks,
 publication renames, the init stamp, Git and release acquisition, manifest
 identity on update, and the installer's atomic writes sound.
+
+## Whole-project audit, 2026-11-18
+
+A third reviewer, from a different model family, audited the whole manager,
+runtime, native module and installer at `3d1e217`, with proofs of concept run
+only in scratch state. It found one medium issue and no critical or high one.
+
+| Severity | Finding | Status |
+| --- | --- | --- |
+| Medium | Manager errors reached the terminal as received. A plugin manifest's id, a failed build hook's output and Git's stderr tail could carry terminal controls such as an OSC 52 clipboard write or a title change into `binit add` or `binit sync` output. | Fixed: every manager error prints through one filter that turns controls and bidirectional marks into `?` and keeps line breaks and tabs. Test `errors_print_plugin_supplied_text_without_terminal_controls`. |
+
+It re-checked the open items above and found none worse than recorded. It
+also confirmed that completion candidates with control characters display as
+caret notation through both the native menu and stock Readline; bidirectional
+marks in candidates still display as received, a visual effect only.

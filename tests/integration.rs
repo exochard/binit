@@ -3770,3 +3770,26 @@ fn the_bin_directory_joins_path_once_across_resourcing() {
     let safe = h.shell_env(&lines, "echo \"path:$PATH\"\n", &[("BINIT_SAFE", "1")]);
     assert!(!stdout(&safe).contains(&bin), "{}", stdout(&safe));
 }
+
+#[test]
+fn errors_print_plugin_supplied_text_without_terminal_controls() {
+    let f = Fixture::new();
+    // An attacker's manifest id: an OSC 52 clipboard write, a title change and a bidi override.
+    f.write(
+        "evil/plugin.toml",
+        "schema=1\nid=\"evil\\u001b]52;c;cGFzdGVk\\u0007\\u001b]0;owned\\u0007\\u202e\"\nentry='plugin.bash'\nload='startup'\n",
+    );
+    f.write("evil/plugin.bash", ": harmless\n");
+    let result = f.cli(&["add", f.root().join("evil").to_str().unwrap()]);
+    assert!(!result.status.success());
+    let text = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        text.starts_with("binit: invalid plugin manifest: evil"),
+        "{text:?}"
+    );
+    assert!(!text.contains(['\u{1b}', '\u{7}', '\u{202e}']), "{text:?}");
+    assert!(
+        text.ends_with('\n') && text.matches('\n').count() == 1,
+        "{text:?}"
+    );
+}

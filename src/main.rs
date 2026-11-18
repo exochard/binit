@@ -1084,9 +1084,23 @@ fn run() -> Result<()> {
     }
     Ok(())
 }
+/// Errors can carry plugin manifests, hook output and Git stderr, so they reach the terminal as plain
+/// text: controls and bidi marks become `?`, while line breaks and tabs keep multi-line output readable.
+fn plain_error(error: &str) -> String {
+    error
+        .chars()
+        .map(|c| {
+            if c != '\n' && c != '\t' && releases::terminal_control(c) {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
 fn main() {
     if let Err(error) = run() {
-        eprintln!("binit: {error}");
+        eprintln!("binit: {}", plain_error(&error.to_string()));
         std::process::exit(1);
     }
 }

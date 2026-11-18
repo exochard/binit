@@ -242,7 +242,13 @@ def resource_sample(pid, proc=Path('/proc')):
                 raise RuntimeError(f'malformed statm for owned process {child}')
             row['resident_pages'] = int(fields[1])
             row['rss_kib'] = row['resident_pages'] * page_size // 1024
-            row['fds'] = len(list((base / 'fd').iterdir()))
+            try:
+                row['fds'] = len(list((base / 'fd').iterdir()))
+            except PermissionError:
+                # Some kernels deny the fd listing after a single-threaded child exits.
+                if row['state'] != 'Z' or fields != ['0'] * 7 or not re.search(r'^Threads:[ \t]+1$', status, re.M):
+                    raise
+                row['fds'] = 0
             pending.extend(map(int, (base / f'task/{child}/children').read_text().split()))
             rows.append(row)
         except (FileNotFoundError, ProcessLookupError):

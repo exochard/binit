@@ -155,10 +155,12 @@ class EcosystemIntegrityTests(unittest.TestCase):
                 if time.monotonic() > deadline:
                     self.fail('owned child did not exit')
                 time.sleep(.001)
-            sample = corpus.resource_sample(process.pid)
+            with patch.object(Path, 'iterdir', side_effect=PermissionError('fixture denies fd access')):
+                sample = corpus.resource_sample(process.pid)
             self.assertEqual(sample['processes'], 1)
             self.assertEqual(sample['zombies'], 1)
             self.assertEqual(sample['rss_kib_sum'], 0)
+            self.assertEqual(sample['fds_sum'], 0)
             self.assertEqual(sample['samples'][0]['state'], 'Z')
         finally:
             process.wait()
@@ -196,6 +198,9 @@ class EcosystemIntegrityTests(unittest.TestCase):
             self.assertFalse(sample['partial'])
             self.assertEqual(sample['rss_kib_sum'], 0)
             self.assertEqual(sample['samples'][0]['state'], 'R')
+            with patch.object(Path, 'iterdir', side_effect=PermissionError('fixture denies fd access')):
+                with self.assertRaises(PermissionError):
+                    corpus.resource_sample(123, proc)
 
 
 if __name__ == '__main__':

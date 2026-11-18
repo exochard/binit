@@ -72,7 +72,7 @@ class CheckTerminalTests(unittest.TestCase):
                                 for child in children.read_text().split():
                                     text = Path(f'/proc/{child}/stat').read_text()
                                     states.add(text.rsplit(')', 1)[1].split()[0])
-                            except FileNotFoundError:
+                            except (FileNotFoundError, ProcessLookupError):
                                 pass
                             if select.select([descriptor], [], [], .01)[0]:
                                 try:

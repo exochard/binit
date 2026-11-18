@@ -279,7 +279,8 @@ fn valid_relative(path: &str) -> bool {
         && Path::new(path)
             .components()
             .all(|c| matches!(c, Component::Normal(_)))
-        && !path.contains(['\n', '\r', '\0'])
+        && !path.contains('\0')
+        && !path.chars().any(releases::terminal_control)
 }
 fn valid_command_name(name: &str) -> bool {
     !name.is_empty()
@@ -329,10 +330,11 @@ fn validate_plugin(plugin: &Plugin) -> Result<()> {
         || (plugin.load == "event" && plugin.event.is_empty())
         || (plugin.load == "watch" && plugin.watch.is_empty())
         || plugin.watch.len() > 128
-        || plugin
-            .watch
-            .iter()
-            .any(|path| !Path::new(path).is_absolute() || path.contains([',', '\n', '\r', '\0']))
+        || plugin.watch.iter().any(|path| {
+            !Path::new(path).is_absolute()
+                || path.contains([',', '\0'])
+                || path.chars().any(releases::terminal_control)
+        })
         || plugin.bin.iter().any(|s| split_bin(s).is_none())
     {
         return Err(format!("invalid plugin manifest: {}", plugin.id).into());
@@ -798,7 +800,7 @@ fn verify_generation_checks(state: &Path, id: &str) -> Result<Lock> {
 
 fn validate_project(project: &Project) -> Result<()> {
     if project.label.len() > 80
-        || project.label.chars().any(char::is_control)
+        || project.label.chars().any(releases::terminal_control)
         || project.env.len() > 64
     {
         return Err("invalid project label or too many variables".into());
@@ -889,7 +891,11 @@ fn trust(state: &Path, directory: &Path, reviewed: Option<&str>) -> Result<()> {
             .join(format!("{}.toml", hash(path.as_bytes()))),
         toml::to_string_pretty(&record)?.as_bytes(),
     )?;
-    println!("trusted {path} at {}", record.sha256);
+    println!(
+        "trusted {} at {}",
+        releases::plain_text(&path),
+        record.sha256
+    );
     println!("label  {}", project.label);
     for (key, value) in &project.env {
         println!("env    {key}={}", value.escape_default());
@@ -1085,23 +1091,32 @@ fn run() -> Result<()> {
     Ok(())
 }
 /// Errors can carry plugin manifests, hook output and Git stderr, so they reach the terminal as plain
-/// text: controls and bidi marks become `?`, while line breaks and tabs keep multi-line output readable.
+/// text. Each line is filtered, and continuation lines are indented so that text from a hook cannot
+/// pass for a line of Binit's own.
 fn plain_error(error: &str) -> String {
     error
-        .chars()
-        .map(|c| {
-            if c != '\n' && c != '\t' && releases::terminal_control(c) {
-                '?'
-            } else {
-                c
-            }
-        })
-        .collect()
+        .split('\n')
+        .map(releases::plain_text)
+        .collect::<Vec<_>>()
+        .join("\n  ")
 }
 fn main() {
     if let Err(error) = run() {
         eprintln!("binit: {}", plain_error(&error.to_string()));
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod plain_errors {
+    use super::plain_error;
+
+    #[test]
+    fn continuation_lines_cannot_pass_for_binit_output() {
+        assert_eq!(
+            plain_error("demo: atclone failed: step\nbinit: trusted /tmp/x\r\u{1b}]0;t\u{7}"),
+            "demo: atclone failed: step\n  binit: trusted /tmp/x??]0;t?"
+        );
     }
 }
 

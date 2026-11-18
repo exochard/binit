@@ -698,9 +698,9 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
         entry.plugin.requires.join(", "),
         entry.plugin.depends.join(", "),
         match (&entry.origin, entry.source.as_deref()) {
-            (Some(origin), _) => origin.url.clone().into(),
-            (None, Some(path)) => path.to_string_lossy(),
-            (None, None) => "legacy snapshot".into(),
+            (Some(origin), _) => origin.url.clone(),
+            (None, Some(path)) => crate::releases::plain_text(&path.to_string_lossy()),
+            (None, None) => "legacy snapshot".to_owned(),
         }
     );
     if !entry.plugin.bin.is_empty() {
@@ -720,7 +720,7 @@ pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
     if let Some(origin) = &entry.origin {
         println!(
             "ver           {}\ncommit        {}",
-            origin.ver.as_deref().unwrap_or("default branch"),
+            crate::releases::plain_text(origin.ver.as_deref().unwrap_or("default branch")),
             origin.commit
         );
     }

@@ -70,6 +70,8 @@ int main(void)
     assert(strcmp(output, "\\e[31mevil\\n\\t\\u0001") == 0);
     binit_text(output, sizeof output, "\xc2\x9b\xe2\x80\xae", 100);
     assert(strcmp(output, "\\u009b\\u202e") == 0);
+    binit_text(output, sizeof output, "\xd8\x9c\xe2\x80\x8e\xe2\x80\x8f", 100);
+    assert(strcmp(output, "\\u061c\\u200e\\u200f") == 0);
     binit_text(output, sizeof output, "\xff", 100);
     assert(strcmp(output, "\\xff") == 0);
     assert(binit_text(output, sizeof output, "界a", 3) == 3);

@@ -52,6 +52,14 @@ pub(crate) fn terminal_control(c: char) -> bool {
         || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
+/// Text from plugins, remotes or the filesystem shown on one line: controls and bidirectional marks
+/// become `?`.
+pub(crate) fn plain_text(text: &str) -> String {
+    text.chars()
+        .map(|c| if terminal_control(c) { '?' } else { c })
+        .collect()
+}
+
 fn printable(value: &str) -> bool {
     !value.is_empty() && value.len() <= 1024 && !value.chars().any(terminal_control)
 }

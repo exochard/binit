@@ -79,7 +79,9 @@ only in scratch state. It found one medium issue and no critical or high one.
 
 | Severity | Finding | Status |
 | --- | --- | --- |
-| Medium | Manager errors reached the terminal as received. A plugin manifest's id, a failed build hook's output and Git's stderr tail could carry terminal controls such as an OSC 52 clipboard write or a title change into `binit add` or `binit sync` output. | Fixed: every manager error prints through one filter that turns controls and bidirectional marks into `?` and keeps line breaks and tabs. Test `errors_print_plugin_supplied_text_without_terminal_controls`. |
+| Medium | Manager errors reached the terminal as received. A plugin manifest's id, a failed build hook's output and Git's stderr tail could carry terminal controls such as an OSC 52 clipboard write or a title change into `binit add` or `binit sync` output. | Fixed: every manager error prints through one filter that turns controls and bidirectional marks into `?`; continuation lines are indented so hook output cannot pass for Binit's own lines. Tests `errors_print_plugin_supplied_text_without_terminal_controls` and `continuation_lines_cannot_pass_for_binit_output`. |
+| Medium | A follow-up adversarial review found the same class outside errors: `inspect` printed package program paths and local source paths as received, and `trust` printed the project path and a label with bidirectional marks. | Fixed: package and watch paths and project labels refuse every control and bidirectional mark, and `inspect` and `trust` print filesystem paths as plain text. Test `manifests_and_projects_cannot_carry_terminal_controls_into_review_output`. |
+| Low | The native completion menu escaped most bidirectional marks but not U+061C, U+200E or U+200F. | Fixed, with a case in `native/test_menu.c`. |
 
 It re-checked the open items above and found none worse than recorded. It
 also confirmed that completion candidates with control characters display as

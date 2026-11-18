@@ -127,8 +127,8 @@ size_t binit_menu_choice(const struct binit_menu *menu)
 
 static bool hidden(wchar_t c)
 {
-    return (c >= 0x80 && c <= 0x9f) || (c >= 0x202a && c <= 0x202e) ||
-           (c >= 0x2066 && c <= 0x2069);
+    return (c >= 0x80 && c <= 0x9f) || c == 0x061c || c == 0x200e || c == 0x200f ||
+           (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
 }
 
 int binit_text(char *output, size_t capacity, const char *input, int maximum)

@@ -3793,3 +3793,38 @@ fn errors_print_plugin_supplied_text_without_terminal_controls() {
         "{text:?}"
     );
 }
+
+#[test]
+fn manifests_and_projects_cannot_carry_terminal_controls_into_review_output() {
+    let f = Fixture::new();
+    // A program path with an OSC title sequence would print raw in `inspect`.
+    f.write(
+        "evil/plugin.toml",
+        "schema=1\nid='evil'\nentry='plugin.bash'\nload='startup'\nbin=[\"files/a\\u001b]0;PWNED\\u0007x:tool\"]\n",
+    );
+    f.write("evil/plugin.bash", ": harmless\n");
+    f.write("evil/files/a\u{1b}]0;PWNED\u{7}x", "#!/bin/sh\n");
+    failure(
+        f.cli(&["add", f.root().join("evil").to_str().unwrap()]),
+        "invalid package path",
+    );
+    // A bidirectional override in a project label is refused, and a hostile directory name prints plainly.
+    f.write("bidi/.binit-project.toml", "label='ok\u{202e}txt.exe'\n");
+    failure(
+        f.cli(&["trust", f.root().join("bidi").to_str().unwrap()]),
+        "invalid project label",
+    );
+    f.write(
+        "proj\u{1b}]0;T\u{7}dir/.binit-project.toml",
+        "label='sample'\n",
+    );
+    let shown = success(f.cli(&[
+        "trust",
+        f.root().join("proj\u{1b}]0;T\u{7}dir").to_str().unwrap(),
+    ]));
+    assert!(
+        shown.contains("proj?]0;T?dir/.binit-project.toml"),
+        "{shown:?}"
+    );
+    assert!(!shown.contains(['\u{1b}', '\u{7}']), "{shown:?}");
+}

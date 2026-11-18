@@ -271,7 +271,7 @@ def main():
         "bash_sha256": digest("/bin/bash"), "binit_sha256": digest(shutil.which("binit")),
         "binit_commit": (SOURCES / "binit-commit").read_text().strip(),
         "inputs": json.loads((SOURCES / "inputs.json").read_text()),
-        "packages": subprocess.check_output(["dpkg-query", "-W", "bash", "bash-completion", "git"], text=True).split("\n"),
+        "packages": subprocess.check_output(["dpkg-query", "-W", "bash", "bash-completion", "git", "ca-certificates"], text=True).split("\n"),
         "loaded_files": {path: digest(path) for path in ("/usr/share/bash-completion/completions/git",
                                                          "/usr/share/bash-completion/bash_completion",
                                                          "/opt/fzf/shell/completion.bash", "/opt/fzf/shell/key-bindings.bash",

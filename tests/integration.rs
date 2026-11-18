@@ -790,6 +790,20 @@ fn prompt_segments_drop_c1_controls_and_bidirectional_marks() {
         )),
         "abcdefg"
     );
+    assert_eq!(
+        success(f.bash(
+            r#"
+        timeout 10 "$BASH" --noprofile --norc -ic '
+            source "$BINIT_TEST_INIT"
+            shopt -s localvar_inherit
+            declare -i before=1
+            binit_segment test READY
+            [[ $before == 1 ]] && printf "%s" "${__binit_segment_value[test]}"
+        '
+    "#
+        )),
+        "READY"
+    );
 }
 
 #[test]

@@ -301,7 +301,7 @@ binit_on() {
 }
 
 binit_segment() {
-    local id=${1-} value=${2-} before LC_ALL=C owner=${__binit_loading:-$__binit_callback_owner}
+    local id=${1-} value=${2-} LC_ALL=C owner=${__binit_loading:-$__binit_callback_owner}
     [[ -n $id ]] || return 1
     if [[ ! -v __binit_segment_value[$id] ]]; then
         __binit_segments+=("$id")
@@ -309,15 +309,15 @@ binit_segment() {
     fi
     value=${value//[$'\001'-$'\037'$'\177']/}
     # UTF-8 C1 controls and bidirectional marks, as the manager filters them.
-    # A removal can join its neighbours into a new sequence, so repeat until
-    # nothing changes.
+    # Deletions can join bytes into a new sequence. Use a positional parameter
+    # for the previous length so localvar_inherit cannot change its attributes.
     while
-        before=$value
+        set -- "${#value}"
         value=${value//$'\xc2'[$'\x80'-$'\x9f']/}
         value=${value//$'\xd8\x9c'/}
         value=${value//$'\xe2\x80'[$'\x8e\x8f\xaa'-$'\xae']/}
         value=${value//$'\xe2\x81'[$'\xa6'-$'\xa9']/}
-        [[ $value != "$before" ]]
+        [[ ${#value} != "$1" ]]
     do :; done
     __binit_segment_value[$id]=${value:0:80}
     if [[ -n $owner && ${__binit_segment_owner[$id]-} == "$owner" ]]; then

@@ -1100,6 +1100,21 @@ static void completion_cleanup(void *data)
     active = NULL;
 }
 
+/* The byte after a possible paste header's '['. Held input returns at once; otherwise this waits the
+ * normal continuation time and gives READERR, so a typed '[' reaches Readline instead of waiting for
+ * a key that may never come. */
+static int read_header_byte(void)
+{
+    rl_getc_func_t *getc_function = rl_getc_function;
+    rl_hook_func_t *event_hook = rl_event_hook;
+    rl_getc_function = timed_getc;
+    rl_event_hook = NULL;
+    int key = rl_read_key();
+    rl_getc_function = getc_function;
+    rl_event_hook = event_hook;
+    return key;
+}
+
 static bool resume_after_escape(void)
 {
     // Retain a possible paste header across reads; replay other bytes through
@@ -1112,7 +1127,7 @@ static bool resume_after_escape(void)
         for (size_t i = 0; i < sizeof header - 1; ++i) {
             buffered[length++] = (char)next;
             if (i + 1 == sizeof header - 1) break;
-            next = rl_read_key();
+            next = read_header_byte();
             if (next != header[i + 1]) break;
         }
         if (length == sizeof header - 1) {

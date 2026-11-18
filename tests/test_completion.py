@@ -326,15 +326,16 @@ class CompletionTests(unittest.TestCase):
             self.assertIn("alpha", session.capture()[1])
 
     def test_resize_closes_menu_without_losing_input(self):
-        with Session() as session:
-            session.open()
-            session.screen.resize(20, 60)
-            fcntl.ioctl(session.terminal.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 60, 0, 0))
-            os.kill(session.terminal.pid, signal.SIGWINCH)
-            session.wait(lambda: not session.panel)
-            self.assertEqual(session.capture()[1], 'printf "%s" al')
-            session.send(b"\t")
-            session.wait(lambda: session.panel)
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode), Session(mode=mode) as session:
+                session.open()
+                session.screen.resize(20, 60)
+                fcntl.ioctl(session.terminal.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 60, 0, 0))
+                os.kill(session.terminal.pid, signal.SIGWINCH)
+                session.wait(lambda: not session.panel)
+                self.assertEqual(session.capture(), (len('printf "%s" al'), 'printf "%s" al'))
+                session.send(b"\t")
+                session.wait(lambda: session.panel)
 
     def test_bracketed_paste_returns_to_readline_without_execution(self):
         with Session() as session:
@@ -389,19 +390,41 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(line, 'printf "%s" al')
             self.assertEqual(point, line.rindex("al"))
 
-    @unittest.expectedFailure
     def test_one_key_after_escape_appears_without_another_key(self):
-        # Known defect: a lone '[' typed after Esc closes the menu shows only with the next key.
-        # It reproduces on 1fa926a; the post-Esc paste-header read is not the cause.
-        for key in ("[", "x"):
-            with self.subTest(key=key), Session() as session:
-                session.open()
-                session.send(b"\x1b")
-                session.wait(lambda: not session.panel)
-                session.send(key)
-                # Watch the screen only: capture() sends keys, which would redraw the line.
-                session.wait(lambda: 'al' + key in session.text)
-                self.assertEqual(session.capture()[1], 'printf "%s" al' + key)
+        # A '[' could start a late paste header, but it must not wait for a key that may never come.
+        for mode in ("emacs", "vi"):
+            for key in ("[", "x"):
+                with self.subTest(mode=mode, key=key), Session(mode=mode) as session:
+                    session.open()
+                    session.send(b"\x1b")
+                    session.wait(lambda: not session.panel)
+                    session.send(key)
+                    # Watch the screen only: capture() sends keys, which would release a held byte.
+                    session.wait(lambda: 'al' + key in session.text, seconds=1)
+                    expected = 'printf "%s" al' + key
+                    self.assertEqual(session.capture(), (len(expected), expected))
+
+    def test_late_paste_after_escape_matches_readline_in_both_keymaps(self):
+        paste = b"\x1b[200~\n touch pasted\n\x1b[201~"
+        for mode in ("emacs", "vi"):
+            with Session(mode=mode, extra="binit_complete off\n") as baseline:
+                baseline.send(b'printf "%s" al' + paste)
+                baseline.pump(.2)
+                expected = baseline.capture()
+            self.assertEqual(expected[1].count("touch pasted"), 1)
+            # The header arrives after the Esc closed the menu, whole or split after its bracket.
+            for parts in ((paste[1:],), (paste[1:2], paste[2:])):
+                with self.subTest(mode=mode, parts=len(parts)), Session(mode=mode) as session:
+                    session.open()
+                    session.send(b"\x1b")
+                    session.wait(lambda: not session.panel)
+                    session.pump(.2)
+                    for part in parts:
+                        session.send(part)
+                        time.sleep(.005)
+                    session.pump(.2)
+                    self.assertFalse((session.directory / "pasted").exists())
+                    self.assertEqual(session.capture(), expected)
 
     def test_ordinary_brackets_after_escape_are_preserved(self):
         for text in ("[xyz", "[20x", "[200x"):
@@ -415,21 +438,27 @@ class CompletionTests(unittest.TestCase):
 
     def test_brackets_after_escape_keep_bindings_and_overwrite_mode(self):
         cases = [
-            ("bind '\"[\":\"ZZ\"'\n", b"", 'printf "%s" al', ""),
-            ("bind '\"\\C-o\":overwrite-mode'\n", b"\x0f", "demo_cmd va", " KEEP"),
+            ("emacs", "bind '\"[\":\"ZZ\"'\n", b"", 'printf "%s" al', "", b"[xyz"),
+            ("emacs", "bind '\"[\":\"ZZ\"'\n", b"", 'printf "%s" al', "", b"["),
+            ("vi", "bind '\"[\":\"ZZ\"'\n", b"", 'printf "%s" al', "", b"[xyz"),
+            ("vi", "bind '\"[\":\"ZZ\"'\n", b"", 'printf "%s" al', "", b"["),
+            ("emacs", "bind '\"\\C-o\":overwrite-mode'\n", b"\x0f", "demo_cmd va", " KEEP", b"[xyz"),
         ]
-        for extra, mode, line, suffix in cases:
-            with self.subTest(extra=extra):
-                with Session(extra=extra + "binit_complete off\n") as baseline:
-                    baseline.send(mode + (line + suffix).encode() + b"\x02" * len(suffix) + b"[xyz")
+        for keymap, extra, mode, line, suffix, typed in cases:
+            with self.subTest(keymap=keymap, extra=extra, typed=typed):
+                with Session(mode=keymap, extra=extra + "binit_complete off\n") as baseline:
+                    baseline.send(mode + (line + suffix).encode() + b"\x02" * len(suffix) + typed)
                     baseline.pump()
                     expected = baseline.capture()
-                with Session(extra=extra) as session:
+                with Session(mode=keymap, extra=extra) as session:
                     session.send(mode)
                     session.open(line, suffix)
                     session.send(b"\x1b")
                     session.wait(lambda: not session.panel)
-                    session.send(b"[xyz")
+                    session.send(typed)
+                    # The screen must settle before capture() sends its keys.
+                    session.wait(lambda: line + typed.decode().replace("[", "ZZ") in session.text
+                                 if "ZZ" in extra else True)
                     session.pump()
                     self.assertEqual(session.capture(), expected)
 

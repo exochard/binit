@@ -4,7 +4,7 @@
   "scope": "Observer cleanup correction for the unchanged interactive preservation corpus; not a new25percent workload target",
   "workload": {
     "path": "scripts/bench_interactive.py",
-    "sha256": "dd0e24bf66b02975926db8af78905f8f693a859e2ca98700edf7ef05c045e607"
+    "sha256": "81218843564989eb8a04f017981a34d73104379616a35760ad6172d6a4b25995"
   },
   "runs": 2,
   "rounds_per_run": 100,

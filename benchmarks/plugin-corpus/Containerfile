@@ -17,7 +17,9 @@ RUN tar -xzf /opt/corpus/fzf.tar.gz -C /usr/local/bin fzf \
  && mkdir /tmp/rust && tar -xf /opt/corpus/rust.tar.xz -C /tmp/rust \
  && bash /tmp/rust/rust-*/install.sh --prefix=/opt/rust --disable-ldconfig \
       --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu > /dev/null \
- && rm -rf /tmp/rust && mkdir /src && tar -xf /opt/corpus/binit-source.tar -C /src
+ && rm -rf /tmp/rust && mkdir /src && tar -xf /opt/corpus/binit-source.tar -C /src \
+ && chmod -R a+rX /opt/corpus /opt/fzf
+# The context is staged under a private umask; the checker reads these sources as the corpus user.
 RUN useradd --create-home corpus && chown -R corpus:corpus /src
 USER corpus
 WORKDIR /src

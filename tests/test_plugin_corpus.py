@@ -22,6 +22,13 @@ class PluginCorpusTests(unittest.TestCase):
         self.assertEqual(set(corpus.EFFECTS), set(manifest["plugins"]))
         self.assertEqual(set(corpus.INSTALL), set(manifest["frameworks"]))
 
+    def test_image_lets_the_unprivileged_checker_read_the_staged_sources(self):
+        # The runner stages downloads under a private umask; the checker runs as the corpus user.
+        image = (ROOT / "benchmarks/plugin-corpus/Containerfile").read_text()
+        readable = image.index("chmod -R a+rX /opt/corpus /opt/fzf")
+        self.assertLess(image.index("COPY . /opt/corpus/"), readable)
+        self.assertLess(readable, image.rindex("USER corpus"))
+
     def test_passing_set_rule(self):
         cases = [
             ({"binit": "ab", "bash-it": "ab", "oh-my-bash": "ab"}, "tie"),

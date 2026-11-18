@@ -20,7 +20,9 @@ RUN tar -xzf /opt/corpus/fzf.tar.gz -C /usr/local/bin fzf \
  && rm -rf /tmp/rust && mkdir /src && tar -xf /opt/corpus/binit-source.tar -C /src \
  && chmod -R a+rX /opt/corpus /opt/fzf
 # The context is staged under a private umask; the checker reads these sources as the corpus user.
-RUN useradd --create-home corpus && chown -R corpus:corpus /src
+# The frameworks' installers clone their local mirrors; Git refuses a repository another user owns, so the
+# corpus user owns them as it would its own clone.
+RUN useradd --create-home corpus && chown -R corpus:corpus /src /opt/corpus/bash-it /opt/corpus/oh-my-bash
 USER corpus
 WORKDIR /src
 RUN PATH=/opt/rust/bin:$PATH cargo build --release --locked && cp target/release/binit /tmp/binit

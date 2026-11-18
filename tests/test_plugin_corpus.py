@@ -28,6 +28,8 @@ class PluginCorpusTests(unittest.TestCase):
         readable = image.index("chmod -R a+rX /opt/corpus /opt/fzf")
         self.assertLess(image.index("COPY . /opt/corpus/"), readable)
         self.assertLess(readable, image.rindex("USER corpus"))
+        # Oh My Bash's installer clones its mirror, which Git refuses when another user owns it.
+        self.assertIn("chown -R corpus:corpus /src /opt/corpus/bash-it /opt/corpus/oh-my-bash", image)
 
     def test_passing_set_rule(self):
         cases = [

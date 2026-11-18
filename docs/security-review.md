@@ -49,3 +49,24 @@ handling, pointer updates under the mutation lock, quoting of everything
 asset acquisition (no shell, hooks disabled, HTTPS only, SHA-256 required,
 archives unpacked in memory with path checks), the trust record's binding to
 path and content, and the native module's buffer bounds and seccomp filter.
+
+## Installer and update review, 2026-11-18
+
+A second independent reviewer read the installer, `update`, `update --check`,
+candidate checks and selection, and publication, again without building or
+running them. It found no critical or high issue.
+
+| Severity | Finding | Status |
+| --- | --- | --- |
+| Medium | The source-trial bootstrap ran `python3 -c` inside the received bundle before its checks, so a planted `json.py` there would run first. | Fixed: the documented steps run Python with `-I`. The recipe test covers a planted module. |
+| Low-medium | `update --check` printed remote commit subjects as received, so terminal controls in a subject could rewrite the review output or set the title. | Fixed: controls and bidirectional marks print as `?`. Test `update_check_prints_remote_commit_subjects_without_terminal_controls`. `--check` and the update fetch separately, so a branch can move between review and update. |
+| Low | A kill between the installer's binary, startup-block and receipt writes leaves a state that both install and uninstall refuse, without recovery steps. Only an exception restores the prior state. | Open. |
+| Low | The installer checks ownership and links but not permissions, so a group- or world-writable `bin/` is accepted; the plan calls the manager by path. | Open: install in a directory only you or root can write. |
+| Low | Any symlinked ancestor of the install paths is refused, including a symlinked home or a managed `.bashrc`. | Open: fails closed. |
+| Low | The first `binit init` takes the mutation lock without waiting, so shells opened together on first use can start without Binit. | Open. |
+| Low | A sync during a binary replacement can record a `binit (deleted)` path in the plan until the next apply. | Open. |
+| Low | A hostile Git remote can fill the disk within the 120 s fetch limit; there is no object-size cap. | Open: denial of service only. |
+
+The reviewer found the mutation lock, the candidate receipt and base checks,
+publication renames, the init stamp, Git and release acquisition, manifest
+identity on update, and the installer's atomic writes sound.

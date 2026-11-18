@@ -95,6 +95,34 @@ class UpdateCandidateTests(unittest.TestCase):
         self.binit('rollback')
         self.assert_selected_generation_usable(self.first)
 
+    def test_review_replaced_while_staging_reports_no_identities(self):
+        self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.source('v3', BASE + 'tool_version() { echo 3; }\n')
+        (self.root / 'other.toml').write_text('schema=1\n[[plugins]]\npath="v3"\n')
+        # Another review prepares its own candidate right after this stage's check.
+        wrapper = self.root / 'binit-interleaved'
+        wrapper.write_text(f'#!/bin/bash\n{shlex.quote(str(BINARY))} "$@"; rc=$?\n'
+                           f'[[ $1 == candidate && $2 == check ]] && {shlex.quote(str(BINARY))} candidate prepare '
+                           f'{shlex.quote(str(self.root / "other.toml"))} "${{@:4}}" >/dev/null\nexit $rc\n')
+        wrapper.chmod(0o700)
+        result = subprocess.run([sys.executable, str(SCRIPT), '--binit', str(wrapper), '--state', str(self.state), 'stage',
+                                 str(self.root / 'config.toml'), 'tool', str(self.root / 'v2'),
+                                 str(self.root / 'checks.toml')],
+                                capture_output=True, text=True, env=self.environment, cwd=self.root, timeout=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('changed during this review', result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assert_selected_generation_usable(self.first)
+
+    def test_failed_preparation_leaves_no_review_configuration(self):
+        broken = self.root / 'v2'
+        broken.mkdir()
+        (broken / 'plugin.toml').write_text("schema=1\nid='tool'\nentry='missing.bash'\nload='startup'\n")
+        result = self.update('stage', str(self.root / 'config.toml'), 'tool', str(broken), str(self.root / 'checks.toml'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(sorted(p.name for p in self.root.glob('.config.update-*')), [])
+        self.assert_selected_generation_usable(self.first)
+
     def test_update_staged_after_the_review_is_not_selected_in_its_place(self):
         self.source('v2', BASE + 'tool_version() { echo 2; }\n')
         self.source('v3', BASE + 'tool_version() { echo 3; }\n')

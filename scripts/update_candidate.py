@@ -70,10 +70,22 @@ def stage(args):
     before, after = files(old_source), files(args.new_source)
     changed = {"added": sorted(set(after) - set(before)), "removed": sorted(set(before) - set(after)),
                "changed": sorted(k for k in before.keys() & after.keys() if before[k] != after[k])}
-    selected = json.loads(binit(args.binit, args.state, "diagnose", str(args.checks), "--json", check=False).stdout)
-    binit(args.binit, args.state, "candidate", "prepare", str(proposed))
+    current = args.state / "current"
+    base = current.read_text() if current.exists() else None
+    try:
+        selected = json.loads(binit(args.binit, args.state, "diagnose", str(args.checks), "--json", check=False).stdout)
+        binit(args.binit, args.state, "candidate", "prepare", str(proposed))
+    except BaseException:
+        # No candidate refers to this configuration yet.
+        proposed.unlink()
+        raise
     checked = binit(args.binit, args.state, "candidate", "check", str(args.checks), check=False)
     status = json.loads(binit(args.binit, args.state, "candidate", "status", "--json").stdout)
+    # Each manager command takes the lock separately, so another review may have replaced the candidate or
+    # the selection in between. Report identities only for the candidate prepared from this review's
+    # configuration on the generation diagnosed above.
+    if status.get("config") != str(proposed.resolve()) or status.get("base_generation") != base:
+        raise SystemExit("the candidate or selection changed during this review; stage it again")
     receipt = {}
     run = status.get("check") or {}
     if run.get("receipt_sha256"):

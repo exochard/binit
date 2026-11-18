@@ -4,15 +4,18 @@
 stage: write a proposed configuration that points PLUGIN's entry at NEW_SOURCE, show which of the
 plugin's files change, prepare it as a candidate (nothing is selected), run the reviewed check plan on the
 selected generation (binit diagnose) and on the candidate (binit candidate check), and print both side by
-side. select: select the candidate only through `binit candidate select`, which refuses a stale receipt,
-a failed check or a changed selection. No new manager command or format is introduced."""
+side, with the base generation, candidate generation and receipt digest the review covers. select: select through
+`binit candidate select` bound to those three identities, so a stale receipt, a failed check, a changed selection
+or a candidate staged after the review is refused. No new manager format is introduced."""
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 
@@ -45,9 +48,12 @@ def proposed_config(config, plugin, new_source):
     if len(pattern.findall(text)) != 1:
         raise SystemExit(f"{plugin}: path {old!r} is not a single plain line")
     proposed = pattern.sub(lambda m: m.group(1) + json.dumps(str(Path(new_source).resolve())), text)
-    target = config.with_name(f".{config.stem}.update-{plugin}.toml")
-    target.write_text(proposed)
-    return config.parent / old, target
+    # Beside the original, so relative entries resolve as before; private and new for each review, so a
+    # later review cannot rewrite the configuration an earlier candidate was prepared from.
+    descriptor, name = tempfile.mkstemp(prefix=f".{config.stem}.update-{plugin}.", suffix=".toml", dir=config.parent)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write(proposed)
+    return config.parent / old, Path(name)
 
 
 def summary(samples):
@@ -82,6 +88,8 @@ def stage(args):
                                for fn, owner in d.get("namespace", {}).get("functions", {}).items() if owner == args.plugin},
         "candidate": summary(receipt.get("samples", [])),
         "candidate_state": status.get("state"), "check_exit": checked.returncode,
+        "review": {"base": status.get("base_generation"), "generation": status.get("generation"),
+                   "receipt": run.get("receipt_sha256")},
         "not_shown": "the candidate's owned functions and trace: diagnose runs only on the selected generation",
     }
     report["regressions"] = sorted(c for c, r in report["selected"].items()
@@ -91,7 +99,8 @@ def stage(args):
 
 
 def select(args):
-    result = binit(args.binit, args.state, "candidate", "select", check=False)
+    result = binit(args.binit, args.state, "candidate", "select", "--base", args.base,
+                   "--generation", args.generation, "--receipt", args.receipt, check=False)
     sys.stderr.write(result.stderr)
     return result.returncode
 
@@ -106,7 +115,9 @@ def main():
     staged.add_argument("plugin")
     staged.add_argument("new_source", type=Path)
     staged.add_argument("checks", type=Path)
-    commands.add_parser("select")
+    chosen = commands.add_parser("select", help="select the candidate a stage report showed")
+    for flag in ("--base", "--generation", "--receipt"):
+        chosen.add_argument(flag, required=True)
     args = parser.parse_args()
     return stage(args) if args.command == "stage" else select(args)
 

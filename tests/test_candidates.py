@@ -235,6 +235,46 @@ class CandidateTests(unittest.TestCase):
         self.success('candidate', 'check', str(plan))
         return before, candidate, plan
 
+    def reviewed_identities(self):
+        status = json.loads(self.success('candidate', 'status', '--json'))
+        return ['--base', status['base_generation'], '--generation', status['generation'],
+                '--receipt', status['check']['receipt_sha256']]
+
+    def test_select_bound_to_a_review_refuses_a_candidate_substituted_after_it(self):
+        before, reviewed, plan = self.checked_change()
+        approval = self.reviewed_identities()
+        # A second review under the same base replaces the stored candidate with another checked one.
+        self.entry.write_text('greet() { printf substitute; }\n')
+        self.success('candidate', 'prepare', str(self.config))
+        self.checks('[[ $(greet) == substitute ]]\n')
+        self.success('candidate', 'check', str(plan))
+        substitute = json.loads(self.success('candidate', 'status', '--json'))['generation']
+        self.assertNotEqual(substitute, reviewed)
+        refused = self.run_binit('candidate', 'select', *approval)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('differs from the reviewed candidate', refused.stderr)
+        self.assertEqual((self.state / 'current').read_text(), before)
+        self.success('candidate', 'select', *self.reviewed_identities())
+        self.assertEqual((self.state / 'current').read_text(), substitute)
+        self.assertEqual((self.state / 'previous').read_text(), before)
+
+    def test_select_bound_to_a_review_checks_each_identity(self):
+        before, candidate, _ = self.checked_change()
+        approval = self.reviewed_identities()
+        for index, wrong in ((1, 'f' * 64), (3, 'f' * 64), (5, '0' * 64)):
+            with self.subTest(flag=approval[index - 1]):
+                changed = list(approval)
+                changed[index] = wrong
+                result = self.run_binit('candidate', 'select', *changed)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual((self.state / 'current').read_text(), before)
+        for partial in (approval[:2], approval[:4], approval + ['--base', approval[1]]):
+            self.assertNotEqual(self.run_binit('candidate', 'select', *partial).returncode, 0)
+        self.success('candidate', 'select', *approval)
+        self.assertEqual((self.state / 'current').read_text(), candidate)
+        # Repeating the bound selection is as idempotent as the bare one.
+        self.success('candidate', 'select', *approval)
+
     def test_configuration_change_requires_fresh_preparation(self):
         before, _, _ = self.checked_change()
         self.config.write_text(self.config.read_text() + '\n# changed\n')

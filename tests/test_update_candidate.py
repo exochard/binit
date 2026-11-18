@@ -1,6 +1,7 @@
 """Prototype update review: a plugin update reaches new shells only through a passing candidate check."""
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -53,12 +54,30 @@ class UpdateCandidateTests(unittest.TestCase):
                              str(self.root / 'checks.toml'))
         return result.returncode, json.loads(result.stdout)
 
+    def select(self, report):
+        review = report['review']
+        return self.update('select', '--base', review['base'], '--generation', review['generation'],
+                           '--receipt', review['receipt'] or '-')
+
     def current(self):
         return (self.state / 'current').read_text()
+
+    def fresh_shell(self):
+        """What a new private interactive Bash gets from the selected generation."""
+        rc = self.root / 'rc'
+        rc.write_text(f'eval "$({shlex.quote(str(BINARY))} init --state {shlex.quote(str(self.state))})"\n')
+        script = ('complete -p tool >/dev/null 2>&1 && echo completion=yes || echo completion=no\n'
+                  'declare -F tool_version >/dev/null && echo version=$(tool_version) || echo version=none\nexit 0\n')
+        environment = dict(self.environment, TERM='dumb', HISTFILE='/dev/null')
+        result = subprocess.run([os.environ.get('BINIT_BASH', '/bin/bash'), '--noprofile', '--rcfile', str(rc), '-i'],
+                                input=script, capture_output=True, text=True, env=environment, cwd=self.root, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [line for line in result.stdout.splitlines() if '=' in line]
 
     def assert_selected_generation_usable(self, generation):
         self.assertEqual(self.current(), generation)
         self.binit('status')
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=none'])
 
     def test_clean_update_is_selected_after_its_check(self):
         self.source('v2', BASE + 'tool_version() { echo 2; }\n')
@@ -66,10 +85,38 @@ class UpdateCandidateTests(unittest.TestCase):
         self.assertEqual(code, 0, report)
         self.assertEqual(report['source_files']['changed'], ['init.bash'])
         self.assertEqual(report['regressions'], [])
+        self.assertEqual(report['review']['base'], self.first)
         self.assertEqual(self.current(), self.first)
-        self.assertEqual(self.update('select').returncode, 0)
-        self.assertNotEqual(self.current(), self.first)
+        self.assertEqual(self.select(report).returncode, 0)
+        self.assertEqual(self.current(), report['review']['generation'])
         self.assertEqual((self.state / 'previous').read_text(), self.first)
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=2'])
+        # Rollback returns new shells to the generation the update replaced.
+        self.binit('rollback')
+        self.assert_selected_generation_usable(self.first)
+
+    def test_update_staged_after_the_review_is_not_selected_in_its_place(self):
+        self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.source('v3', BASE + 'tool_version() { echo 3; }\n')
+        code, reviewed = self.stage('v2')
+        self.assertEqual(code, 0, reviewed)
+        code, later = self.stage('v3')
+        self.assertEqual(code, 0, later)
+        self.assertEqual(later['review']['base'], reviewed['review']['base'])
+        self.assertNotEqual(later['review']['generation'], reviewed['review']['generation'])
+        # Each review keeps its own private configuration, so the first stays intact.
+        configs = [Path(reviewed['proposed_config']), Path(later['proposed_config'])]
+        self.assertNotEqual(configs[0], configs[1])
+        for config in configs:
+            self.assertEqual(config.parent, self.root)
+            self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        self.assertIn(str(self.root / 'v2'), configs[0].read_text())
+        selected = self.select(reviewed)
+        self.assertNotEqual(selected.returncode, 0)
+        self.assertIn('differs from the reviewed candidate', selected.stderr)
+        self.assert_selected_generation_usable(self.first)
+        self.assertEqual(self.select(later).returncode, 0)
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=3'])
 
     def test_update_that_drops_completion_is_shown_and_never_selected(self):
         self.source('v2', '_tool() { COMPREPLY=(start stop); }\n')
@@ -77,7 +124,7 @@ class UpdateCandidateTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(report['regressions'], ['completion'])
         self.assertTrue(report['selected']['completion']['passed'])
-        self.assertNotEqual(self.update('select').returncode, 0)
+        self.assertNotEqual(self.select(report).returncode, 0)
         self.assert_selected_generation_usable(self.first)
 
     def test_update_that_adds_a_slow_load_hook_is_never_selected(self):
@@ -86,7 +133,7 @@ class UpdateCandidateTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(report['candidate_state'], 'failed')
         self.assertGreater(min(report['candidate']['completion']['elapsed_ms']), 400)
-        self.assertNotEqual(self.update('select').returncode, 0)
+        self.assertNotEqual(self.select(report).returncode, 0)
         self.assert_selected_generation_usable(self.first)
 
     def test_stale_receipt_or_changed_selection_leaves_the_selected_generation(self):
@@ -94,7 +141,7 @@ class UpdateCandidateTests(unittest.TestCase):
         code, report = self.stage('v2')
         self.assertEqual(code, 0, report)
         (self.root / 'completion.bash').write_text('true\n')
-        self.assertNotEqual(self.update('select').returncode, 0)
+        self.assertNotEqual(self.select(report).returncode, 0)
         self.assert_selected_generation_usable(self.first)
         (self.root / 'completion.bash').write_text('[[ $(complete -p tool) == *_tool* ]]\n')
         code, report = self.stage('v2')
@@ -103,7 +150,7 @@ class UpdateCandidateTests(unittest.TestCase):
         (self.root / 'other.toml').write_text('schema=1\n[[plugins]]\npath="v3"\n')
         self.binit('prepare', str(self.root / 'other.toml'))
         changed = self.current()
-        self.assertNotEqual(self.update('select').returncode, 0)
+        self.assertNotEqual(self.select(report).returncode, 0)
         self.assert_selected_generation_usable(changed)
 
 

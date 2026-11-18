@@ -28,6 +28,19 @@ Successful selection makes the candidate current for new shells and retains
 the former selection for rollback. Repeating selection preserves that previous
 reference.
 
+A later `prepare` replaces the stored candidate, so a reviewer can bind
+selection to the candidate they inspected:
+
+```bash
+binit candidate select --base BASE_GEN --generation CANDIDATE_GEN --receipt RECEIPT_SHA256
+```
+
+The three values are `base_generation`, `generation` and
+`check.receipt_sha256` from `status --json`. Under the mutation lock,
+immediately before the pointer update, selection compares them with the
+stored candidate and refuses any difference, leaving the selection unchanged.
+A first candidate has no base and can only be selected without this binding.
+
 Status reports `prepared`, `incomplete`, `failed`, `checked`, `stale` or
 `selected`. `checked` describes the last receipt with matching known inputs;
 selection also probes the current runtime's library resolution. A new attempt

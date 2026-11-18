@@ -231,7 +231,40 @@ fn check_candidate(state: &Path, plan: &Path) -> Result<()> {
     Ok(())
 }
 
-fn select_candidate(state: &Path) -> Result<()> {
+/// The identities a reviewer saw: selection proceeds only if the stored candidate still matches them.
+struct Reviewed {
+    base: String,
+    generation: String,
+    receipt: String,
+}
+
+fn reviewed(args: &[String]) -> Result<Reviewed> {
+    let (mut base, mut generation, mut receipt) = (None, None, None);
+    for pair in args.chunks(2) {
+        let [flag, value] = pair else {
+            return Err("each review flag needs a value".into());
+        };
+        let slot = match flag.as_str() {
+            "--base" => &mut base,
+            "--generation" => &mut generation,
+            "--receipt" => &mut receipt,
+            _ => return Err(format!("unknown select flag {flag}").into()),
+        };
+        if slot.replace(value.clone()).is_some() {
+            return Err(format!("{flag} given twice").into());
+        }
+    }
+    match (base, generation, receipt) {
+        (Some(base), Some(generation), Some(receipt)) => Ok(Reviewed {
+            base,
+            generation,
+            receipt,
+        }),
+        _ => Err("select needs --base, --generation and --receipt together".into()),
+    }
+}
+
+fn select_candidate(state: &Path, review: Option<&Reviewed>) -> Result<()> {
     let _guard = manager::MutationGuard::acquire(state)?;
     let state = fs::canonicalize(state)?;
     let candidate = load(&state)?;
@@ -245,6 +278,20 @@ fn select_candidate(state: &Path) -> Result<()> {
         verify_generation(&state, reference)?;
     }
     verify_generation(&state, &candidate.generation)?;
+    if let Some(review) = review {
+        let receipt = candidate
+            .check
+            .as_ref()
+            .and_then(|run| run.receipt_sha256.as_deref());
+        if candidate.base_generation.as_deref() != Some(review.base.as_str())
+            || candidate.generation != review.generation
+            || receipt != Some(review.receipt.as_str())
+        {
+            return Err(
+                "the stored candidate differs from the reviewed candidate; review it again".into(),
+            );
+        }
+    }
     if current.as_deref() != Some(&candidate.generation) {
         select_generation(&state, &candidate.generation)?;
     }
@@ -256,7 +303,10 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
     match args {
         [action, config] if action == "prepare" => prepare_candidate(state, Path::new(config)),
         [action, plan] if action == "check" => check_candidate(state, Path::new(plan)),
-        [action] if action == "select" => select_candidate(state),
+        [action] if action == "select" => select_candidate(state, None),
+        [action, review @ ..] if action == "select" => {
+            select_candidate(state, Some(&reviewed(review)?))
+        }
         [action] if action == "status" => {
             let candidate = load(state)?;
             println!("candidate  {}", candidate.generation);
@@ -273,8 +323,8 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&value)?);
             Ok(())
         }
-        _ => Err(
-            "usage: binit candidate prepare CONFIG | check PLAN | select | status [--json]".into(),
-        ),
+        _ => Err("usage: binit candidate prepare CONFIG | check PLAN \
+             | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
+            .into()),
     }
 }

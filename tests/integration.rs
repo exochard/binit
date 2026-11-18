@@ -2003,6 +2003,25 @@ fn git_hooks_run_only_on_acquisition_and_accepted_updates_with_derived_ids() {
 }
 
 #[test]
+fn update_check_prints_remote_commit_subjects_without_terminal_controls() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "subjects", "init.bash", "REVISION=one\n");
+    let line = format!("binit plugin {} files=init.bash\n", repo.url());
+    success(h.shell(&line, "binit sync\n"));
+    repo.commit(
+        "init.bash",
+        "REVISION=two\n",
+        "fix\u{1b}[1A\u{1b}[2Kup to date\u{1b}]0;title\u{7} \u{202e}txt.exe",
+    );
+    let text = success(h.binit(&["update", "--check"]));
+    assert!(!text.contains(['\u{1b}', '\u{7}', '\u{202e}']), "{text:?}");
+    assert!(
+        text.contains("fix?[1A?[2Kup to date?]0;title? ?txt.exe"),
+        "{text:?}"
+    );
+}
+
+#[test]
 fn interrupting_a_real_sync_hook_kills_background_children_and_preserves_state() {
     use std::process::Stdio;
     use std::time::{Duration, Instant};

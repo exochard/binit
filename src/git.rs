@@ -614,7 +614,20 @@ pub(super) fn changes(mirror: &Path, old: &str, new: &str) -> (Option<u64>, Vec<
         ],
     )
     .unwrap_or_default();
-    (count, log.lines().map(str::to_owned).collect())
+    (count, log.lines().map(plain_line).collect())
+}
+
+/// A remote's commit subject as shown in review: anything a terminal would act on becomes `?`.
+fn plain_line(line: &str) -> String {
+    line.chars()
+        .map(|c| {
+            if crate::releases::terminal_control(c) {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// One blob of a commit as listed by `git ls-tree`.

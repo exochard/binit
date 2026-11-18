@@ -1100,18 +1100,32 @@ static void completion_cleanup(void *data)
     active = NULL;
 }
 
-/* The byte after a possible paste header's '['. Held input returns at once; otherwise this waits the
- * normal continuation time and gives READERR, so a typed '[' reaches Readline instead of waiting for
- * a key that may never come. */
+struct header_read {
+    rl_getc_func_t *getc_function;
+    rl_hook_func_t *event_hook;
+};
+
+static void restore_header_read(void *data)
+{
+    struct header_read *saved = data;
+    rl_getc_function = saved->getc_function;
+    rl_event_hook = saved->event_hook;
+}
+
+/* The byte after a possible paste header's '['. Held input returns at once; otherwise this waits as
+ * long as read_key waits for a later sequence byte and gives READERR, so a typed '[' reaches Readline
+ * instead of waiting for a key that may never come. A jump to top level restores the reader. */
 static int read_header_byte(void)
 {
-    rl_getc_func_t *getc_function = rl_getc_function;
-    rl_hook_func_t *event_hook = rl_event_hook;
+    struct header_read saved = {rl_getc_function, rl_event_hook};
+    begin_unwind_frame("binit-header");
+    add_unwind_protect(restore_header_read, &saved);
     rl_getc_function = timed_getc;
     rl_event_hook = NULL;
     int key = rl_read_key();
-    rl_getc_function = getc_function;
-    rl_event_hook = event_hook;
+    run_unwind_frame("binit-header");
+    // As in read_timed: an interrupt during the wait takes effect now, not at the next key.
+    if ((interrupt_state || terminating_signal) && rl_signal_event_hook) (*rl_signal_event_hook)();
     return key;
 }
 

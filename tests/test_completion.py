@@ -404,6 +404,23 @@ class CompletionTests(unittest.TestCase):
                     expected = 'printf "%s" al' + key
                     self.assertEqual(session.capture(), (len(expected), expected))
 
+    def test_interrupt_while_a_bracket_waits_cancels_the_line(self):
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode), Session(mode=mode) as session:
+                session.open()
+                session.send(b"\x1b")
+                session.wait(lambda: not session.panel)
+                session.send(b"[")
+                time.sleep(.01)
+                session.send(b"\x03")
+                session.wait(lambda: session.text.count("READY>") >= 2)
+                # Idle past the header wait, so a reader left behind would now fail the next read.
+                session.pump(.3)
+                session.send("printf 'ok-%s\\n' $((1+1))\r")
+                session.wait(lambda: "ok-2" in session.text)
+                self.assertNotIn("[printf", session.text)
+                self.assertEqual(session.capture(), (0, ""))
+
     def test_late_paste_after_escape_matches_readline_in_both_keymaps(self):
         paste = b"\x1b[200~\n touch pasted\n\x1b[201~"
         for mode in ("emacs", "vi"):

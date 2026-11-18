@@ -114,7 +114,8 @@ mod tests {
             .collect();
         // One writer is the calling thread alone, as when the system refuses every thread.
         for writers in [1, 3, WRITERS, 200] {
-            let root = tempfile::tempdir().unwrap();
+            // write_entries requires a private staging directory, whatever the caller's umask.
+            let root = crate::private_tempdir();
             write_entries(root.path(), &entries, writers).unwrap();
             for (name, bytes) in &entries {
                 assert_eq!(

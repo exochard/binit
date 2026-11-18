@@ -779,6 +779,17 @@ fn prompt_segments_drop_c1_controls_and_bidirectional_marks() {
         )),
         "main0;t[2Jx \u{e9}"
     );
+    // Removing an inner sequence must not leave a new one behind, within a rule or across rules.
+    assert_eq!(
+        success(f.bash(
+            r#"
+        source "$BINIT_TEST_INIT"
+        binit_segment test $'a\xe2\x80\xe2\x80\xae\xaeb\xc2\xc2\x9b\x9bc\xd8\xd8\x9c\x9cd\xc2\xd8\x9c\x80e\xe2\x80\xe2\x81\xa6\xaef\xc2\x01\x9bg'
+        printf '%s' "${__binit_segment_value[test]}"
+    "#
+        )),
+        "abcdefg"
+    );
 }
 
 #[test]

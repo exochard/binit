@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "status": "frozen before any comparative run; the plugin list, sources, mechanisms, effects and rule may not change after an outcome is seen",
+  "scope": "Unmodified popular Bash plugins loaded through each framework's documented mechanism in a private fixture, with GNU Readline as the editor for every framework. Separate from release evidence.",
+  "environment": {
+    "image": "ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3",
+    "architecture": "x86_64",
+    "apt_snapshot": "20261115T000000Z",
+    "apt_packages": ["bash-completion", "git", "build-essential", "bash-builtins", "libreadline-dev", "libclang-dev", "pkg-config", "cmake", "python3", "xz-utils", "ca-certificates"],
+    "bash": "the image's /bin/bash; its version and SHA-256 are recorded with every result",
+    "private_home": "a new HOME per framework and per shell, with INPUTRC=/dev/null, HISTFILE inside that HOME, LC_ALL=C.UTF-8, TERM=xterm-256color, no inherited BASH_ENV, ENV or BASH_FUNC_ variables",
+    "pty": "scripts/terminal.py Terminal, an interactive login-free shell reading only the private ~/.bashrc",
+    "network": "none while shells run; sources are staged and hashed before the run"
+  },
+  "frameworks": {
+    "binit": {
+      "source": "the Binit source under test, built in the image; its commit is recorded",
+      "startup": "eval \"$(binit init)\" followed by one binit plugin line per plugin, then binit sync in a setup shell"
+    },
+    "bash-it": {
+      "repository": "Bash-it/bash-it",
+      "revision": "72ea9e285fe1828977d1cd2bc596b901bcc57440",
+      "archive_sha256": "f658453d98d281ba109f2addabb4129eef519a1fc60bff9b83dfdcad08424c95",
+      "startup": "a clone of the pinned revision copied to ~/.bash_it, then install.sh --silent, which writes the template ~/.bashrc and enables the default profile",
+      "documentation": "https://bash-it.readthedocs.io/en/latest/installation/"
+    },
+    "oh-my-bash": {
+      "repository": "ohmybash/oh-my-bash",
+      "revision": "94c2977eda06f230aafa9628fcd869123f01896b",
+      "archive_sha256": "2d50a7eb5573d3611e9fe46e4c56b27e230cb6941c8fe88f695d71bfefaffff9",
+      "startup": "tools/install.sh --unattended with OSH_REPOSITORY set to a clone of the pinned revision, which writes the template ~/.bashrc; its plugins and completions arrays are edited only to add the plugin under test",
+      "documentation": "https://github.com/ohmybash/oh-my-bash#basic-installation"
+    }
+  },
+  "plugins": {
+    "git-completion": {
+      "source": "the distribution's /usr/share/bash-completion/completions/git from the snapshot's git package",
+      "mechanisms": {
+        "binit": "binit plugin /usr/share/bash-completion/completions id=git-completion files=git",
+        "bash-it": "bash-it enable completion git",
+        "oh-my-bash": "completions=(git)"
+      },
+      "effect": "Completing `git ch` with the registered completion (loading it through a default completion loader first when one is registered) offers both checkout and cherry-pick."
+    },
+    "bash-completion": {
+      "source": "the distribution's /usr/share/bash-completion/bash_completion from the snapshot's bash-completion package",
+      "mechanisms": {
+        "binit": "binit plugin /usr/share/bash-completion id=bash-completion files=bash_completion",
+        "bash-it": "bash-it enable completion system",
+        "oh-my-bash": "completions=(system)"
+      },
+      "effect": "BASH_COMPLETION_VERSINFO is at least 2, _comp_initialize or _init_completion exists, a default completion loader is registered, and calling it for make registers make's completion."
+    },
+    "fzf": {
+      "release": "junegunn/fzf v0.75.0 (tag commit 838f46b476eb66b2e034c7fbb4ade86d1c973c66)",
+      "binary_archive": "fzf-0.75.0-linux_amd64.tar.gz",
+      "binary_archive_sha256": "0d6640f83582d991cf429754baad64b07e3a4e439a6019670f4b91da1314141c",
+      "shell_files_sha256": {
+        "shell/key-bindings.bash": "89103adb2e29816b0ed8f36814ce4c95945a5f1c7dcd3b0620d2973ea2dbd6ea",
+        "shell/completion.bash": "263f7c4e602c002747175c69efa507bd3fb663633bb2419efda2e7641ffb6912"
+      },
+      "install": "the binary in /usr/local/bin and the tag's shell/ directory in /opt/fzf/shell",
+      "mechanisms": {
+        "binit": "binit plugin /opt/fzf/shell id=fzf files=completion.bash,key-bindings.bash",
+        "bash-it": "~/.fzf.bash containing eval \"$(fzf --bash)\", as fzf's installer writes it, then bash-it enable plugin fzf",
+        "oh-my-bash": "plugins=(fzf)"
+      },
+      "effect": "fzf-file-widget and __fzf_history__ exist, bind -X lists both as key commands, and `printf 'alpha\\nbeta\\n' | fzf --filter beta` prints beta."
+    },
+    "nvm": {
+      "repository": "nvm-sh/nvm",
+      "versions": {
+        "0.40.2": {"commit": "ffec9fec724da725013d5b50e763908113983fc3", "nvm_sh_sha256": "9290aec6cc2efc89273e16a77214eb37303caaff8c943102de5116fdef47ba86"},
+        "0.40.3": {"commit": "977563e97ddc66facf3a8e31c6cff01d236f09bd", "nvm_sh_sha256": "390260ab9eb1da20e8bc0ebea2ee90f528d53e5e9f6e13b16717db4af454df9d"}
+      },
+      "compared_version": "0.40.3",
+      "install": "nvm.sh alone in a private NVM_DIR=$HOME/.nvm, as nvm's manual install describes; no Node is installed",
+      "mechanisms": {
+        "binit": "binit plugin $HOME/.nvm id=nvm files=nvm.sh load=command commands=nvm",
+        "bash-it": "bash-it enable plugin nvm",
+        "oh-my-bash": "plugins=(nvm)"
+      },
+      "effect": "nvm --version prints the compared version and NVM_DIR holds no installed Node afterwards."
+    }
+  },
+  "editor_pairings": {
+    "covered": "GNU Readline with each framework",
+    "not_covered": "ble.sh with any framework; Binit's native menu on or off is recorded but not compared"
+  },
+  "rule": "Per plugin, a framework passes when every assertion of the plugin's effect holds in a fresh shell. Win: Binit passes strictly more plugins and every plugin another framework passes. Tie: the same passing set. Loss: another framework passes a plugin Binit fails. Anything else is inconclusive. A plugin unsupported by a framework's documented mechanism is a failure for that framework, reported as unsupported.",
+  "binit_lifecycle": {
+    "steps": [
+      "Start from nvm 0.40.2 declared from its own private directory and record the selected generation.",
+      "Pinned update: declare nvm 0.40.3 instead, sync, and check a fresh shell reports 0.40.3 on a new generation.",
+      "Failed update: declare a source whose file is missing, sync, and check the sync fails and the selected generation is unchanged.",
+      "Rollback: binit rollback, and check the selected generation is exactly the first one and a fresh shell reports 0.40.2.",
+      "Fresh shell: every plugin effect still holds on the rolled-back generation."
+    ],
+    "user_definition": "A user function defined in ~/.bashrc after the plugin lines exists in the live shell after each sync and in every fresh shell.",
+    "receipts": "kept apart from release evidence"
+  }
+}

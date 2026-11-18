@@ -32,11 +32,15 @@ class SourceTrialRecipeTests(unittest.TestCase):
             subprocess.run(['git', '-C', str(source), *args], check=True, capture_output=True)
         blocks = re.findall(r'```bash\n(.*?)\n```', (ROOT / 'docs/source-trial.md').read_text(), re.S)
         block = next(text for text in blocks if 'Expected sources.json SHA256' in text)
-        for variant in ('valid', 'wrong-manifest', 'altered-archive-and-checksum-list'):
+        for variant in ('valid', 'wrong-manifest', 'altered-archive-and-checksum-list', 'planted-module'):
             with self.subTest(variant=variant):
                 bundle = work / variant
                 manifest = package(source, [], bundle)
                 trusted_sha = hashlib.sha256((bundle / 'sources.json').read_bytes()).hexdigest()
+                if variant == 'planted-module':
+                    # A module beside the received files must not shadow the standard library.
+                    (bundle / 'json.py').write_text('from pathlib import Path\nPath("REJECTED_CODE_EXECUTED").touch()\n'
+                                                    'raise SystemExit(1)\n')
                 if variant == 'wrong-manifest':
                     trusted_sha = '0' * 64
                 if variant == 'altered-archive-and-checksum-list':
@@ -50,7 +54,7 @@ class SourceTrialRecipeTests(unittest.TestCase):
                 result = subprocess.run(['bash', '-c', block.replace('/path/to/source-bundle', shlex.quote(str(bundle)))],
                                         input=trusted_sha + '\n', text=True, capture_output=True, timeout=10)
                 self.assertFalse((bundle / 'REJECTED_CODE_EXECUTED').exists())
-                if variant == 'valid':
+                if variant in ('valid', 'planted-module'):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertTrue((bundle / 'trial/core/Cargo.lock').is_file())
                 else:

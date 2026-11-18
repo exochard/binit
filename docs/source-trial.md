@@ -55,15 +55,17 @@ and extract the bootstrap verifier from its fixed path:
 cd /path/to/source-bundle &&
 read -r -p 'Expected sources.json SHA256: ' source_manifest_sha &&
 printf '%s  sources.json\n' "$source_manifest_sha" | sha256sum --check &&
-python3 -c 'import json; r=json.load(open("sources.json")); [print(p["sha256"]+"  "+p["artifact"]) for p in [r["core"], *r["plugins"]]]' | sha256sum --check &&
-core_archive=$(python3 -c 'import json; print(json.load(open("sources.json"))["core"]["artifact"])') &&
+python3 -I -c 'import json; r=json.load(open("sources.json")); [print(p["sha256"]+"  "+p["artifact"]) for p in [r["core"], *r["plugins"]]]' | sha256sum --check &&
+core_archive=$(python3 -I -c 'import json; print(json.load(open("sources.json"))["core"]["artifact"])') &&
 mkdir bootstrap &&
 tar -xzf "$core_archive" -C bootstrap scripts/unpack_sources.py &&
-python3 bootstrap/scripts/unpack_sources.py . trial &&
+python3 -I bootstrap/scripts/unpack_sources.py . trial &&
 cd trial/core
 ```
 
 Bootstrap extraction runs only after the trusted manifest and archive checks.
+Python runs with `-I`, so a stray module beside the received files cannot run
+in place of the standard library before those checks.
 The checksum lines above come from that manifest. `SHA256SUMS` is a convenience
 copy and is not the trust anchor for bootstrap execution.
 The complete unpacker rechecks the archives against `sources.json`. It checks

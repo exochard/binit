@@ -61,7 +61,8 @@ directory and writes tool identities to `verification/environment.json` there.
 Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
 Native completion and post-prompt PTY checks run in native-enabled jobs.
 CI runs `scripts/verify.bash` on Ubuntu 24.04 with Bash 5.2 and 5.3, with the
-native module enabled and disabled.
+native module enabled and disabled. On GitHub the workflows start from the
+Actions tab; pull requests do not trigger them yet.
 
 The native menu tests use a real Bash PTY with a terminal emulator. They check
 the visible screen and command-line state, including cancellation, paste,

@@ -245,10 +245,15 @@ def resource_sample(pid, proc=Path('/proc')):
             try:
                 row['fds'] = len(list((base / 'fd').iterdir()))
             except PermissionError:
-                # Some kernels deny the fd listing after a single-threaded child exits.
-                if row['state'] != 'Z' or fields != ['0'] * 7 or not re.search(r'^Threads:[ \t]+1$', status, re.M):
+                # Some kernels deny the fd listing once a single-threaded child has released its memory
+                # on exit, while its state still reads R or S. A live process keeps mapped pages, so
+                # read again: a zombie is recorded without descriptors, an exiting child has vanished.
+                status = (base / 'status').read_text()
+                if (base / 'statm').read_text().split() != ['0'] * 7 or not re.search(r'^Threads:[ \t]+1$', status, re.M):
                     raise
-                row['fds'] = 0
+                if not re.search(r'^State:\s+Z', status, re.M):
+                    raise ProcessLookupError(child) from None
+                row.update(state='Z', resident_pages=0, rss_kib=0, fds=0)
             pending.extend(map(int, (base / f'task/{child}/children').read_text().split()))
             rows.append(row)
         except (FileNotFoundError, ProcessLookupError):

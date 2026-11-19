@@ -202,6 +202,43 @@ class EcosystemIntegrityTests(unittest.TestCase):
                 with self.assertRaises(PermissionError):
                     corpus.resource_sample(123, proc)
 
+    def test_resource_sampler_treats_denied_child_without_memory_as_exiting(self):
+        # Seen on a 6.18 kernel: an exiting child reads State R with zero statm and denies fd access.
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            for pid, statm in ((123, '5 2 0 0 0 0 0\n'), (456, '0 0 0 0 0 0 0\n')):
+                root = proc / str(pid)
+                (root / 'fd').mkdir(parents=True)
+                (root / f'task/{pid}').mkdir(parents=True)
+                (root / 'status').write_text('Name: fixture\nState:\tR (running)\nThreads:\t1\n')
+                (root / 'statm').write_text(statm)
+            (proc / '123/task/123/children').write_text('456\n')
+            (proc / '456/task/456/children').write_text('')
+            listed = Path.iterdir
+
+            def deny_exiting(path):
+                if path == proc / '456/fd':
+                    raise PermissionError('fixture denies fd access')
+                return listed(path)
+
+            with patch.object(Path, 'iterdir', deny_exiting):
+                sample = corpus.resource_sample(123, proc)
+            self.assertEqual(sample['processes'], 1)
+            self.assertEqual(sample['vanished_processes'], 1)
+            self.assertTrue(sample['partial'])
+            (proc / '456/status').write_text('Name: fixture\nState:\tZ (zombie)\nThreads:\t1\n')
+            with patch.object(Path, 'iterdir', deny_exiting):
+                sample = corpus.resource_sample(123, proc)
+            self.assertEqual((sample['processes'], sample['zombies'], sample['fds_sum']), (2, 1, 0))
+            (proc / '456/statm').write_text('5 2 0 0 0 0 0\n')
+            with patch.object(Path, 'iterdir', deny_exiting):
+                with self.assertRaises(PermissionError):
+                    corpus.resource_sample(123, proc)
+            (proc / '123/statm').write_text('0 0 0 0 0 0 0\n')
+            with patch.object(Path, 'iterdir', side_effect=PermissionError('fixture denies fd access')):
+                with self.assertRaisesRegex(RuntimeError, 'owned shell disappeared'):
+                    corpus.resource_sample(123, proc)
+
 
 if __name__ == '__main__':
     unittest.main()

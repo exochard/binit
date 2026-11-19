@@ -11,7 +11,7 @@ binit plugin ~/src/tool files=init.sh,comp.bash load=command commands=tool
 binit plugin ~/src/thing id=thing requires=git load=prompt
 ```
 
-Then run `binit sync` and open a new shell with `exec bash`. The first `binit init` creates an empty generation in the state directory (`--state`, else `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else `~/.local/share/binit`; each must be absolute).
+Put the `eval` line in `~/.bashrc` (see [install](install.md)) and the plugin lines after it. Then run `binit sync` and open a new shell with `exec bash`. The first `binit init` creates an empty generation in the state directory (`--state`, else `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else `~/.local/share/binit`; each must be absolute).
 
 Grammar: `binit plugin SOURCE [KEY=VALUE...]`. Sources are absolute local directories, Git repositories, `release:OWNER/REPO` assets or `snippet:https://...` scripts. Common keys are `id`, `files`, `bin`, `load`, `commands`, `completions`, `requires` and `depends`. Acquisition and lifecycle keys are described below. List values are comma-separated and each key appears once. `load` is `startup` (default), `prompt`, `wait`, `command`, `completion`, `timed`, `event` or `watch`. See [scheduling and lifecycle](runtime-features.md) for `delay_ms`, `when`, `event` and `watch`.
 
@@ -42,7 +42,7 @@ binit plugin user/repo bin=git-foo files=foo.bash
 binit plugin user/scripts bin=tool.sh:tool
 ```
 
-Publishing copies each command of every enabled plugin to `bin/NAME` in the generation with mode 0700, the only executable files, and records the owning plugin in `lock.toml` (`[bin]`, name to plugin ID). Two enabled plugins with the same NAME fail the sync or publish naming both. Startup verification checks that `bin/` holds exactly the locked files, regular, owned by you and mode 0700. `init.bash` prepends `bin/` to `PATH` once (a re-sourced startup file does nothing; `BINIT_SAFE=1` skips init). Commands are generation-wide: a line removed from `.bashrc` keeps its command until the next `binit sync`, and the first-prompt notice says so. A command runs from its copy, so it cannot rely on sibling files. `binit inspect ID` lists them under `Programs:`.
+Publishing copies each command of every enabled plugin to `bin/NAME` in the generation with mode 0700, the only executable files, and records the owning plugin in `lock.toml` (`[bin]`, name to plugin ID). Two enabled plugins with the same NAME fail the sync or publish naming both. Startup verification checks that `bin/` holds exactly the locked files, regular, owned by you and mode 0700. `init.bash` prepends `bin/` to `PATH` once (a re-sourced startup file does nothing; `BINIT_SAFE=1` skips init). Commands are generation-wide: a line removed from `.bashrc` keeps its command until the next `binit sync`, and the first-prompt notice says so. A command runs from its copy, so it cannot rely on sibling files. `binit inspect ID` lists them in the `programs` row.
 
 ## Release assets and snippets
 
@@ -149,7 +149,7 @@ requires = ["git"]
 depends = []
 ```
 
-`load` accepts `startup`, `prompt`, `wait`, `completion`, or `command`. Completion plugins declare `completions = ["command"]`; first-use plugins declare `commands = ["tool"]`. Dependencies must be enabled and form an acyclic graph. An explicit dependency can load a plugin earlier than its usual trigger.
+`load` accepts `startup`, `prompt`, `wait`, `completion`, `command`, `timed`, `event` or `watch`. The manifest keys `delay_ms`, `event`, `when` and `watch` configure the scheduling values; see [scheduling and lifecycle](runtime-features.md). Completion plugins declare `completions = ["command"]`; first-use plugins declare `commands = ["tool"]`. Dependencies must be enabled and form an acyclic graph. An explicit dependency can load a plugin earlier than its usual trigger.
 
 An existing completion specification blocks the corresponding completion plugin, including when another plugin depends on it. Dependants become unavailable. Plugins must use unique function names and respect the runtime's `__binit_` namespace.
 

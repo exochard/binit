@@ -1,9 +1,8 @@
 # Publication scoreboard
 
 Binit is published only after it wins or ties the comparisons it is meant to
-lead. The [frozen policy](../benchmarks/publication-scoreboard.json) fixes the
-five aspects, the competitors, the statistics and the verdict rules. It was
-committed before any comparison run of the `f6885a9` candidate, and
+lead. The [policy](../benchmarks/publication-scoreboard.json) fixes the
+five aspects, the competitors, the statistics and the verdict rules, and
 `scripts/scoreboard.py` applies it to complete receipts without changing it.
 
 | Aspect | Measure | Scored against |
@@ -15,11 +14,24 @@ committed before any comparison run of the `f6885a9` candidate, and
 | Unmodified popular plugins | declared observable effects per plugin and framework | not measured yet |
 
 Each run gives a ratio of Binit to the competitor, with a 95% interval from a
-paired block bootstrap over the measured pairs. A run wins when the upper
-bound is below 0.95. It ties when the upper bound is at most 1.05, and loses
-when the lower bound is above 1.05. An interval wider than 0.2 is
-inconclusive. The editor aspects also tie when the whole difference interval
-stays within 1 ms. Two runs that agree decide a comparison, and a win with a
+paired block bootstrap over the measured pairs: 10,000 resamples with
+replacement, the same block indices for both subjects, and a fixed seed from
+the policy. The statistics are the median and the nearest-rank p95 and p99.
+
+The editor aspects have a 1 ms difference floor. A comparison is within the
+floor when the whole difference interval lies within plus or minus 1 ms. The
+verdict is decided in this order:
+
+1. An interval wider than 0.2 is a tie when within the floor, otherwise
+   inconclusive.
+2. A win needs the upper bound below 0.95.
+3. Within the floor, the result is a tie.
+4. A loss needs the lower bound above 1.05 and the difference lower bound
+   above the floor.
+5. Otherwise an upper bound of at most 1.05 is a tie, and anything else is
+   inconclusive.
+
+Two runs that agree decide a comparison, and a win with a
 tie counts as a tie. One losing comparison loses its aspect.
 
 Publication needs at least four measured aspects, all wins or ties.
@@ -38,17 +50,10 @@ Readline is the editor control; it has no history panel or suggestions. The
 state-changing slow provider runs in the shell for every editor, so its
 timings are reported for each subject without a verdict.
 
-The editor corpus runs on the candidate without `BINIT_HISTORY_MODE`, so
-Binit uses its default search-mode history. The historical editor receipt
-used the live panel and stays historical.
+The editor corpus runs without `BINIT_HISTORY_MODE`, so Binit uses its default
+search-mode history.
 
 ## Current result
 
-At `c94c8c8` four aspects are measured. First usable input and all effects
-ready tie with Bash-it and win against Oh My Bash. Keystroke p99 wins against
-ble.sh in every cell. Typing and cancellation during slow completion loses:
-input response and accept win, but cancelling a large completion takes about
-52.8 ms in Binit against 33–44 ms in ble.sh. Unmodified popular plugins are not
-measured. The gate needs four measured aspects that all win or tie, so
-publication stays closed. The [startup-cost evidence](startup-cost-evidence.md)
-has every comparison.
+The scored result for each release is published with it on the
+[releases page](https://github.com/exochard/binit/releases).

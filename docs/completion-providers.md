@@ -4,9 +4,7 @@ An isolated provider runs outside the interactive Bash process. Typing cancels
 its request and keeps the input on the command line. Bash retains ordinary
 completion functions for providers that change calling-shell state.
 
-This interface is qualified on x86_64 with matching Bash 5.2 and 5.3.
-Correctness, cancellation measurements and preservation limits are recorded in
-[the qualification evidence](completion-provider-evidence.md).
+Providers were checked on x86_64 with Bash 5.2 and 5.3.
 
 ## Register a provider
 
@@ -20,6 +18,7 @@ binit completions enable task
 binit completions unregister task
 ```
 
+Here `--project local` is an argument for the provider, passed to it literally.
 `PROGRAM` can be an executable path or a command found on `PATH`. Registration
 resolves it to an absolute path. Remaining arguments are fixed arguments,
 passed literally on every request. They are ordinary process arguments;
@@ -106,5 +105,4 @@ remain intact.
 Registration requires the matching native module. A native-disabled build
 refuses registration without changing existing completion specifications.
 The current implementation requires Linux `close_range`, anonymous sealed
-memory files and GNU's spawn close-from operation. ARM64 execution evidence
-remains a separate qualification gate.
+memory files and GNU's spawn close-from operation. Binit 0.1 supports Linux x86_64.

@@ -4,15 +4,28 @@ The trial builds Binit from source and opens a separate Bash with seven
 explicitly selected plugins. It keeps its own history and does not edit shell
 startup files. Core installation remains a separate opt-in operation.
 
-This path requires a reviewed source bundle. Public download URLs are not
-established yet. A bundle contains the core archive, separate archives for
-the selected independent plugins, `sources.json` and `SHA256SUMS`. Its sender
-must provide the expected manifest checksum through a trusted channel;
-checksums inside an altered bundle do not authenticate its author.
+The source release publishes the bundle. Download
+`binit-0.1.0-<commit>-sources.tar.gz` and `SHA256SUMS` from
+https://github.com/exochard/binit/releases/download/v0.1.0/ and verify the
+archive:
 
-## Create the bundle
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf binit-0.1.0-*-sources.tar.gz
+```
 
-From a committed core checkout, choose each independent plugin explicitly:
+This creates `source-bundle/` with the core archive, one archive per plugin,
+`sources.json` and `SHA256SUMS`. The plugins are development plugins; their
+sources ship in this bundle and are not released separately.
+
+The release notes on the release page state the expected SHA256 of
+`sources.json`. The unpack step below asks for that value before it runs any
+code from the bundle; checksums inside an altered bundle would not
+authenticate it.
+
+## Create a bundle
+
+To build a bundle yourself, run this from a committed core checkout and choose each independent plugin explicitly:
 
 ```bash
 python3 scripts/package_sources.py . tmp/source-bundle \
@@ -35,8 +48,8 @@ core-only bundle; it does not select the full trial.
 
 ## Prepare Linux dependencies
 
-The declared qualification environment is Ubuntu 24.04 on x86_64. Install
-build dependencies explicitly in that environment:
+The trial is tested on Ubuntu 24.04 on x86_64. Install build dependencies
+explicitly in that environment:
 
 ```bash
 sudo apt-get update
@@ -48,7 +61,7 @@ sudo apt-get install -y build-essential bash-builtins libreadline-dev libclang-d
 ## Unpack the declared sources
 
 Starting with only the received bundle, first compare its manifest checksum
-with the expected value supplied by the sender. Then verify the archives
+with the expected value from the release notes. Then verify the archives
 and extract the bootstrap verifier from its fixed path:
 
 ```bash
@@ -76,7 +89,7 @@ selected plugin IDs above; missing sources are named in the launch error.
 ## Prepare build tools
 
 Use Rust with edition 2024 support, Cargo, and tree-sitter CLI 0.26.9. The
-qualification recipe acquires Rust 1.99.1 explicitly into a local tools
+commands below acquire Rust 1.99.1 explicitly into a local tools
 directory. From the received core source tree on x86_64:
 
 ```bash
@@ -135,5 +148,5 @@ exit
 
 `exit` returns to the parent shell. Launch `make demo` again to continue the
 same trial. To start over, choose a new `BINIT_DEMO_ROOT`. Existing Readline
-settings are preserved. The trial does not qualify every terminal or third-party
-plugin; the [qualification inventory](qualification.md) records those gates.
+settings are preserved. The trial does not cover every terminal or third-party
+plugin.

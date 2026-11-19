@@ -1,7 +1,7 @@
 # Template configurations and project roles
 
-The [frozen policy](../benchmarks/ecosystem-defaults.json) records the selected
-upstream templates before measurement. Bash-it runs its silent installer in a
+The [policy](../benchmarks/ecosystem-defaults.json) records the selected
+upstream templates. Bash-it runs its silent installer in a
 private copy and checks the generated `bobby` template and the complete default
 profile. Oh My Bash sources its unchanged `font` template with the documented
 component arrays and update checks enabled. Both use private homes.
@@ -42,36 +42,9 @@ Each launch uses a private runtime directory in project scratch. The runner
 retains terminal output through shell exit and rejects abnormal or forced exits.
 Earlier receipts keep their original environment and close-observation scope.
 
-## Measured template cases
+## Results
 
-The [measurement receipt](../benchmarks/results/ecosystem-defaults-x86_64.json)
-contains two runs of 20 blocks for each case, after seven checked priming
-launches. All 280 measured launches passed their effect and private-state
-checks, and all 287 sessions, including the seven priming launches, completed
-normal exits with status zero and complete terminal output. The first column
-measures from launch until an executed command has returned to the prompt;
-the second ends after the required-effect probe.
-Values are median milliseconds, run 1 / run 2.
-
-| Case | Accepted prompt | Required effects |
-| --- | ---: | ---: |
-| Bare Bash | 9.950 / 10.067 | 10.312 / 10.435 |
-| Bash-it `bobby` template | 146.299 / 142.383 | 165.711 / 160.129 |
-| Oh My Bash `font`, update not due | 61.797 / 59.821 | 66.233 / 64.208 |
-| Oh My Bash `font`, due update declined | 61.805 / 60.317 | 65.949 / 64.835 |
-| Standalone ble.sh trial | 235.574 / 239.950 | 484.417 / 490.873 |
-| Bare Zsh | 4.650 / 4.714 | 5.240 / 5.317 |
-| Zinit loader, no plugins | 13.948 / 14.219 | 15.241 / 15.508 |
-
-These configurations perform different work. The standalone ble.sh probe checks
-editor readiness; the framework cases check their declared template effects.
-Binit has no universal installed default in this comparison. The receipt retains
-all raw rows and p95 values, so the table is not an overall product ranking.
-
-An earlier short smoke failed its source-identity check after ble.sh generated
-cache files in the shared source tree. Its receipt and original observation
-scope are retained alongside the completed result. Later runs use private
-copies and check the source inventory. The measurement does not establish an
-editor feature equivalence, a new 25% workload gain or release qualification.
-The eight local outcomes of the [modern-Binit milestone](modern-binit-milestone.md)
-later passed at `b6532e8`; release qualification keeps its separate gates.
+Measured results ship with each release at
+https://github.com/exochard/binit/releases. The cases perform different work, so
+they are not an overall product ranking, and they do not establish editor
+feature equivalence.

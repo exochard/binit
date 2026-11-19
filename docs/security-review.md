@@ -73,8 +73,8 @@ identity on update, and the installer's atomic writes sound.
 
 ## Whole-project audit, 2026-11-18
 
-A third reviewer, from a different model family, audited the whole manager,
-runtime, native module and installer at `3d1e217`, with proofs of concept run
+A third independent review audited the whole manager,
+runtime, native module and installer, with proofs of concept run
 only in scratch state. It found one medium issue and no critical or high one.
 
 | Severity | Finding | Status |

@@ -1,9 +1,7 @@
 # Contributing to Binit
 
 Binit manages Bash plugins and prepares verified shell initialization files.
-Start with a local plugin or a focused bug fix. The
-[0.1 release plan](docs/release-0.1.md) describes work that still needs evidence
-before it can ship.
+Start with a local plugin or a focused bug fix.
 
 ## Development
 
@@ -21,13 +19,17 @@ source .venv/bin/activate
 cargo fetch --locked
 cargo build --release --locked --offline
 bash scripts/verify.bash
-bash scripts/demo.bash
+make demo
 ```
 
-The demo opens a separate vi-mode Bash with all seven independent plugins.
 The [source trial](docs/source-trial.md) documents an explicit source bundle
 for a fresh Linux environment, including dependency acquisition.
-Clone their repositories under `../binit-plugins`, or set `BINIT_PLUGIN_ROOT`.
+
+`make demo` opens a separate vi-mode Bash with seven development plugins
+(git-prompt, git-completion, project-context, directory-jump, history-search,
+syntax-highlighting, autosuggestions). It reads them from `../binit-plugins`,
+or from `BINIT_PLUGIN_ROOT`; extract the per-plugin archives from the source
+release there.
 State and private history live under `.local-demo-interactive/`; `exit` returns
 to the parent shell. Existing startup files and Readline settings are preserved.
 The first editor dependency preparation requires tree-sitter CLI 0.26.9; builds
@@ -58,7 +60,8 @@ directory and writes tool identities to `verification/environment.json` there.
 `BINIT_NATIVE=0 bash scripts/verify.bash` qualifies the native-disabled build:
 Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
 Native completion and post-prompt PTY checks run in native-enabled jobs.
-See [qualification](docs/qualification.md) for CI coverage and remaining gates.
+CI runs `scripts/verify.bash` on Ubuntu 24.04 with Bash 5.2 and 5.3, with the
+native module enabled and disabled.
 
 The native menu tests use a real Bash PTY with a terminal emulator. They check
 the visible screen and command-line state, including cancellation, paste,
@@ -76,8 +79,8 @@ python3 scripts/check_plugins.py --fzf /usr/share/fzf --bash-completion /usr/sha
 ```
 
 Each option is independent. The checker initializes NVM and queries its
-version; it does not install Node. See [the compatibility receipt](docs/plugin-compatibility.md)
-for the locally qualified sources.
+version; it does not install Node. See [plugin compatibility](docs/plugin-compatibility.md)
+for the checked sources.
 
 ## Plugins and runtime changes
 
@@ -106,8 +109,7 @@ Use a new output filename when repeating the runner.
 Read [the benchmark procedure](docs/benchmarks.md) before changing an engine
 or validation script. It explains how to build the pinned GNU Bash sources
 and run the fixed suite. Compiler training uses separate code. A short trial
-is useful for diagnosis; only the complete paired runs can satisfy the release
-gate.
+is useful for diagnosis; only the complete paired runs are comparable.
 
 ## Sending a change
 

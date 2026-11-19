@@ -2,7 +2,7 @@
 
 Report a vulnerability privately through GitHub's **Report a vulnerability**
 button on this repository's Security tab. Please do not open a public issue for
-it. Include the Binit commit, your Bash version and the steps that show the
+it. Include the Binit version, your Bash version and the steps that show the
 problem.
 
 ## Scope
@@ -23,5 +23,4 @@ Reports in scope include:
 - an isolated completion worker escaping its resource limits or outliving its
   cancellation.
 
-Only the latest commit on the default branch is supported until a release is
-tagged.
+Supported versions are the 0.1.x releases and the default branch.

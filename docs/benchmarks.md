@@ -31,10 +31,7 @@ source version and configure options, including `--without-bash-malloc`.
 Neither is installed. Profiles come from `engines/bash/train.bash`, which
 does not run validation scripts.
 
-The [frozen local recipe](stability.md) rebuilds and verifies the retained
-patched engine. Its builds remain experimental; build verification grants
-no release qualification. The measurement and scoring procedure below is
-unchanged, including its provenance requirements.
+Builds are experimental; building and testing an engine does not promote it.
 
 Use a separate name to compare compiler variants without replacing an
 existing build:
@@ -58,10 +55,10 @@ on diff output even though upstream's `run-all` normally exits zero.
 Calibration chooses a count for each script, targeting 300 ms and confirming
 at least 200 ms in repeated baseline executions. `benchmarks/suite.lock.json`
 freezes those counts, expected outputs, and script hashes before optimization.
-The committed lock is part of the experiment. The initial calibration used
+The committed lock is part of the experiment. The calibration command is
 `python3 scripts/benchmark.py freeze --engine .cache/engines/reference/bash`.
 Recalibration creates a new
-experiment and requires a reviewed change; the runner refuses to overwrite
+experiment; the runner refuses to overwrite
 it. On a different machine, retain the old lock before generating a new one.
 
 ## Run and compare
@@ -89,7 +86,7 @@ remain available for diagnosis.
 
 For each case and run, take the median of paired candidate/baseline elapsed
 time ratios. Each case has equal weight in the geometric mean; each family
-contains two cases. The release threshold is a ratio at or below 0.75 in all
+contains two cases. The promotion threshold is a ratio at or below 0.75 in all
 three runs against each baseline. This means a 25% reduction in elapsed time.
 
 At least three families must have ratios below 1 in every run. A family ratio
@@ -98,10 +95,10 @@ Baseline medians must remain at least 200 ms per case. Thirty samples per run
 and three complete runs are mandatory. Build provenance must agree with the
 measured binaries. Missing evidence leaves `release_gate_pass` false.
 
-Use `--samples 3 --runs 1` for an initial trial. It cannot pass the release
+Use `--samples 3 --runs 1` for an initial trial. It cannot pass the
 gate. Keep raw logs out of Git and publish a compact result with enough
 provenance for another contributor to repeat it. Passing this timing gate
-alone does not establish Bash compatibility or satisfy the release plan.
+alone does not establish Bash compatibility.
 `compare` exits with status 1 when the gate fails, including for a short trial.
 
 ## Profile
@@ -110,132 +107,9 @@ alone does not establish Bash compatibility or satisfy the release plan.
 for GNU gprof. Run `engines/bash/profile.bash` with it from a scratch directory,
 then inspect the resulting `gmon.out`. This diagnostic workload is separate
 from the fixed timing suite. Instrumented elapsed times cannot qualify a
-release candidate.
+candidate.
 
-## Initial PGO trial
+## Status
 
-The 2026-11-06 x86_64 trial used three paired samples in one run on a Ryzen 7
-9800X3D, with GCC 16.2.1 and glibc 2.44. The geometric mean elapsed-time ratio
-was 0.8747 against the unmodified reference and 0.8599 against installed Bash.
-That corresponds to reductions of 12.5% and 14.0% respectively. The required
-ratio is 0.75. This trial does not qualify the candidate.
-
-| Family | Time reduction against reference |
-| --- | ---: |
-| Arithmetic | 21.9% |
-| Strings | 22.4% |
-| Arrays | 18.6% |
-| Functions | 19.0% |
-| Patterns | -5.1% |
-| Filesystem | 12.8% |
-| Pipelines | 0.7% |
-| Command substitution | 5.7% |
-
-The [receipt](../benchmarks/results/pgo-x86_64.json) includes raw durations,
-binary digests, and the fixed-suite digest. A negative reduction means the
-candidate took longer. Three samples cannot establish a repeatable regression;
-the pattern result needs further investigation. Upstream compatibility tests
-also report differences, including differences in the unmodified reference.
-Their causes must be resolved before distributing an engine.
-
-## Further local experiments
-
-Four short trials on the same machine screened changes to name hashing and
-compiler optimization. Each used three pairs in one run and the unchanged
-validation suite. A candidate needed a paired elapsed-time ratio at or below
-0.98 against its incremental baseline before further confirmation. This
-screen is separate from the 0.75 release requirement.
-
-| Treatment | Incremental baseline | Paired ratio | Screen |
-| --- | --- | ---: | --- |
-| Reuse a name hash across variable contexts, O2 | Unmodified O2 | 0.9925 | Failed |
-| Unroll the hash loop, O2 | Unmodified O2 | 1.0036 | Failed |
-| Use multiplication for the equivalent hash step, O2 | Unmodified O2 | 0.9818 | Failed |
-| Hash multiplication with PGO | Unmodified O3 PGO | 0.9872 | Failed |
-| O2 PGO | Unmodified O3 PGO | 1.0211 | Failed |
-| Compare short keys inline, with hash multiplication and PGO | Unmodified O3 PGO | 0.9839 | Failed |
-
-No local C patch was selected. The original PGO recipe remains the default.
-The [diagnostic receipt](../benchmarks/results/engine-trials-x86_64.json)
-contains binary and source digests, per-family ratios and raw durations.
-Experimental patches remain local. The receipt records exploratory
-measurements; accepted binaries still require the full release procedure.
-
-The early O2 trials used different CPU affinity from the later PGO trials.
-Compare treatments within each trial. These small samples can change the
-ranking between baselines. Compute paired ratios directly from samples.
-Dividing separately summarized ratios can change the ranking.
-
-The multiplication and short-key hash checks passed comparison with the
-original implementation on 50,000 generated byte strings, plus hash-table
-operations. The short-key check also covered actual hash collisions and
-early NULs under ASan/UBSan. The O2 PGO and multiplication/PGO builds retained
-the reference's dynamic exports. Their upstream tests reported the same
-three difference groups as the unmodified reference: help formatting, trap
-listing order and out-of-range printf precision. They remain compatibility
-failures. The rejected short-key candidate did not receive the full upstream
-suite.
-
-## Research-led allocation screens
-
-The [performance research](performance-research.md) ranks five candidates
-against primary paper records and the pinned GNU source. Two isolated O2
-allocation treatments were tested on the unchanged suite. In-place quote
-removal reached a paired ratio of 0.9838 against reference; guarded transfer
-of assignment results reached 1.0075. Both missed the fixed 0.98 screen.
-Neither patch is selected. The
-[receipt](../benchmarks/results/expansion-trials-x86_64.json) preserves raw
-paired durations, source/patch provenance and semantic check digests.
-
-`scripts/engine_trial.py` reproduces these experimental builds from tracked
-patches and plans in `engines/bash/experiments/`. It checks the authenticated
-base and the complete patched tree, then marks the result as an experiment.
-These builds cannot qualify for release. The default source lock, compiler
-training and validation counts remain unchanged.
-
-## Arithmetic parser follow-up
-
-The [arithmetic experiments](arithmetic-scan-experiment.md) tested two
-independent changes. A byte scan missed the 0.98 screen. Recognizing
-in-range decimal arithmetic leaves before parser-context allocation passed
-O2 screening and confirmation, then separate O3 PGO screening and confirmation.
-The PGO incremental ratios were 0.9654 and 0.9634 in two seven-pair runs
-against unmodified PGO. Both runs improved six families without a repeatable
-regression above 5%.
-
-These measurements describe the fixed suite on a shared host with a
-background inference process. They do not establish an idle-host result or
-a gain for arbitrary scripts. The combined build remained about 15% below
-the O2 reference's elapsed time and missed the 25% target. Both full upstream
-runs retain the same three baseline difference groups, so compatibility
-also remains open. The [receipt](../benchmarks/results/arithmetic-trials-x86_64.json)
-contains paired samples, build provenance and semantic checks. The default
-PGO recipe and full release procedure remain unchanged.
-
-## Context and snapshot follow-up
-
-A fresh profile of the retained decimal PGO engine motivated two independent
-allocation experiments. A single inactive arithmetic context reached an
-incremental O2 ratio of 1.003747 against decimal O2; reallocation of the
-simple-command snapshot reached 1.015039. Both missed the 0.98 three-pair
-screen. Neither proceeds to confirmation or compiler training.
-
-The [experiment report](parser-context-experiment.md) describes the frozen
-rules and focused behavior checks. The
-[receipt](../benchmarks/results/parser-context-trials-x86_64.json) preserves
-raw timings and authenticated patch/build provenance. These diagnostic
-failures leave the retained decimal treatment and release gate unchanged.
-
-## Coordinated execution batch
-
-The [larger execution experiment](execution-batch-experiment.md) built twelve
-isolated O2 variants. The three-path batch reached 0.981339 against decimal
-O2. Locale-bound lexical plans reached 1.026382 alone and 1.019662 combined;
-direct arithmetic dispatch reached 1.002797 alone and 0.992025 combined.
-All missed the fixed 0.98 screen. Four earlier cache versions were rejected
-on concrete locale-switch semantic differences before timing.
-
-No confirmation or PGO training followed. The
-[receipt](../benchmarks/results/execution-batch-trials-x86_64.json) preserves
-raw paired measurements and rejected-version provenance. The retained
-decimal treatment, calibrated counts and full release gate remain unchanged.
+The optional interpreter has not met the 25% gate, and no local Bash patch is
+selected. The default execution engine remains the system Bash.

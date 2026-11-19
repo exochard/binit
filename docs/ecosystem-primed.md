@@ -3,8 +3,8 @@
 This track measures configured framework launches after each configuration has
 completed a full, effect-checked launch in its own private home. Binit generation
 preparation and that initial launch occur before timing. Zinit's first private
-initialization also occurs before timing. The fresh-home results remain in
-[framework evidence](ecosystem-framework-evidence.md).
+initialization also occurs before timing. The fresh-home stage is described in
+the [corpus](ecosystem-corpus.md).
 
 The runner uses the pinned [corpus](ecosystem-corpus.md), its adapters and its
 common plugin effects. It reuses each configuration's private home on every
@@ -16,7 +16,9 @@ silently turning a primed launch into a fresh one.
 Each successful launch must accept an executed command and show the next
 prompt. A separate probe checks every declared plugin effect. Two runs of 20
 alternating blocks cover 0, 10 and 50 plugins for each pinned adapter and its
-same-interpreter direct-source control. Short runs are diagnostics. Raw timings,
+same-interpreter direct-source control. Binit is reported twice: the eager
+`binit` row and the `binit-wait` row, which loads the same plugins with
+`load=wait`. Short runs are diagnostics. Raw timings,
 priming observations, tool and configuration identities, resource samples and
 partial failures are retained in the receipt. Resource observations have the
 non-atomic and missing-child limits of the original framework corpus.
@@ -32,7 +34,7 @@ python3 scripts/bench_ecosystem_primed.py --sources tmp/ecosystem --binary targe
 ```
 
 The paired fixture uses explicit framework overrides. It does not measure the
-documented defaults, editor equivalence or Binit's two new runtime targets.
+documented defaults or editor equivalence.
 Zinit runs in Zsh and uses its own direct-source control. No overall resource
 ranking follows from the readiness samples.
 

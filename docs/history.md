@@ -2,7 +2,7 @@
 
 `binit_complete editor history on` enables the history panel and inline
 suggestions in the current shell. `off` removes the panel and restores the
-bindings it still owns. The history plugin calls these commands when loaded.
+bindings it still owns. The development plugin `history-search` calls these commands when loaded.
 
 While typing, only the inline suggestion is shown. Tab keeps its completion
 binding. Ctrl-R opens the history panel with a search query, including from an
@@ -22,13 +22,12 @@ Custom Tab, Enter, and Ctrl-R bindings take precedence. `binit editor` prints
 one row each for the menu, suggestions, history, highlighting and the keys
 Binit binds.
 
-The previous live panel remains available explicitly with
+The older live panel remains available explicitly with
 `binit_complete editor history live`, or `BINIT_HISTORY_MODE=live` before
 loading the history plugin. It shows up to five matches and gives Tab to
 history navigation while they are visible. In this mode, Tab, Esc, Tab
 reaches ordinary completion. `BINIT_HISTORY_MODE=search` selects the default.
-The live mode preserves existing configurations and frozen measurement
-workloads that depend on that display and binding.
+The live mode preserves configurations that depend on that display and binding.
 
 The live panel is drawn with moves relative to the cursor, so it needs no
 terminal replies and stays below wrapped input. When the prompt is on the

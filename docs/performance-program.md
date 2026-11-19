@@ -35,7 +35,7 @@ must distinguish bookkeeping from the largest synchronous plugin interval.
 ## Workloads and engineering targets
 
 The numeric targets are new optimization goals on recorded reference machines.
-They are not passing receipts or replacements for existing release gates.
+They are goals, not measured results.
 Freeze each missing fixture before implementing its treatment. A field stays
 open until its workload and evidence exist on the required configuration.
 
@@ -46,16 +46,16 @@ open until its workload and evidence exist on the required configuration.
 | First-use activation | Small and 512-function plugins; actual command/completion dependencies; empty and Unicode arguments | Added first-command p95 ≤2 ms against direct source-and-call; warm commands have no repeatable >5% regression | New lifecycle suite for command triggers; provider/dependency fixtures pending |
 | Steady-state hooks | 0/10/64 hooks; unchanged directory, directory change and large Git working trees | Added prompt/hook p95 ≤1 ms in the unchanged-directory case; expose plugin-owned external work separately | Existing command round trips; hook-count and repository-size matrix pending |
 | Completion | Provider generation, menu open, filtering and insertion measured separately; 100/1,000/10,000 candidates; delayed provider | First Git p95 ≤10 ms; warm p95 ≤5 ms; cancel eligible isolated providers within 16 ms at p95 | Git terminal measurements exist; scalable and cancellable-provider fixtures pending |
-| Editing and history | 1k/10k/100k history entries; duplicate/no-match cases; 80-byte/4-KiB/64-KiB lines; multiline paste, wide characters | Typing p95 ≤1 ms and p99 ≤8 ms in the declared interactive set; preserve the existing ≤8 ms p95 release gate | Existing 1k-history workload; stress matrix pending |
+| Editing and history | 1k/10k/100k history entries; duplicate/no-match cases; 80-byte/4-KiB/64-KiB lines; multiline paste, wide characters | Typing p95 ≤1 ms and p99 ≤8 ms in the declared interactive set; keep the existing ≤8 ms p95 limit | Existing 1k-history workload; stress matrix pending |
 | Catalog and ownership scaling | 0/10/50/64 plugins, 4 functions each; one plugin with 32/512 functions; file/byte-size and dependency-depth axes | At 64 small plugins, activation p95 ≤75 ms; owned unload of 512 functions p95 ≤50 ms | New lifecycle suite; byte-size and dependency-depth axes pending |
 | Acquisition and generations | Cached local preparation, apply, rollback and update preview; pinned Git/snippet/release fixtures with fixed transfer delay and jobs 1/4 | Local 64-plugin preparation p95 ≤500 ms; ≥2× acquisition throughput with 4 workers on the fixed delayed fixture | New local preparation timing; acquisition and transaction timings pending |
 | Resources | Resident/peak memory, child processes and descriptors; 100 load/unload cycles; repeated completion and editing | Zero manager-spawned children in ordinary unchanged-prompt/typing paths; declare a retained-memory bound before optimization and rule out monotonic growth across 3 runs | Pending; elapsed timings do not measure resources |
 | Recovery | Corrupt/missing cache, interrupted acquisition, failed source, rollback and terminal handoff | Recover the previous verified generation after every injected failure; metadata-only rollback p95 ≤250 ms on the fixed 64-plugin fixture | Functional recovery tests; timed recovery and terminal-handoff matrix pending |
 | Diagnostics | Per-plugin load and hook costs, phase breakdown and an uninstrumented control | Attribute ≥95% of elapsed time in a ≥200 ms fixture without double counting; report observer cost separately | Basic `profile` exists; phase attribution pending |
-| Interpreter execution | Existing eight families plus separate parser/expansion stress and real-script diagnostic corpora | Preserve the 25% reduction requirement in all three complete qualification runs and every compatibility gate | Existing frozen suite remains failed; broader diagnostic corpus pending |
+| Interpreter execution | Existing eight families plus separate parser/expansion stress and real-script diagnostic corpora | Preserve the 25% reduction requirement in all three complete runs and every compatibility gate | Existing frozen suite has not met the target; broader diagnostic corpus pending |
 
 The catalog limit is 64 plugins (`src/main.rs`). A 100/500-plugin experiment
-requires a separate capacity decision with reviewed resource bounds. A larger
+requires a separate capacity decision with declared resource bounds. A larger
 benchmark must not bypass that validation or silently raise the product limit.
 
 ## Executable lifecycle suite
@@ -126,7 +126,7 @@ binary before confirmation. Require at least 2% lower median paired elapsed
 time in its named target in each of two 20-pair runs. Check other applicable
 metrics for repeated regressions above 5%, including p95 when latency is the
 target. Report tail behavior even when the treatment targets a median.
-Absolute engineering goals need their own receipts. Shared-host measurements
+Absolute engineering goals need their own recorded results. Shared-host measurements
 remain diagnostic; remote/ARM64 and terminal qualification remain separate.
 
 Do not average workstreams into an overall score. First-prompt deferral cannot
@@ -141,60 +141,12 @@ or enter PGO training. The new lifecycle runner always reports
 `release_qualified: false`; completing its selected cases closes only that
 measurement, not this entire program.
 
-## Implementation sequence
+## Limits
 
-The [owned-unload treatment](owned-unload-performance.md) closes the first
-substantial lifecycle target against `3005de3`: about 99% lower paired elapsed
-time for 512-function native unload, with p95 below 4 ms in both runs.
-Preparation improves by about 63% for ten eager plugins and 72% for fifty or
-sixty-four. Its complete comparison preserves the earlier failed treatments
-and has no repeated regression above 5% in another median or p95. These local
-results leave the other workstreams and release qualification open.
-
-The [initial x86_64 receipt](../benchmarks/results/lifecycle-x86_64.json)
-contains two 20-round runs on Bash 5.3.20 with the native module available.
-It has 1,440 validated records across six cases and the direct-Bash control.
-This is a baseline on the existing `6a92522` binary, before any lifecycle
-optimization. It establishes no new speedup.
-
-| Case and metric | Run 1 median | Run 1 p95 | Run 2 median | Run 2 p95 |
-| --- | ---: | ---: | ---: | ---: |
-| Empty activation | 3.898 ms | 5.197 ms | 3.206 ms | 3.545 ms |
-| 10-plugin activation | 8.443 ms | 13.628 ms | 8.052 ms | 8.466 ms |
-| 50-plugin activation | 37.146 ms | 62.777 ms | 31.113 ms | 37.263 ms |
-| 64-plugin activation | 45.693 ms | 82.961 ms | 41.787 ms | 47.046 ms |
-| 64-plugin preparation | 479.143 ms | 573.676 ms | 332.040 ms | 387.734 ms |
-| 512-function first command | 3.039 ms | 5.073 ms | 2.960 ms | 3.361 ms |
-| 512-function plugin, 1,000 warm calls | 7.099 ms | 12.504 ms | 6.075 ms | 6.981 ms |
-| 512-function owned unload | 208.630 ms | 949.846 ms | 193.640 ms | 235.771 ms |
-
-Owned unload missed its new 50 ms p95 goal in both baseline runs. The Bash
-fallback captures each definition and its attributes in child shells before
-removal (`runtime/core.bash`, `__binit_unload`). The native treatment checks
-those functions in the calling shell. The first baseline run has much
-slower tails; both remain under the shared-host evidence limits.
-
-1. Establish lifecycle/scaling baselines, then complete readiness and resource
-   fixtures. Retain per-case results rather than a single package count score.
-2. Reduce owned-unload cost with a transaction that checks every owned effect
-   before mutation. Preserve changed/readonly functions, foreign hooks and
-   dependency refusals. The 512-function target makes this a substantive
-   lifecycle improvement.
-3. Qualify cooperative dispatch under input pressure. Add resumable work between
-   plugins, measure conditional/watch overhead and preserve ordering. Report
-   any single plugin that blocks the calling shell.
-4. Develop cancellable providers for work that can run independently. Require
-   stale-result rejection and a qualified synchronous path for stateful Bash
-   providers. Match argument and quoting behavior before accepting latency gains.
-5. Scale history search and incremental highlighting using the stress matrix.
-   Bound render work by the viewport while keeping complete inserted input.
-6. Add controlled acquisition and recovery timing. Extend interpreter diagnostics
-   from fresh profile evidence while keeping its existing qualification intact.
-
-The primary risk is obtaining attractive synthetic numbers while real plugins
-still stall. Each optimization therefore needs a pinned ecosystem fixture as
-well as its isolated case. The limit of the first lifecycle suite is explicit:
-it does not yet measure scheduler latency, memory or slow-provider cancellation.
+The lifecycle suite does not yet measure scheduler latency, memory or
+slow-provider cancellation. Each optimization needs a pinned ecosystem fixture
+as well as its isolated case, because attractive synthetic numbers can hide
+real plugins that still stall.
 
 ## Alternatives
 

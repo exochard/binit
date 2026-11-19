@@ -1,11 +1,14 @@
-# First-party plugins
+# Development plugins
 
-Binit installs its manager, runtime and native capabilities. Plugins are
-independent repositories and require explicit installation. Each repository
-contains its manifest, Bash entry, license, configuration guide and compatibility
-tests. There is no preset or automatic plugin installation.
+Binit installs its manager, runtime and native capabilities. Plugins require
+explicit installation; there is no preset or automatic plugin installation.
 
-| Repository | Purpose |
+Binit 0.1 has no featured plugin set. Seven development plugins exist, and
+their sources ship inside the source release archive. They are not released as
+standalone plugins yet. Each has a manifest, a Bash entry, a license, a
+configuration guide and compatibility tests.
+
+| Plugin | Purpose |
 | --- | --- |
 | `git-prompt` | Bounded background Git branch information |
 | `git-completion` | First-use loading of installed Git completion definitions |
@@ -15,25 +18,23 @@ tests. There is no preset or automatic plugin installation.
 | `syntax-highlighting` | Optional native advisory highlighting |
 | `autosuggestions` | Optional native history suggestions |
 
-Clone a chosen repository and declare its absolute path after initialization:
+`git-prompt`, `git-completion` and `project-context` are also in the source
+checkout under `plugins/`. They serve as examples a user can read and load by
+path. Declare the absolute path of an extracted plugin after initialization:
 
 ```bash
 eval "$(binit init)"
-binit plugin /absolute/path/to/directory-jump
+binit plugin /absolute/path/to/git-prompt
 ```
 
-Run `binit sync` and open a new shell. Once a repository is published, its
-`OWNER/REPOSITORY` source uses the same pinned Git workflow as other plugins.
-The public namespace and release URLs must be established before publication.
+Run `binit sync` and open a new shell.
 
-The editor plugins require compatible native capabilities. Highlighting remains
-subject to the [editor qualification](editor.md); an activation package does not
-establish production readiness. History search uses the native module. Directory navigation
-keeps a bounded session history rather than writing visited paths to disk.
+The editor plugins require compatible native capabilities. Highlighting is
+experimental; see [editing](editor.md). History search uses the native module. Directory
+navigation keeps a bounded session history rather than writing visited paths to
+disk.
 
-For an independent repository, run its compatibility tests against a selected
-Binit binary. CI requires `BINIT_CORE_REPOSITORY` to identify that source. Create
-release archives from a clean committed repository with:
+To package a plugin source tree, run from a clean committed repository:
 
 ```bash
 python3 scripts/package_plugin.py /absolute/path/to/plugin /absolute/path/to/artifacts
@@ -42,8 +43,3 @@ python3 scripts/package_plugin.py /absolute/path/to/plugin /absolute/path/to/art
 The packager reads committed Git objects, applies source-package limits, and
 records the commit and file digests. Archives are deterministic. Repository
 metadata, uncommitted overrides and symlinks are excluded or rejected.
-
-The manager checkout retains the three original plugin snapshots as development
-fixtures for its existing demo and compatibility tests. Independent plugin
-repositories are the maintained distribution sources; the manager installer
-does not copy those fixtures into a user's environment.

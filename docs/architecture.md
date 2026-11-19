@@ -11,7 +11,7 @@ generation before sourcing code or loading the module. Updates produce a new
 generation; existing shells keep their current code.
 
 Generation preparation creates and checks shared directories before starting
-up to eight file writers. Each writer exclusively creates its destinations,
+up to 32 file writers. Each writer exclusively creates its destinations,
 sets their permissions and syncs their contents. All writers finish before
 the manager writes and syncs the lock metadata. A failed writer leaves the
 selected generation usable; it prevents installation of the new generation.
@@ -86,24 +86,18 @@ prompt at the latest.
 
 ## Alternatives considered
 
-The test budgets below cover a feasibility experiment, not the complete
-implementation.
-
-| Approach | Prior art | Decisive test and budget | Decision |
-| --- | --- | --- | --- |
-| Native module using Readline's completion machinery | [GNU Readline](https://www.gnu.org/software/bash/manual/html_node/Readline-Interaction.html) | Quoting, provider retry, cursor restoration, and a stable viewport; two hours | Selected. The initial transport and screen tests pass. |
-| Shell adapter with a separate picker | [fzf-tab-completion](https://github.com/lincheney/fzf-tab-completion) | Existing completion specifications and nested quoting; two hours | Deferred. Reconstructing word context and provider dispatch adds another compatibility surface. |
-| Full replacement editor | [Flyline](https://github.com/HalFrgrd/flyline) | Job control, external terminal programs, and vi editing; two hours | Deferred. Core feature ownership does not yet require replacing command-line editing. |
-| Modified Readline distributed with a private Bash | [Readline completion implementation](https://git.savannah.gnu.org/cgit/readline.git/tree/complete.c) | Run the feature with an unmodified system Bash; one hour | Deferred. It would make the private interpreter a requirement. |
+| Approach | Prior art | Decision |
+| --- | --- | --- |
+| Native module using Readline's completion machinery | [GNU Readline](https://www.gnu.org/software/bash/manual/html_node/Readline-Interaction.html) | Selected. It keeps Readline's quoting, provider retry and cursor restoration. |
+| Shell adapter with a separate picker | [fzf-tab-completion](https://github.com/lincheney/fzf-tab-completion) | Not used. Reconstructing word context and provider dispatch adds another compatibility surface. |
+| Full replacement editor | [Flyline](https://github.com/HalFrgrd/flyline) | Not used. Completion does not require replacing command-line editing, job control or vi editing. |
+| Modified Readline distributed with a private Bash | [Readline completion implementation](https://git.savannah.gnu.org/cgit/readline.git/tree/complete.c) | Not used. It would make a private interpreter a requirement. |
 
 The first renderer experiment used Readline's message area for a multiline
 menu. Screen tests showed repeated rows and scrollback growth, so it was
-replaced by a renderer with an explicit viewport. That test remains part of
-the acceptance criteria.
+replaced by a renderer with an explicit viewport.
 
 ## Interpreter work
 
-The optional interpreter is independent of the interactive module. Compiler
-training uses separate workloads, and unchanged validation scripts remain
-frozen. The [25% execution target](release-0.1.md) is an interpreter promotion condition.
-Native UI work does not establish an interpreter speedup.
+The optional interpreter is experimental and independent of the interactive
+module. It runs only when selected with `binit run --engine`.

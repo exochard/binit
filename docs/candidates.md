@@ -34,21 +34,6 @@ selection also probes the current runtime's library resolution. A new attempt
 invalidates earlier acceptance before running checks. Existing `prepare`,
 `apply`, `update` and rollback retain their documented selection behavior.
 
-The earlier [foundation receipt](../benchmarks/results/candidate-preparation-x86_64.json)
-records matching generation IDs, file contents and modes across the previous
-preparation path, the refactored path and candidate preparation at identical
-paths. Two complete 20-pair runs of the unchanged lifecycle suite show no
-repeated regression above 5% in another median or p95. This is a preservation
-check; it claims no new performance gain and does not close the broader milestone.
-The 32-function unload p95 rises 5.5% in the first run and falls 5.5% in the
-second. Both remain in the raw data. The runner times the existing lifecycle
-commands; candidate-specific check latency needs separate workloads.
-
-The [check and selection receipt](candidate-checks-evidence.md) covers the
-completed workflow and its later streaming-verification treatment.
-
 Managed fixtures inherit no controlling terminal. Their standard input is
 empty and output is captured; a terminal interaction fixture must create its
-own PTY. Ctrl-C and declared timeouts stop the owned process group. The
-[source-trial evidence](source-trial-evidence.md) records the public terminal
-regression and cleanup checks.
+own PTY. Ctrl-C and declared timeouts stop the owned process group.

@@ -1,11 +1,37 @@
 # User-local installation
 
-Build and verify Binit from the checkout, then install the executable:
+## Install the release
+
+Binit 0.1 supports Linux glibc x86_64 and needs glibc 2.39 or newer. Download
+`binit-0.1.0-linux-x86_64.tar.gz` and `SHA256SUMS` from
+https://github.com/exochard/binit/releases/download/v0.1.0/, then verify,
+extract and install:
 
 ```bash
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf binit-0.1.0-linux-x86_64.tar.gz
+cd binit-0.1.0-linux-x86_64
+python3 -I install.py --binary "$PWD/bin/binit"
+```
+
+`--binary` points the installer at the archive's executable; without it the
+installer looks for a source build in `target/release/`. Installation prints
+the startup line to add to `~/.bashrc`.
+
+## Install from source
+
+Prerequisites: Rust and Cargo, a C compiler, and the Bash and Readline
+development headers for the default native module. Without the headers the
+build fails; build with `--no-default-features` to skip the module.
+
+```bash
+cargo fetch --locked
 make build
 python3 scripts/install.py
 ```
+
+`make build` runs Cargo with `--offline`, so `cargo fetch --locked` must
+download the dependencies first.
 
 The default destination is `~/.local/bin/binit`. Installation prints the exact
 startup line. It leaves startup files alone unless one is explicitly selected:
@@ -18,14 +44,16 @@ This adds a marked initialization block after backing up an existing file.
 Put plugin declarations after that block. Run `binit sync` from an initialized
 shell, then open a new shell to use its prepared generation.
 
-`--prefix /absolute/path` selects another installation root. `--binary PATH`
+`--prefix PATH` selects another installation root; relative and `~` paths are
+accepted. `--binary PATH`
 selects a built executable, including one under a custom Cargo target
 directory. An existing unrelated `bin/binit`, changed owned executable, or
-modified startup block is refused. Symlink components and foreign-owned
-target files are also refused.
+modified startup block is refused. Symlink components are refused, as is any
+path component owned by neither you nor root.
 
-The receipt is stored at `PREFIX/share/binit/install.json`. Repeating the
-installation with unchanged inputs does nothing. An upgrade retains the
+The receipt is stored at `PREFIX/share/binit/install.json`. With the default
+prefix that directory, `~/.local/share/binit`, is also Binit's default state
+directory. Repeating the installation with unchanged inputs does nothing. An upgrade retains the
 previous executable as a timestamped backup. Startup-file and receipt write
 failures restore the prior installation. Backups remain available for review.
 
@@ -48,7 +76,5 @@ combination. Mismatched shells reject that module and use the supported
 fallback. Build with matching headers to enable native completion for another
 supported Bash version; CONTRIBUTING.md describes those inputs.
 
-This installer supports local use of the development build. Installation
-does not grant release qualification. See [qualification](qualification.md)
-for CI evidence and [release requirements](release-0.1.md) for the supported
-platform and release gates.
+Binit 0.1 supports Linux glibc x86_64. CI runs Bash 5.2 and 5.3 with and
+without the native module.

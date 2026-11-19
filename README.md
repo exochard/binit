@@ -1,228 +1,107 @@
 # Binit
 
-Manage Bash plugins and complete commands in a navigable menu. Binit keeps reviewed plugin snapshots and lets you roll back a change. Its Bash runtime shares hooks and loads Git's full Bash completion definitions on the first request.
+Binit runs the plugins in your interactive Bash from a pinned, verified
+snapshot and loads each one when it is needed. It also draws a completion
+menu, history search and suggestions inside Bash itself, so the line you are
+typing never waits on a slow plugin or completion.
 
-Binit is vibe-engineered: it is written with AI coding agents, and the tests
-and measurements behind each landed change are kept in the
-[documentation](docs/README.md).
+The [publication scoreboard](docs/publication-scoreboard.md) compares Binit
+with Bash-it and Oh My Bash loading the same 50 plugins, and with ble.sh editing
+the same command lines. The results ship with each
+[release](https://github.com/exochard/binit/releases).
 
-The 0.1 release is in development. Current functionality and the remaining
-gates are described separately in the [release requirements](docs/release-0.1.md).
+## Install
 
-The [local checkpoint](docs/stability.md) records the frozen optional Bash
-engine recipe, verification commands and compatibility disposition.
+Binit 0.1 runs on Linux x86_64 with glibc 2.39 or newer and GNU Bash 5.2 or
+later. Download the archive and `SHA256SUMS` from the
+[latest release](https://github.com/exochard/binit/releases/latest), then:
 
-## Plugin lines
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf binit-0.1.0-linux-x86_64.tar.gz
+cd binit-0.1.0-linux-x86_64
+python3 -I install.py --binary "$PWD/bin/binit"
+```
 
-Declare plugins in `~/.bashrc`, after Binit's init line:
+The installer puts `binit` in `~/.local/bin` and prints the line to add to
+`~/.bashrc`. It edits no startup file unless you pass `--rc-file`. Your system
+shell stays as it is. [Installation](docs/install.md) covers source builds and
+`--uninstall`.
+
+## Declare plugins
+
+Plugin lines go in `~/.bashrc`, after the init line:
 
 ```bash
 eval "$(binit init)"
-binit plugin ~/src/my-plugin                      # directory with plugin.toml
-binit plugin ~/src/tool files=init.sh,comp.bash load=command commands=tool
-binit plugin ~/src/thing id=thing requires=git load=prompt
-binit plugin ~/src/nvm id=nvm load=wait           # after the first prompt
+binit plugin user/repo ver=v1.2.0 files=init.bash       # a GitHub repository, pinned
+binit plugin ~/src/tool load=command commands=tool      # loads on first use of `tool`
+binit plugin ~/src/nvm id=nvm load=wait                 # loads right after the first prompt
 ```
 
-Run `binit sync` in that shell, then open a new one with `exec bash`. Sync
-pins the declared sources into a verified generation; shell startup reads only
-that generation and never touches the network. A shell whose lines differ from
-the last sync prints one notice at its first prompt. `load=wait` is Zinit's
-`wait`: the prompt appears first and the plugin loads before the next key is
-read (at the first prompt when the native module is off). Sources include absolute
-local directories, Git repositories, release assets and HTTPS snippets.
+Run `binit sync`, then `exec bash`. Sync fetches each source, pins it to a full
+commit or checksum, and publishes a new generation with every file listed by
+digest. A shell checks that generation before sourcing anything and never
+touches the network at startup. Existing shells keep the code they started
+with.
 
-### Commands on PATH
+A plugin loads at startup, at the first prompt, right after the prompt appears,
+on first use of a command or completion, on a timer, on an event or when a
+watched file changes. Existing functions and aliases keep precedence.
+[Plugin interface](docs/plugins.md) lists every source type and key;
+[loading and shell effects](docs/runtime-features.md) covers scheduling and
+unload.
+
+## Complete and search
+
+Tab opens a menu of Bash's own completions. Arrows, hjkl, Tab and Shift-Tab
+move through it, `/` filters, Enter inserts and Esc cancels. As you type, the
+newest matching history entry appears as a dim suggestion; Right, Ctrl-F or
+End accepts it. Ctrl-R searches history and Enter inserts the match without
+running it. Ctrl-Backspace deletes the previous word.
+
+A completion that takes long can run in a separate process: typing cancels it
+and the line stays responsive. See [isolated completion
+providers](docs/completion-providers.md). `binit completion off` returns the
+current shell to Readline's ordinary completion.
+
+The built-in editor module targets Bash 5.3 with Readline 8.3. Other supported
+Bash versions keep Readline's completion and the rest of Binit.
+[Editing](docs/editor.md) and [history](docs/history.md) list every key.
+
+## Update and recover
 
 ```bash
-binit plugin user/scripts bin=tool.sh:tool       # optional :NAME renames
-binit plugin user/repo bin=git-foo files=foo.bash # sourced files and a command
+binit update --check     # show what would move, change nothing
+binit update             # move Git pins to the commits their ver names
+binit rollback           # use the previous generation in new shells
+binit profile            # load and hook time per plugin
+BINIT_SAFE=1 bash        # a shell that skips Binit entirely
 ```
 
-`bin=` is Zinit's `as"program"`: each listed file is copied into the
-generation as an executable (mode 0700) and `bin/` of the generation joins
-`PATH` once at startup. Without `files=`, nothing is sourced. A removed line
-keeps its command until the next `binit sync`; disabled plugins expose none.
+A failed sync leaves the current generation in place. [Candidate
+checks](docs/candidate-checks.md) run your own tests against a prepared
+generation before any new shell uses it.
 
-### Git sources
+## Limits
 
-```bash
-binit plugin user/repo                         # https://github.com/user/repo.git
-binit plugin user/repo ver=v1.2.0 files=init.bash
-binit plugin https://gitlab.com/a/b.git id=b ver=main
-binit plugin git@github.com:user/repo.git
-```
+- Linux x86_64 only in 0.1.
+- Plugins are Bash code with your shell's full authority. Pins and digests
+  detect changed files; they do not vouch for an author.
+- `binit unload` removes the functions, aliases, completions and prompt
+  segments a plugin added, if they are unchanged. Variables, exports and other
+  side effects stay.
+- `binit run --engine` selects an experimental Bash build. It has not met its
+  25% speed target, so `binit run` uses `/bin/bash` by default.
 
-`ver` is a tag, a branch or a full 40-character commit; without it the remote
-default branch is used (a remote without one needs `ver`). `https://` URLs
-cannot carry a user name or token; use a Git credential helper. `binit sync` clones what is missing and pins each line
-to the full commit its `ver` resolves to. A line keeps its pinned commit
-while its id, source and ver stay the same; other keys can change freely. A new
-id, a different ver or a different source resolves the current commit. Only
-`binit update` moves an existing pin. `binit update [ID...]` fetches and moves
-the pins; a full-commit `ver` never moves. `binit update --check [ID...]`
-prints `ID  OLD -> NEW  (N commits)` with the new commit subjects and changes
-nothing. `binit inspect ID` shows the URL, `ver` and pinned commit. Mirrors
-live in `$state/sources`.
+## Project
 
-State lives in `$BINIT_STATE`, else `$XDG_DATA_HOME/binit`, else
-`~/.local/share/binit`. `--state DIRECTORY` overrides all three. The
-[plugin interface](docs/plugins.md) lists the line keys and defaults.
+Binit is vibe-engineered: it is written with AI coding agents, and every
+change lands with the tests and measurements behind it. The
+[documentation](docs/README.md) explains how it works.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the build and test setup, and
+[SECURITY.md](SECURITY.md) explains how to report a vulnerability.
 
-Checksum-pinned [release assets and snippets](docs/plugins.md#release-assets-and-snippets)
-use the same sync workflow. Manager-only `atclone` and `atpull` hooks can prepare
-selected files in an isolated source snapshot before publication.
-
-## Try it
-
-For an explicit trial from source archives, follow the
-[source trial](docs/source-trial.md). It lists dependency acquisition and
-the selected independent plugin sources, with private example history.
-
-Source builds require Linux, Rust and Cargo, a C compiler, and Bash/Readline
-development headers. The runtime targets Bash 5.2+; local verification uses
-Bash 5.3.20. Bundled Git features use Git and GNU `timeout`.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the test environment and direct
-commands for containers. The Make targets run directly.
-
-```bash
-make build
-make demo
-```
-
-Builds use the local Cargo cache. Run `cargo fetch --locked` first on a machine
-without the dependencies. Make disables inherited Rust compiler wrappers;
-`make build RUSTC_WRAPPER=/path/to/sccache` selects a working cache explicitly.
-
-`make demo` opens the seven-plugin development trial in Bash vi mode. It uses
-independent source repositories under `../binit-plugins` (override with
-`BINIT_PLUGIN_ROOT`) and keeps its state and history in `.local-demo-interactive/`.
-Your startup files and Readline configuration remain unchanged. The first demo
-prepares the pinned editor build dependencies; later builds reuse its local
-`build.mk`. Core installation still installs no plugins.
-
-Typing shows the newest matching history entry as a dim suggestion; Right,
-Ctrl-F or End accepts it. Tab opens command completion. Ctrl-R searches
-history, Esc switches to browsing with j/k, and Enter inserts without
-executing. Home and End move to the line's edges, Ctrl-Delete deletes the
-next word and Ctrl-Backspace the previous one. See
-[history controls](docs/history.md) and [editing keys](docs/editor.md) for
-binding precedence and terminal fallbacks. Inside the shell, run:
-
-```bash
-binit profile
-binit trust examples/project
-cd examples/project
-printf '%s\n' "$PROJECT_MESSAGE"
-cd ../..
-exit
-```
-
-`exit` returns to the parent shell. The demo does not install into shell startup files.
-
-See [loading and shell effects](docs/runtime-features.md) for timed, conditional,
-event and watched-file loading, reports and conservative unloading.
-[Manager extensions](docs/extensions.md) run explicitly from verified packages.
-
-## Completion
-
-Press Tab to open the menu when several candidates match. Tab and Shift-Tab
-move through candidates; arrows and hjkl move within the grid. Press `/` to
-filter, Enter to insert, or Esc to cancel. Enter accepts a completion without
-executing the command. The menu redraws in place and reuses Bash's completion
-providers and quoting.
-
-```bash
-binit completion
-binit completion off
-binit completion on
-```
-
-These commands affect the current shell. Custom macros and unrelated Tab
-functions remain installed.
-Resizing closes the menu while preserving input. Unsupported terminals and
-very large result sets use normal Readline completion.
-`BINIT_COMPLETION_MENU=0 make demo` starts with the native module disabled.
-
-## Manage plugins with the catalog
-
-The catalog commands below are the alternative to plugin lines. They install
-plugins that every shell opened from the generation loads. From the project
-root, inside the demo:
-
-```bash
-binit plugins
-binit add examples/plugins/workspace
-binit inspect workspace
-binit shell
-```
-
-The workspace plugin adds a project-type segment such as `[Rust]` when entering a directory. Its source is ordinary Bash, with a manifest declaring when to load it.
-
-```bash
-binit disable workspace
-binit enable workspace
-binit update workspace
-binit remove workspace
-```
-
-Changes apply to a new shell opened with `binit shell`. Running shells keep their current plugins. Updates read the recorded local source only when requested; enable and disable use the pinned snapshot. Removing a plugin preserves its original source and older generations. Dependency-breaking changes leave the current plan intact.
-
-`binit apply` refreshes the runtime while retaining pinned plugins. Demo
-startup applies a new build automatically for its next shell.
-
-Existing Bash scripts can be installed through a user-owned TOML declaration;
-the upstream checkout needs no manifest. Select files and use `load = "command"`
-with `commands = ["tool"]` to source them on first use. `binit load ID` loads a
-pending plugin explicitly in the current shell. See [declarations and first-use
-loading](docs/plugins.md#existing-bash-scripts) for examples and scope limits.
-
-`binit add PATH --disabled` installs a plugin for later activation. `binit prepare CONFIG` replaces the complete catalog from a configuration file; ordinary demo startup preserves the catalog. Use `BINIT_DEMO_STATE=/absolute/path make demo` for a separate demo configuration.
-
-## First-party plugins
-
-First-party plugins are distributed as independent repositories and require
-explicit installation. Installing the manager installs none. See
-[plugin distribution](docs/first-party.md). The default demo selects all seven
-independent plugins. These original integrations also have retained fixtures
-for compatibility checks:
-
-| Plugin | Behavior |
-| --- | --- |
-| `git-prompt` | Reads branch data in a bounded background worker. Refreshes at most every two seconds; results appear at a following prompt. |
-| `git-completion` | Loads Git's installed Bash completion script on first use, including branches and options. Existing completion definitions take precedence. |
-| `project-context` | Applies explicitly trusted project variables on directory entry and restores their previous scalar/export state on exit. |
-
-Project profiles use `.binit-project.toml`. Values are literal data. Approval is bound to the canonical file path and its SHA-256 digest; edited content needs approval again. `binit trust` prints what it approves, and `--sha256 HEX` approves only the content you reviewed. Changed files are checked on the next directory entry or after `binit trust`.
-
-Local plugins are trusted Bash code with the shell's full authority. Their content hashes detect changes to a prepared generation; they do not establish the author's identity. See [the plugin interface](docs/plugins.md) for the supported contract.
-
-Git completion requires a readable script at `/usr/share/git/completion/git-completion.bash`, `/usr/share/bash-completion/completions/git`, or `/etc/bash_completion.d/git`.
-
-## Inspect and recover
-
-`binit profile` reports per-plugin load time and cumulative hook time in microseconds. `make bench` compares a clean Bash with the three-plugin environment using a real PTY. It covers startup and command execution separately, including builtin loops and process creation. Results go to `evidence/bench.json`. `make bench-lifecycle` measures local preparation, activation at different plugin counts, lazy commands and owned unload. See the [performance program](docs/performance-program.md) for its broader targets and the [performance scope](docs/performance.md) for measurement limits.
-
-```bash
-target/release/binit status --state .local-demo
-target/release/binit rollback --state .local-demo
-BINIT_SAFE=1 make demo
-```
-
-Rollback selects the previous verified generation for new shells. Recovery mode skips initialization. Failed plugin loads may leave partial shell changes, so recovery starts a new shell.
-
-## Run a script
-
-```bash
-target/release/binit run script.bash argument
-target/release/binit run --engine .cache/engines/pgo/bash script.bash argument
-```
-
-`run` uses `/bin/bash` by default. An explicit `--engine` selects a local Bash
-executable for that invocation. Script arguments and exit status pass through;
-plugin state is not required. The experimental builds have not met the release
-performance gate.
-
-The current prototype supports local and Git plugins, checksum-pinned release assets and snippets, and lifecycle hooks. A [user-local installer](docs/install.md) can add a backed-up startup block on request. The [qualification inventory](docs/qualification.md) records remaining editor and distribution evidence. The experimental interpreter has not met the 25% execution target.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and [the benchmark procedure](docs/benchmarks.md) for engine experiments. Original Binit code is under [MIT](LICENSE); [GNU-linked artifacts have additional distribution requirements](docs/licensing.md).
+Binit's original code is under the [MIT license](LICENSE). GNU Bash and
+Readline keep their GPL terms; [licensing](docs/licensing.md) explains what
+each release archive contains.

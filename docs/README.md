@@ -1,94 +1,88 @@
 # Binit documentation
 
-Pages are grouped by what you came for. Evidence pages and experiment logs keep
-their original paths, because receipts and frozen benchmark drivers refer to
-them by path and hash.
+## How Binit works
 
-## Using Binit
+You keep plugin lines in `~/.bashrc`, after `eval "$(binit init)"`:
+
+```bash
+eval "$(binit init)"
+binit plugin user/repo ver=v1.2.0 files=init.bash
+binit plugin ~/src/tool load=command commands=tool
+```
+
+`binit sync` reads those lines, pins every source (a Git commit, a
+checksum-pinned release asset or a local directory) and publishes a
+*generation*: an immutable snapshot of the runtime, the plugin files and their
+load plan, with every file listed by digest. A shell verifies the selected
+generation before it sources anything and never touches the network at
+startup. Updates build a new generation, so running shells keep their code and
+`binit rollback` brings the previous one back for new shells.
+
+Each plugin loads when its line says: at startup, at the first prompt, right
+after the prompt appears (`wait`), on first use of a command or completion, on
+a timer, an event or a watched file. Binit tracks the functions, aliases,
+completions and prompt segments a plugin adds, so `binit profile` can report
+what each one costs and `binit unload` can remove what it owns.
+
+The `binit` executable embeds a native module for Bash 5.3 with Readline 8.3.
+It draws the completion menu, history search and suggestions inside Bash and
+can run a slow completion in a separate process that typing cancels. Other
+supported Bash versions keep Readline's ordinary completion. Your system shell
+and login shell stay as they are; installation is per user.
+
+## Start here
 
 | Page | Covers |
 | --- | --- |
-| [Installation](install.md) | Build, verify and install for one user |
-| [Source trial](source-trial.md) | Build from source and try Binit in a separate Bash |
-| [Plugin interface](plugins.md) | Plugin lines in `~/.bashrc`, `binit sync`, sources and options |
-| [Loading and shell effects](runtime-features.md) | Load timing, deferred commands, tracked effects and unload |
-| [Candidate generations](candidates.md) | Prepare and inspect a configuration before selecting it |
-| [Candidate checks](candidate-checks.md) | Run reviewed checks against a candidate |
-| [Editor integration](editor.md) | Completion menu, suggestions and editing keys |
-| [History panel](history.md) | History search and the inline panel |
+| [Installation](install.md) | Install the release or a source build for one user, and uninstall |
+| [Plugin interface](plugins.md) | Plugin lines, `binit sync`, sources, keys and package manifests |
+| [Loading and shell effects](runtime-features.md) | Timers, events, watched files, reports and unload |
+| [Source trial](source-trial.md) | Build from the source release and try Binit in a separate Bash |
+
+## Editing and completion
+
+| Page | Covers |
+| --- | --- |
+| [Editing](editor.md) | Completion menu, suggestions and editing keys |
+| [History](history.md) | History search and the inline panel |
 | [Isolated completion providers](completion-providers.md) | Slow completions in a separate process, cancelled by typing |
+| [Eligible completion](eligible-completion.md) | Which providers can run isolated, and their limits |
+
+## Checking and recovering
+
+| Page | Covers |
+| --- | --- |
+| [Candidate generations](candidates.md) | Prepare and inspect a configuration before selecting it |
+| [Candidate checks](candidate-checks.md) | Run declared checks against a candidate before it goes live |
+| [Diagnosing slow startup](causal-diagnostics.md) | `binit diagnose`: which plugin or hook took the time |
 | [Manager extensions](extensions.md) | Plugin-provided `manager.bash` commands |
-| [First-party plugins](first-party.md) | What Binit installs and what stays a plugin |
-| [Licensing](licensing.md) | MIT for Binit's code; GNU Bash is a separate GPL component |
+| [Development plugins](first-party.md) | The plugins in the source release and how to load one |
+| [Existing plugins](plugin-compatibility.md) | Checking unmodified Git completion, bash-completion, NVM and fzf |
 
-## Design and scope
-
-| Page | Covers |
-| --- | --- |
-| [Architecture](architecture.md) | Rust manager, verified generations and the native Bash module |
-| [Qualification](qualification.md) | What Binit targets and how a change qualifies |
-| [Release requirements](release-0.1.md) | The 0.1 gate list and its current state |
-| [Modern-Binit milestone](modern-binit-milestone.md) | The eight outcomes and the landing that carries each |
-| [Local checkpoint](stability.md) | Frozen engine recipe and verification commands |
-| [Performance scope](performance.md) | Shell-opening time and Bash execution, measured apart |
-| [Performance program](performance-program.md) | Lifecycle measurements and how results are kept |
-| [Plugin manager acceptance](parity.md) | Comparison baseline against Zinit |
-| [Zinit reference](zinit-reference.md) | Zinit behavior observed at a pinned commit |
-| [Causal diagnostics](causal-diagnostics.md) | Contract for attributing time to plugins and hooks |
-
-## Comparisons
+## Design
 
 | Page | Covers |
 | --- | --- |
-| [Publication scoreboard](publication-scoreboard.md) | The five frozen aspects, the verdict rules and the current result |
-| [Ecosystem source comparison](bash-ecosystem-comparison.md) | Bash-it, Oh My Bash, ble.sh and Zinit read from source |
-| [Ecosystem corpus](ecosystem-corpus.md) | Pinned sources, shared effects and adapters |
+| [Architecture](architecture.md) | The Rust manager, verified generations and the native Bash module |
+| [Security review](security-review.md) | What independent reviews checked, found and fixed |
+| [Licensing](licensing.md) | MIT for Binit's code, GNU terms for Bash and Readline, and what each release archive holds |
+
+## How performance is measured
+
+Measured results for each release are published on the
+[releases page](https://github.com/exochard/binit/releases). These pages
+describe the method.
+
+| Page | Covers |
+| --- | --- |
+| [Publication scoreboard](publication-scoreboard.md) | The scored aspects, competitors, statistics and verdict rules |
+| [Ecosystem corpus](ecosystem-corpus.md) | Pinned Bash-it, Oh My Bash, ble.sh and Zinit sources, shared effects and adapters |
+| [Primed framework track](ecosystem-primed.md) | Startup after each framework has prepared its state |
 | [Template configurations](ecosystem-defaults.md) | Each framework's documented defaults |
-| [Fresh-home framework track](ecosystem-framework-evidence.md) | Startup with a new home directory |
-| [Primed framework track](ecosystem-primed.md) | Startup after each framework has prepared its state ([results](ecosystem-primed-evidence.md)) |
-| [Editor traces](ecosystem-editor.md) | Keystroke and completion traces against ble.sh ([historical results](ecosystem-editor-evidence.md)) |
-| [Interactive performance](interactive-performance.md) | Typing, history search and completion in a PTY |
-
-## Measurement methods
-
-| Page | Covers |
-| --- | --- |
-| [Runtime workflow targets](runtime-workflows.md) | Two user workflows frozen before treatment |
-| [Bash execution benchmarks](benchmarks.md) | Eight script families run on unchanged Bash |
-| [Eligible completion](eligible-completion.md) | External completion worker experiment |
-| [Completion feasibility](completion-feasibility.md) | Why input-wait hooks cannot give universal responsiveness |
-
-## Qualification evidence
-
-Each page records one landing: the gates, exact artifacts and kept failures.
-
-| Page | Landing |
-| --- | --- |
-| [Startup cost](startup-cost-evidence.md) | 50-plugin startup level with Bash-it; current scoreboard |
-| [Editing keys](editor-keys-evidence.md) | Ctrl-Backspace word deletion |
-| [Runtime preservation](runtime-preservation-evidence.md) | Deferred activation without a subshell |
-| [Runtime workflows](runtime-workflows-evidence.md) | The two workflow targets |
-| [Source trial](source-trial-evidence.md) | Fresh Ubuntu build from source |
-| [Completion providers](completion-provider-evidence.md) | Isolated providers |
-| [Causal diagnostics](causal-diagnostics-evidence.md) | At least 99.78% of the primary fixture interval attributed |
-| [Candidate checks](candidate-checks-evidence.md) | Evidence-bound candidate selection |
-| [Demo interaction](demo-interaction-evidence.md) | Default editor repair, walked in Kitty |
-| [Owned unload](owned-unload-performance.md) | Native unload and generation preparation |
-| [Existing plugins](plugin-compatibility.md) | Unmodified plugin checks |
-
-## Engine experiments
-
-Optional Bash interpreter work. Most treatments were rejected; each page states
-its decision first.
-
-| Page | Covers |
-| --- | --- |
-| [Bash execution research](performance-research.md) | Research and the measurement plan |
-| [Execution cost budget](execution-cost-budget.md) | Where whole-suite time goes |
-| [Arithmetic interpreter](arithmetic-scan-experiment.md) | Arithmetic fast paths |
-| [Combined execution](execution-batch-experiment.md) | Batched execution changes |
-| [Parser context](parser-context-experiment.md) | Parser context and command snapshots |
-| [Private completion cancellation](completion-cancellation.md) | Cancelling shell-code completion inside a private Bash build |
-| [Syntax interface](syntax-interface-experiment.md) | Parser hooks and an incremental grammar for the editor |
-| [Interpreter overhead](overhead-experiments.md) | Four trials that failed the 2% screen |
-| [Closing pass](closing-performance-pass.md) | Final performance and stability pass |
+| [Editor traces](ecosystem-editor.md) | Keystroke and completion traces against ble.sh |
+| [Interactive performance](interactive-performance.md) | Typing, history search and completion in a terminal |
+| [Performance scope](performance.md) | Shell-opening time and Bash execution, measured apart |
+| [Lifecycle measurements](performance-program.md) | Preparation, activation, lazy commands and unload |
+| [Owned unload](owned-unload-performance.md) | How unload finds what a plugin owns |
+| [Runtime workflows](runtime-workflows.md) | Git shortcut activation and a watched toolchain |
+| [Bash execution benchmarks](benchmarks.md) | The fixed script suite and the optional interpreter build |

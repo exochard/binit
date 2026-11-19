@@ -1,19 +1,33 @@
 # Causal diagnostics
 
-Implementation contract, frozen before the diagnostic treatment.
+## Using `binit diagnose`
 
-Add `binit diagnose PLAN [--json]` for reviewed fixtures against the selected
-generation. Reuse the candidate check runner's private home, copied generation
-and input bindings. Keep the selected generation and candidate record intact.
-This is an explicit reproduction; it does not replay private history or
-attach to an existing shell. `binit profile` and `binit report` stay supported.
+```text
+binit diagnose PLAN [--json] [--no-trace]
+```
 
-`binit diagnose PLAN --no-trace` runs the same checks without observation or
-diagnostic sidecars. It preserves the selected generation and reports check
-success or failure. Add `--json` for the receipt. This mode supplies the
-uninstrumented reference when measuring whole-command observer cost.
+`diagnose` runs reviewed fixtures against the selected generation. It uses
+the candidate check runner's private home, copied generation and input
+bindings, and keeps the selected generation and candidate record intact. It is
+an explicit reproduction: it does not replay private history or attach to an
+existing shell. `binit profile` and `binit report` remain available.
 
-The report must identify slow source locations and function calls across
+The text report lists, per phase, wall time, attributed time and opaque time,
+then up to 20 source locations and functions ordered by exclusive time, with
+inclusive time and the owning plugin beside each. A declared-command conflict
+is reported with the blocked plugin and the known existing owner. `--json`
+prints the full receipt.
+
+`--no-trace` runs the same checks without observation or diagnostic
+sidecars and reports check success or failure. It is the uninstrumented
+reference for measuring the observer's cost.
+
+Each diagnostic sidecar is at most 16 MiB, and the sidecars of one run total at
+most 128 MiB. Exceeding either budget fails the run.
+
+## Contract
+
+The report identifies slow source locations and function calls across
 plugin loading, lifecycle callbacks and Bash function completion providers.
 It must show exclusive time separately from inclusive time. A caller's total
 includes its children; those totals cannot be added together.
@@ -23,14 +37,13 @@ includes its children; those totals cannot be added together.
 | Approach | Prior art and difference | Rejection test | Decision |
 | --- | --- | --- | --- |
 | Explicit spans at owned runtime calls | [OpenTelemetry spans](https://opentelemetry.io/docs/concepts/signals/traces/) provide parent/child structure. Runtime load/hook seams already exist. | Miss a slow function completion provider delegated to Bash. | Insufficient alone: observing provider internals would need additional adapters. |
-| Filtered shell trace in the fixture child | [Bash xtrace](https://www.gnu.org/software/bash/manual/html_node/The-Set-Builtin.html) and [bashprof](https://github.com/sstephenson/bashprof/tree/79f7e692191c2db98ce52bee9b8e7b96684af3e7) already support shell profiling. Binit adds generation-bound fixtures and an argument-discarding collector. | Lose provider effects, retain argument text, exceed declared bounds or misattribute nested work. | Selected for implementation. A real-PTY probe preserves provider effects and identifies a 250 ms provider wait. |
+| Filtered shell trace in the fixture child | [Bash xtrace](https://www.gnu.org/software/bash/manual/html_node/The-Set-Builtin.html) and [bashprof](https://github.com/sstephenson/bashprof/tree/79f7e692191c2db98ce52bee9b8e7b96684af3e7) already support shell profiling. Binit adds generation-bound fixtures and an argument-discarding collector. | Lose provider effects, retain argument text, exceed declared bounds or misattribute nested work. | Selected. |
 | Repeated runs with inputs removed | [Delta debugging](https://www.debuggingbook.org/html/DeltaDebugger.html) reduces failure-inducing inputs. Applying it to plugin sets would test interactions. | Dependency removal changes the workload instead of isolating a cause. | Deferred: useful for later counterfactual checks, with higher execution cost. |
 
 These mechanisms are established prior art. The architecture choice is an
-engineering judgment. The initial probe is feasibility evidence, not product
-qualification. Its provider changes globals and the working directory; it
-also supplies completion results and returns nonzero. Tracing preserves those
-effects and the cancelled input line.
+engineering judgment. Tracing preserves a provider's effects on globals and
+the working directory, its completion results, its nonzero status and the
+cancelled input line.
 
 ## Capture contract
 
@@ -105,7 +118,7 @@ channel; completeness describes the observed protocol under that assumption.
 Trusted fixtures have the
 user's authority; this is not a security sandbox or a hostile-code attestation.
 
-## Verification frozen before implementation
+## Verification
 
 The separate `benchmarks/diagnostics.json` corpus fixes effects and targets.
 Primary load/callback/provider cases take at least 200 ms. Attribute at least
@@ -116,8 +129,6 @@ launder opaque time into an attributed cause.
 Measure observed and unobserved whole-command elapsed time in two complete
 20-pair runs. The observer's p95 overhead must remain at most 20% in each
 primary case. Record wall time and kernel-reported resource use separately.
-These measurements do not count as the broader milestone's two new 25%
-performance gains.
 
 The observer runner is `scripts/bench_diagnostics.py`. It uses `diagnose --json`
 for both modes, adding `--no-trace` to the reference. Each run balances and
@@ -126,19 +137,13 @@ elapsed ratios and the ratio of elapsed p95 values must remain at most 1.2.
 Kernel `wait4` resource values are separate from parent-measured elapsed time;
 maximum resident memory is not an aggregate process-tree peak.
 
-The initial runner proposal used `candidate check` as the reference. Source
-review rejected it before timing: candidate verification and extra candidate
-record writes would inflate the reference cost. No qualification result is
-drawn from that unequal comparison.
-
 Public checks must exercise normal success and failed fixtures. Include
 changed inputs, argument privacy, bounded overflow, timeout/interruption,
 spaces and Unicode paths, and state preservation. A conflict is a failed
 diagnostic with an actionable report. Exercise a real completion provider in
 a PTY as well as the controlled fixture runner.
 
-Run full verification on native and native-disabled configurations. Qualify
-the changed behavior with matching Bash 5.2/5.3, review the process and
-attribution code independently, and preserve failed trials. The original
-lifecycle suite still requires two 20-pair runs without repeated median or
-p95 regression above 5% against preserved `c80d4df`.
+Run full verification on native and native-disabled configurations. Check
+the changed behavior with matching Bash 5.2 and 5.3. The lifecycle benchmark
+must show no repeated median or p95 regression above 5% against the previous
+release.

@@ -39,7 +39,7 @@ could not take the key when it started, a later
 A custom binding made before startup takes precedence, and
 `binit_complete editor keys off` restores the original. It also replaces a
 later binding of Ctrl-H to `backward-kill-word`, which looks the same as
-Binit's. `binit editor` lists `Ctrl-Backspace: delete word` while Binit owns
+Binit's. `binit editor` prints a `keys` row containing `ctrl-backspace word` while Binit owns
 the key in the keymap of the current editing mode.
 
 Words follow Readline's rule: letters and digits. In `fix-bug_x`,
@@ -76,9 +76,7 @@ keywords, the variable and the command are colored before `done` exists, a word
 in command position after `then`, `do`, `;`, `|` or `&&` is colored as a
 command, and an unterminated quote is shown as a string to the end of the line.
 Initial command aliases are rendered without colors because their expansion may
-change the parse context. The patched grammar passes the frozen syntax probe and
-its Bash dialect cases; the broader terminal and editor qualification remains
-open.
+change the parse context. Syntax highlighting is experimental.
 
 The default native build contains no syntax grammar and enabling highlighting
 reports an error. To build the experiment, acquire the pinned grammar and

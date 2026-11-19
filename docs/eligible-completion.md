@@ -1,105 +1,42 @@
-# Eligible completion experiment
+# Eligible completion
 
-Test an external worker behind an explicitly registered Bash completion
-function. The function keeps Readline's normal quoting and insertion path.
-Its native wait can return as soon as terminal input arrives, leaving those
-bytes for Readline. This boundary costs a process per request and requires
-providers to accept explicit context. Worker-local changes stay in the worker.
+An eligible provider is an external worker behind an explicitly registered
+Bash completion function. The function keeps Readline's normal quoting and
+insertion path. Its native wait returns as soon as terminal input arrives,
+leaving those bytes for Readline. The boundary costs a process per request and
+requires providers to accept explicit context. Worker-local changes stay in
+the worker; ordinary completion functions keep their calling-shell behavior.
 
-The frozen [experiment](../benchmarks/eligible-completion.json) measures the
-input-to-line-update interval, including termination and reaping. The probe
-establishes a usable boundary. The implementation below adds output parsing,
-resource enforcement and public registration; production qualification is
-recorded separately. Ordinary completion functions retain their calling-shell
-behavior.
+A Readline input-wait hook cannot interrupt arbitrary synchronous Bash
+completion functions, so only external workers qualify. Threads executing Bash
+are not an option because they share interpreter state, and a forked shell
+snapshot cannot carry shell mutations back to the caller.
 
-## Architecture choice
+The [contract](../benchmarks/eligible-completion.json) declares the bounds:
+input-to-line-update interval, measured including termination and reaping, must
+stay under 16 ms at the 95th percentile, with no lost input and no stale
+insertion.
 
-The defaults were an external command, a fork of the current shell, and a
-long-lived helper. Ten constraints widened the search: explicit context,
-inherited functions, no process, existing editor hooks, cooperative providers,
-precomputed results, no Bash changes, a separate editor, persistent caching,
-and interruptible Bash evaluation. Duplicate worker variants were combined.
-Threads executing Bash were rejected because they share interpreter state.
-Private interpreter changes remain outside this experiment's authority.
+## Limits
 
-| Mechanism | Difference and prior art | Cheapest rejecting test | Estimated effort |
-| --- | --- | --- | --- |
-| External command, default | A completion function waits on input and an owned process. Existing command providers need an interruptible wait. | Real PTY cancellation exceeds 16 ms p95 or loses input. | 1 hour |
-| Forked shell snapshot | Reuses functions but cannot transfer shell mutations. [zsh-async](https://github.com/mafredri/zsh-async/blob/ee1d11b68c38dec24c22b1c51a45e8a815a79756/README.md) documents a separate forked environment. This mechanism exists. | A provider relying on a caller mutation behaves differently. Already excluded for ordinary providers. | 15 minutes |
-| Persistent helper | Amortizes startup at the cost of stale state and another lifetime. zsh-async workers demonstrate the mechanism. | Change provider configuration between requests and inspect the next result. | 1 hour |
-| Cooperative polling | Providers explicitly yield when input arrives. [ble.sh](https://github.com/akinomyoga/ble.sh/blob/152942758f567e51fd17bdc7b3783d27b3c476aa/lib/core-complete.sh#L1205) checks input during completion work. | A blocking external command prevents the next poll. | 15 minutes |
-| Precomputed index | Moves work before Tab, with an invalidation contract. Partial substitute for providers whose inputs can be indexed. | Change a dynamic input after indexing and complete it. | 1 hour |
+A process group gives a cancellation target but does not bound descendants,
+and a descendant can leave the group. An eligible worker must therefore be a
+single process, enforced by the helper described below. Per-user process limits
+would affect other shell jobs and are not used. Shell-wide resource settings
+stay untouched.
 
-The external-command probe is the next experiment. It preserves the existing
-editor boundary and has a direct failure criterion. The earlier
-[feasibility result](completion-feasibility.md) already rules out a
-Readline wait hook interrupting arbitrary synchronous Bash providers.
-This comparison establishes mechanisms, not relative product performance.
+Even SIGKILL cannot promise a hard deadline for a process blocked in
+uninterruptible kernel I/O; the cancellation target is a p95 over the declared
+input cases.
 
-## Limits that must be resolved
+## Probe
 
-A process group gives a cancellation target. It does not impose a descendant
-count, and a descendant can leave that group. A production design must either
-enforce an eligible worker's no-descendant contract or provide a separately
-qualified containment mechanism. Per-user process limits would affect other
-shell jobs and are unsuitable for this boundary.
-
-The proposed byte and time bounds are in the frozen experiment. Address-space
-and descriptor bounds belong to the child. Shell-wide resource settings must
-remain untouched. Even SIGKILL cannot promise a hard deadline for a process
-blocked in uninterruptible kernel I/O; the measured cancellation target is a
-p95 over the declared corpus.
-
-The probe is deliberately narrow. It starts one known sleep process, polls
-the terminal without reading it, kills and reaps its owned child, and returns
-through the ordinary completion function. It does not expose a product API.
-
-## Feasibility result, 2026-11-14
-
-Both matching interpreters pass the four input cases, with 40 samples per
-case and treatment. The 320 probe cancellations preserve every tested line
-and cursor position. Each has a successful-spawn acknowledgment followed by
-matching kill and reap receipts for the owned child. The synchronous controls
-retain their expected delay. Raw [Bash 5.2](../benchmarks/results/eligible-completion-5.2.json)
-and [Bash 5.3](../benchmarks/results/eligible-completion-5.3.json) records bind
-the interpreter, modules and worker executable to their hashes.
-
-| Input case | Bash 5.2 probe p95 | Bash 5.3 probe p95 |
-| --- | --- | --- |
-| Typed suffix | 0.193 ms | 0.175 ms |
-| Bracketed paste | 0.175 ms | 0.165 ms |
-| Cursor movement | 0.164 ms | 0.152 ms |
-| Coalesced Tab and suffix | 0.214 ms | 0.254 ms |
-
-Values are rounded to three decimal places. Control p95 values range from
-195.771 to 200.938 ms. Measurement ends when the Readline capture binding has
-written the line and cursor, after provider return and child cleanup. It
-includes the capture binding's dispatch cost and file observation. Neither
-treatment supplies candidates; stale candidate insertion remains untested.
-These synthetic delays do not count toward the two new workload improvements.
-
-Independent review found that the initial readiness marker preceded worker
-creation, so failed launches could appear responsive. The
-[earlier 5.2 run](../benchmarks/results/eligible-completion-pre-ack-5.2.json)
-and [earlier 5.3 run](../benchmarks/results/eligible-completion-pre-ack-5.3.json)
-are retained as insufficient evidence. A separate
-[initial smoke run](../benchmarks/results/eligible-completion-harness-error.json)
-exposes a wrong expected paste cursor position and incomplete line clearing
-between cursor-movement cases. The corrected harness clears the entire line.
-
-The strengthened measurement rejects an
-[immediately exiting worker](../benchmarks/results/eligible-completion-negative-fast.json).
-A [non-executable worker](../benchmarks/results/eligible-completion-negative-spawn.json)
-leaves an incomplete receipt with its error and terminal evidence. Existing
-output files are refused. A second independent review accepted these
-corrections within the synthetic-worker scope.
-
-The prototype builds with warnings treated as errors against both header
-sets. GCC's analyzer and Clang's analyzer pass. Clang-tidy did not run because
-this probe has no compilation database; cppcheck is unavailable. Sanitizers
-did not run because the probe has no standalone instrumented test target.
-Full native/fallback product gates remain required when implementation lands.
+`benchmarks/probes/eligible_wait.c` is a deliberately narrow probe. It starts
+one known sleep process, polls the terminal without reading it, kills and
+reaps its owned child, and returns through the ordinary completion function.
+It exposes no product API. The probe covers four input cases: typed suffix,
+bracketed paste, cursor movement, and coalesced Tab and suffix. A synchronous
+control that waits out the full delay shows the cost of not cancelling.
 
 ## Reproduce the probe
 
@@ -131,9 +68,8 @@ it bypass the helper's limits.
 
 The boundary begins before helper execution. The native launcher omits
 `LD_*`, `DYLD_*`, `GLIBC_TUNABLES` and `GCONV_PATH` from the worker environment.
-An independently reviewed constructor regression demonstrates why: loader
-code can create processes before a helper reaches its own entry point.
-Those settings are omitted for the provider too. Other exported variables
+Loader code can create processes before a helper reaches its own entry
+point, so those settings are omitted for the provider too. Other exported variables
 are included within the combined 64 KiB context budget. The interactive
 shell's environment remains intact.
 
@@ -146,8 +82,8 @@ replace the resource limits or clear the parent-exit signal. This makes
 single-process executables eligible; programs that require subprocesses or
 threads need their ordinary execution path.
 
-The [kernel's seccomp documentation](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html),
-checked on 2026-11-14, requires checking syscall architecture and enabling
+The [kernel's seccomp documentation](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
+requires checking syscall architecture and enabling
 `no_new_privs` before unprivileged filter installation. The helper does both.
 The provider retains filesystem and network access as the current user.
 This is an operational resource boundary for reviewed providers.
@@ -159,25 +95,22 @@ poll interruption cancels the owned process. Before updating `COMPREPLY`,
 it rechecks the line, cursor and directory identity, along with the current
 generation. Existing Readline quoting and menu insertion handle the result.
 
-The implementation currently requires Linux `close_range` support and the
-GNU spawn close-from operation. Unsupported platforms fail closed. ARM64
-execution evidence remains open. The [registration API](completion-providers.md)
-selects the runtime's manager path. Completion context travels through a
-bounded socketpair and becomes sealed anonymous stdin before provider exec;
-exported `COMP_*` fields are excluded. Matching native/fallback gates and
-quantitative cancellation measurements pass on x86_64, with lifecycle and
-interactive preservation. The [qualification evidence](completion-provider-evidence.md)
-records the scopes, observer correction and retained single-run regressions.
+The implementation requires Linux `close_range` support and the GNU spawn
+close-from operation. Unsupported platforms fail closed. Binit 0.1 supports
+Linux x86_64. The [registration API](completion-providers.md) selects the
+runtime's manager path. Completion context travels through a bounded
+socketpair and becomes sealed anonymous stdin before provider exec; exported
+`COMP_*` fields are excluded.
 
 ## Measure the public API
 
 `scripts/bench_completion_provider.py` exercises `binit completions register`
 in initialized shells. Each interpreter gets two complete 20-pair runs of
-the four frozen input cases. Pair order alternates between an isolated
+the four input cases. Pair order alternates between an isolated
 provider and a synchronous control that performs the same 200 ms delay.
 The control discards output; the isolated provider would return stale
 candidates if allowed to finish. This measures input response, not useful
-completion throughput or either new 25% workload target.
+completion throughput.
 
 Each run first requires a successful public completion. For ordinary input
 cases, timing starts only after the provider acknowledges its PID and the

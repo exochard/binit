@@ -1,16 +1,21 @@
 # Pinned Bash ecosystem corpus
 
 Use shared effects and small adapters for framework comparisons. Each adapter
-must pass its effect checks before its timings enter the corpus. The
-[source comparison](bash-ecosystem-comparison.md#comparable-performance-study)
-defines the wider study; the initial implementation covers eager framework
-loading. Editor and documented-default measurements remain pending.
+must pass its effect checks before its timings enter the corpus. The corpus
+was designed from the upstream sources at the pinned revisions and has four
+tracks:
 
-The [fresh-home framework evidence](ecosystem-framework-evidence.md) retains
-two complete 20-block runs, failed attempts and matching adapter checks.
-This stage has unequal preparation boundaries: Binit's generation is prepared
-before timing, while Zinit initializes its private data during launch.
-Routine configured-startup comparisons still need a primed-private-state track.
+- the fresh-home framework stage, described on this page;
+- the [primed framework track](ecosystem-primed.md), which reuses each
+  configuration's private home;
+- the [documented defaults](ecosystem-defaults.md) of Bash-it and Oh My Bash;
+- the [editor traces](ecosystem-editor.md), which compare Binit with plain
+  Readline and ble.sh.
+
+The fresh-home stage has unequal preparation boundaries: Binit's generation is
+prepared before timing, while Zinit initializes its private data during launch.
+The primed track removes that difference. Measured results ship with each
+release at https://github.com/exochard/binit/releases.
 
 The [source lock](../benchmarks/ecosystem.json) pins five public archives,
 including ble.sh's contrib submodule. These are the revisions from the
@@ -19,12 +24,9 @@ upstream versions. Archive hashes and exact extracted-file inventories are
 checked before execution and after measurement. ble.sh's build outputs are
 declared derivatives, hashed separately and checked for changes.
 
-On 2026-11-17 the archive hashes were re-pinned. GitHub builds archives on
-request and the new downloads differ in container bytes, while every
-extracted file, executable bit and link target matches the tree kept from the
-earlier runs. Receipts from before that date name the previous hashes; the
-[re-pin receipt](../benchmarks/results/ecosystem-source-repin.json) records
-both and the check.
+The archive hashes were re-pinned after GitHub rebuilt the archives with
+different container bytes. Every extracted file, executable bit and link
+target is unchanged.
 
 ## Framework effects
 
@@ -104,16 +106,10 @@ Use fresh work and output paths for each experiment. A short run can diagnose
 an adapter but cannot satisfy the two-run measurement requirement. The
 original Binit interpreter, interactive and lifecycle suites remain separate.
 
-## Remaining coverage
+## Other tracks
 
-Editor fixtures still need matched Bash/Readline, real terminal traces and
-known history data. Include vi and Emacs, Unicode, multiline paste, wrapped
-prompts and large candidate sets. First and warm completion need correct
-insertion and cancellation checks; slow isolated providers and state-changing
-providers retain separate cases. Typing p99 needs at least 1,000 input events
-per case. Framework/editor pairings require compatibility evidence.
+The primed, defaults and editor tracks have their own pages, linked above.
 
-Unsupported and unequal cases belong in the result. For example, a framework
+Unsupported and unequal cases stay in the result. For example, a framework
 without an editor does not supply ble.sh's editor features, and a history
-window limit must remain visible in a large-history comparison. This corpus
-does not close either new 25% Binit workload target.
+window limit stays visible in a large-history comparison.

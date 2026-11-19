@@ -53,6 +53,20 @@ class EditorCorpusTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'invalid cancellation'):
             editor.cancellation_elapsed(2, 1)
 
+    def test_large_menu_close_requires_restored_input_and_cleared_candidates(self):
+        line = editor.LARGE_COMPLETION_LINE
+        cursor = SimpleNamespace(x=len(line), y=0, hidden=False)
+        screen = SimpleNamespace(cursor=cursor, display=[line, '> pre0000  pre0001'])
+        self.assertFalse(editor.large_menu_closed(screen))
+        screen.display = [line + '0000', '']
+        self.assertFalse(editor.large_menu_visible(screen.display))
+        self.assertFalse(editor.large_menu_closed(screen))
+        screen.display = [line, '']
+        cursor.hidden = True
+        self.assertFalse(editor.large_menu_closed(screen))
+        cursor.hidden = False
+        self.assertTrue(editor.large_menu_closed(screen))
+
     def test_readline_candidate_confirmation_requires_actual_prompt(self):
         self.assertTrue(editor.readline_candidate_confirmation(b'Display all 1024 possibilities? (y or n)'))
         self.assertFalse(editor.readline_candidate_confirmation(b'Display all candidates'))

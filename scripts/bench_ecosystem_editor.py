@@ -371,6 +371,23 @@ def cancellation_elapsed(start_ns, endpoint_ns):
     return (endpoint_ns - start_ns) / 1e6
 
 
+LARGE_CANDIDATE = re.compile(r'\bpre[0-9]{4}\b')
+PROMPT_TEXT = PROMPT.decode()
+LARGE_COMPLETION_LINE = PROMPT_TEXT + ' wf_many pre'
+
+
+def large_menu_visible(display):
+    return any(LARGE_CANDIDATE.search(row) for row in display if not row.startswith(PROMPT_TEXT))
+
+
+def large_menu_closed(screen):
+    display = screen.display
+    cursor = screen.cursor
+    return (not cursor.hidden and cursor.x == len(LARGE_COMPLETION_LINE)
+            and display[cursor.y].rstrip() == LARGE_COMPLETION_LINE
+            and not large_menu_visible(display))
+
+
 def paired_provider_is_live(sample, shell_pid, provider_pid):
     return (not sample['partial'] and provider_pid != shell_pid
             and any(row['pid'] == provider_pid and row['state'] != 'Z' for row in sample['samples']))
@@ -496,6 +513,7 @@ def run_trace(subject, mode, history, binary, bash, source, directory, events):
                 'completion_response_ms': completion_ms, 'accepted_ms': accepted_ms}
         path = tag(shell, directory, 'large-cancel')
         shell.settled(b' wf_many pre')
+        close_ms = None
         if subject in READLINE_SUBJECTS:
             offset = len(shell.raw)
             os.write(shell.fd, b'\t')
@@ -507,11 +525,17 @@ def run_trace(subject, mode, history, binary, bash, source, directory, events):
             shell.settled(b'\x07' if mode == 'emacs' else b'\x1bi')
         else:
             shell.settled(b'\t')
+            shell.until(lambda: large_menu_visible(shell.screen.display), seconds=3)
             cancel_started = time.perf_counter_ns()
             shell.settled(b'\x07' if subject in BLE_SUBJECTS else b'\x1b')
+            # A bell or a partial redisplay can precede the menu closing.
+            shell.until(lambda: large_menu_closed(shell.screen), seconds=3)
+            close_ms = cancellation_elapsed(cancel_started, time.perf_counter_ns())
         accept_ms, endpoint = accepted(shell, b'', with_endpoint=True)
         row['traces']['completion-large-cancel'] = {
             'elapsed_ms': cancellation_elapsed(cancel_started, endpoint), 'accepted_ms': accept_ms}
+        if close_ms is not None:
+            row['traces']['completion-large-cancel']['menu_close_ms'] = close_ms
         effect(path, b'pre\0')
         offset = len(shell.raw)
         shell.command(' printf "\\036MANY-CALLS:%s\\037" "${WF_MANY_CALLS:-0}"')

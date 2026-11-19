@@ -14,7 +14,10 @@ search or interaction is retained as a failure and cannot become a timing row.
 
 Large-candidate cancellation time starts at the first cancellation input,
 including any Readline confirmation response, and ends at the accepted-command
-prompt. Accepted-command latency is recorded separately.
+prompt. For Binit and ble.sh, the observer waits for visible candidates before
+sending the cancellation key. It sends Enter once the candidates are gone
+and the cursor is back at the end of the original command. The receipt records
+the time to this acknowledgment and the accepted-command latency separately.
 
 The trace checks Unicode input, bracketed multiline paste, a wrapped prompt,
 first and warm completion, a 1,024-candidate cancellation, and recovery after

@@ -545,6 +545,25 @@ class AcceptKeyTests(unittest.TestCase):
                     self.assertEqual(row.count(PROMPT), 1, row)
                     self.assertEqual(typed(session), line)
 
+    def test_resize_with_a_cleared_signal_state_returns_to_the_prompt_start(self):
+        # A second SIGWINCH during a resize's forced update runs Readline's asynchronous handler, which clears
+        # RL_STATE_SIGHANDLER; the fixture replays that update deterministically on a 60-column screen.
+        fixture = MODULE.parent / 'binit_redisplay_test.so'
+        if not fixture.is_file():
+            self.skipTest('native redisplay fixture not built')
+        extra = SUGGEST + f"binit_complete editor suggestions on\nenable -f '{fixture}' binit_redisplay_test\n"
+        with Session(extra=extra) as session:
+            settle(session)
+            session.screen.resize(24, 60)
+            session.send('binit_redisplay_test resize-clobbered\n')
+            session.wait(lambda: 'RESIZE_ARMED' in session.text or 'NO_MARKER' in session.text)
+            if 'NO_MARKER' in session.text:
+                self.skipTest('this Readline has no _rl_handling_signal marker')
+            session.pump(.6)
+            row = session.screen.display[prompt_row(session)]
+            self.assertEqual(row.count(PROMPT), 1, row)
+            self.assertEqual(typed(session), '')
+
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_term_assignment_keeps_wrapped_input_aligned(self):
         extra = 'binit_complete editor highlighting on\nbinit_complete editor suggestions on\n'

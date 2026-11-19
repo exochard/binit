@@ -1,4 +1,5 @@
 #include <config.h>
+#include <signal.h>
 #include <string.h>
 #include <stdio.h>
 #include "builtins.h"
@@ -28,6 +29,25 @@ static void foreign_deprep(void)
     if (previous_deprep) previous_deprep();
 }
 
+/* Replays a resize's forced update the way Readline 8.3 runs it after a second SIGWINCH's asynchronous
+   handler has cleared RL_STATE_SIGHANDLER: _rl_handling_signal still names SIGWINCH, the state bit is gone.
+   It runs once, from the event hook, while Readline waits for a key. */
+extern int volatile _rl_handling_signal __attribute__((weak));
+static rl_hook_func_t *previous_event;
+
+static int clobbered_resize(void)
+{
+    rl_event_hook = previous_event;
+    int rows, columns;
+    rl_get_screen_size(&rows, &columns);
+    _rl_handling_signal = SIGWINCH;
+    rl_readline_state &= ~(unsigned long)RL_STATE_SIGHANDLER;
+    rl_set_screen_size(rows, 60);
+    rl_forced_update_display();
+    _rl_handling_signal = 0;
+    return 0;
+}
+
 static int test_builtin(WORD_LIST *args)
 {
     if (!args || args->next) return EX_USAGE;
@@ -39,6 +59,12 @@ static int test_builtin(WORD_LIST *args)
         rl_deprep_term_function = foreign_deprep;
     }
     else if (!strcmp(args->word->word, "deprep-off")) rl_deprep_term_function = previous_deprep;
+    else if (!strcmp(args->word->word, "resize-clobbered")) {
+        if (!&_rl_handling_signal) {puts("NO_MARKER"); return EXECUTION_SUCCESS;}
+        previous_event = rl_event_hook;
+        rl_event_hook = clobbered_resize;
+        puts("RESIZE_ARMED");
+    }
     else if (!strcmp(args->word->word, "on")) {
         previous = rl_redisplay_function;
         rl_redisplay_function = foreign_redisplay;

@@ -5,9 +5,15 @@ snapshot and loads each one when it is needed. It also draws a completion
 menu, history search and suggestions inside Bash itself, so the line you are
 typing never waits on a slow plugin or completion.
 
-The [publication scoreboard](docs/publication-scoreboard.md) compares Binit
-with Bash-it and Oh My Bash loading the same 50 plugins, and with ble.sh editing
-the same command lines. The results ship with each
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/comparison-dark.svg">
+  <img alt="Binit against Bash-it, Oh My Bash and ble.sh, in milliseconds. Ready to type with 50 plugins: Binit 22.1, Bash-it 31.2, Oh My Bash 69.2. All 50 plugins loaded: Binit 32.8, Bash-it 42.5, Oh My Bash 87.7. Keystroke p99: Binit 0.26, ble.sh 29.9. Delete key p99: Binit 0.28, ble.sh 85.6. Typing during a slow completion, p95: Binit 2.3, ble.sh 228.4. Cancelling a 1,024-item menu, median: Binit 13.9, ble.sh 34.1." src="docs/images/comparison-light.svg" width="600">
+</picture>
+
+The chart compares Binit with Bash-it and Oh My Bash loading the same 50
+plugins, and with ble.sh editing the same command lines, on one Linux machine.
+The [publication scoreboard](docs/publication-scoreboard.md) describes the
+method and the verdict rules. The raw results ship with each
 [release](https://github.com/exochard/binit/releases).
 
 ## Install

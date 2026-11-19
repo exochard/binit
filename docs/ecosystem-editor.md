@@ -39,7 +39,13 @@ Input-response timings retain every terminal observation. Each of 20 pairs
 contains 50 insertions and 50 deletions, giving 1,000 of each per case and run.
 The runner reports p99 only with at least 1,000 observations of that key. The
 2 ms observer quiet interval is outside the
-reported response, while terminal and scheduler costs remain included. Two
+reported response, while terminal and scheduler costs remain included. A
+response can arrive in fragments more than 2 ms apart. If the inserted or
+deleted character is not yet on screen at the first quiet interval, the
+observer keeps reading for up to 2 s from the key. It measures to the last
+output before a quiet interval with the character's effect visible. A
+response visible at the first quiet interval keeps its original measurement.
+Each case's receipt counts its late acknowledgments per key. Two
 runs of 20 alternating blocks produce independent per-run distributions. Small
 runs diagnose traces and cannot complete the corpus.
 

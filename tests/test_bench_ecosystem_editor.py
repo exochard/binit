@@ -12,6 +12,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import bench_ecosystem_editor as editor
+from bench_interactive import Shell
 
 
 def valid_row():
@@ -556,6 +557,8 @@ class EditorCorpusTests(unittest.TestCase):
             def settled(self, data):
                 self.active = data == b'@'
                 return 1. if self.active else 2.
+            def read(self, _):
+                raise AssertionError('a key visible at its first quiet interval needs no extra read')
         shell = FakeShell()
         def screen(_):
             return 'BENCH> @' if shell.active else 'BENCH> '
@@ -570,8 +573,112 @@ class EditorCorpusTests(unittest.TestCase):
         class FakeShell:
             def settled(self, _):
                 return 1.
+            def read(self, _):
+                return False
         with patch.object(editor, 'screen_tail', return_value='BENCH> '):
-            with self.assertRaisesRegex(RuntimeError, 'not acknowledged'):
+            with self.assertRaisesRegex(RuntimeError, 'printable input was not acknowledged'):
+                editor.typing_trace(FakeShell(), 1)
+
+    def test_fragmented_response_is_measured_to_the_acknowledging_output(self):
+        class FakeShell:
+            shown = False
+            def settled(self, data):
+                # The deletion is visible at its first quiet interval; the insertion is not.
+                if data == b'\x7f':
+                    self.shown = False
+                    return 2.
+                return 1.
+            def read(self, timeout):
+                if timeout == .002:
+                    return False
+                self.shown = True
+                return True
+        shell = FakeShell()
+        # Insertion reads the clock at the write, before and after the late read; deletion once.
+        clock = iter([0, 1_000_000, 7_000_000, 10_000_000])
+        with patch.object(editor, 'screen_tail', side_effect=lambda _: 'BENCH> @' if shell.shown else 'BENCH> '), \
+                patch.object(editor.time, 'perf_counter_ns', side_effect=lambda: next(clock)):
+            result = editor.typing_trace(shell, 1)
+        self.assertEqual(result['samples_ms'], {'insert': [7.], 'delete': [2.]})
+        self.assertEqual(result['late_acknowledgments'], {'insert': 1, 'delete': 0})
+
+    def test_real_terminal_split_response_is_waited_for(self):
+        # The insertion response is split by 50 ms, far beyond the 2 ms quiet interval.
+        program = ('import os, time, tty\n'
+                   'tty.setraw(0)\n'
+                   'os.write(1, b"BENCH> ")\n'
+                   'while True:\n'
+                   '    data = os.read(0, 1)\n'
+                   '    if not data or data == b"\\x03":\n'
+                   '        break\n'
+                   '    if data == b"@":\n'
+                   '        os.write(1, b"\\x1b[?25l")\n'
+                   '        time.sleep(.05)\n'
+                   '        os.write(1, b"@\\x1b[?25h")\n'
+                   '    elif data == b"\\x7f":\n'
+                   '        os.write(1, b"\\b \\b")\n')
+        with tempfile.TemporaryDirectory(dir=ROOT / 'tmp') as work:
+            shell = Shell(sys.executable, None, work, {'PATH': os.environ.get('PATH', '/usr/bin')},
+                          command=[sys.executable, '-I', '-c', program])
+            try:
+                result = editor.typing_trace(shell, 2)
+            finally:
+                shell.close()
+        # Under heavy load both fragments can arrive in one read; the sample bound holds either way.
+        self.assertTrue(all(value >= 50 for value in result['samples_ms']['insert']))
+        self.assertEqual(result['late_acknowledgments']['delete'], 0)
+
+    def test_late_output_past_the_bound_is_not_a_sample(self):
+        class FakeShell:
+            def settled(self, _):
+                return 1.
+            def read(self, timeout):
+                return timeout != .002
+        # The late read returns just after the 2 s bound, then the terminal goes quiet.
+        clock = iter([0, 1_999_000_000, 2_000_000_001])
+        with patch.object(editor, 'screen_tail', return_value='BENCH> @'), \
+                patch.object(editor, 'typed_at_prompt', side_effect=[False, True]), \
+                patch.object(editor.time, 'perf_counter_ns', side_effect=lambda: next(clock)):
+            with self.assertRaisesRegex(RuntimeError, 'did not settle'):
+                editor.acknowledged_input(FakeShell(), b'@', lambda: editor.typed_at_prompt(None))
+
+    def test_hidden_prompt_waits_for_the_redraw(self):
+        class FakeShell:
+            hidden = False
+            shown = False
+            def settled(self, data):
+                if data == b'@':
+                    self.hidden = True
+                    return 1.
+                self.shown = False
+                return 2.
+            def read(self, timeout):
+                if timeout == .002:
+                    return False
+                self.hidden, self.shown = False, True
+                return True
+        shell = FakeShell()
+        def screen(_):
+            if shell.hidden:
+                raise editor.PromptNotVisible('prompt not visible on terminal screen')
+            return 'BENCH> @' if shell.shown else 'BENCH> '
+        clock = iter([0, 1_000_000, 5_000_000, 10_000_000])
+        with patch.object(editor, 'screen_tail', side_effect=screen), \
+                patch.object(editor.time, 'perf_counter_ns', side_effect=lambda: next(clock)):
+            result = editor.typing_trace(shell, 1)
+        self.assertEqual(result['samples_ms'], {'insert': [5.], 'delete': [2.]})
+        self.assertEqual(result['late_acknowledgments'], {'insert': 1, 'delete': 0})
+
+    def test_late_acknowledgment_wait_is_bounded(self):
+        class FakeShell:
+            def settled(self, _):
+                return 1.
+            def read(self, _):
+                return True
+        clock = iter(range(0, 10_000_000_000, 500_000_000))
+        with patch.object(editor, 'screen_tail', return_value='BENCH> '), \
+                patch.object(editor.time, 'perf_counter_ns', side_effect=lambda: next(clock)):
+            with self.assertRaisesRegex(RuntimeError, 'did not settle'):
                 editor.typing_trace(FakeShell(), 1)
 
     def test_exact_utf8_and_nul_termination_are_checked(self):

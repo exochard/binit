@@ -258,24 +258,70 @@ def resize(shell, columns):
     os.kill(shell.pid, signal.SIGWINCH)
 
 
+class PromptNotVisible(RuntimeError):
+    pass
+
+
 def screen_tail(shell):
     rows = shell.screen.display
     positions = [index for index, row in enumerate(rows) if 'BENCH> ' in row]
     if not positions:
-        raise RuntimeError('prompt not visible on terminal screen')
+        raise PromptNotVisible('prompt not visible on terminal screen')
     return '\n'.join(rows[positions[-1]:shell.screen.cursor.y + 1])
+
+
+def typed_at_prompt(shell):
+    """Whether the prompt line shows the typed '@', or None while a redraw hides the prompt."""
+    try:
+        return 'BENCH> @' in screen_tail(shell)
+    except PromptNotVisible:
+        return None
+
+
+ACKNOWLEDGMENT_LIMIT_NS = 2_000_000_000
+
+
+def acknowledged_input(shell, data, visible):
+    """Input to the last output before a 2 ms quiet interval with the input's effect on screen.
+
+    A response can arrive in fragments more than 2 ms apart. When the first quiet interval comes
+    before the effect is visible, reading continues for at most 2 s from the write. Returns the
+    sample and whether it needed that wait, or None when the effect never appears.
+    """
+    started = time.perf_counter_ns()
+    elapsed = shell.settled(data)
+    if visible():
+        return elapsed, False
+    deadline = started + ACKNOWLEDGMENT_LIMIT_NS
+    while True:
+        remaining = deadline - time.perf_counter_ns()
+        if remaining <= 0 or not shell.read(remaining / 1e9):
+            return None
+        last = time.perf_counter_ns()
+        while True:
+            if last > deadline:
+                raise RuntimeError('terminal did not settle')
+            if not shell.read(.002):
+                break
+            last = time.perf_counter_ns()
+        if visible():
+            return (last - started) / 1e6, True
 
 
 def typing_trace(shell, events):
     samples = {'insert': [], 'delete': []}
+    late = {'insert': 0, 'delete': 0}
     for _ in range(events):
-        samples['insert'].append(shell.settled(b'@'))
-        if 'BENCH> @' not in screen_tail(shell):
+        insert = acknowledged_input(shell, b'@', lambda: typed_at_prompt(shell) is True)
+        if insert is None:
             raise EditorBehaviorMismatch('printable input was not acknowledged on screen')
-        samples['delete'].append(shell.settled(b'\x7f'))
-        if 'BENCH> @' in screen_tail(shell):
+        delete = acknowledged_input(shell, b'\x7f', lambda: typed_at_prompt(shell) is False)
+        if delete is None:
             raise EditorBehaviorMismatch('deletion was not acknowledged on screen')
-    result = {'samples_ms': samples, 'per_key': {}}
+        for key, (value, extended) in (('insert', insert), ('delete', delete)):
+            samples[key].append(value)
+            late[key] += extended
+    result = {'samples_ms': samples, 'late_acknowledgments': late, 'per_key': {}}
     for key, values in samples.items():
         if any(not math.isfinite(value) or value <= 0 for value in values):
             raise RuntimeError('invalid typing event duration')

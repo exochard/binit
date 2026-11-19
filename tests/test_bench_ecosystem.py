@@ -202,42 +202,48 @@ class EcosystemIntegrityTests(unittest.TestCase):
                 with self.assertRaises(PermissionError):
                     corpus.resource_sample(123, proc)
 
-    def test_resource_sampler_treats_denied_child_without_memory_as_exiting(self):
-        # Seen on a 6.18 kernel: an exiting child reads State R with zero statm and denies fd access.
+    def test_resource_sampler_rereads_a_child_denied_during_exit(self):
+        # Seen on a 6.18 kernel: a child first read as live releases its memory and denies its fd
+        # listing while its state still reads R; some reach Z before the second read.
+        live = 'Name: fixture\nState:\tS (sleeping)\nThreads:\t1\n'
         with tempfile.TemporaryDirectory() as temporary:
             proc = Path(temporary)
-            for pid, statm in ((123, '5 2 0 0 0 0 0\n'), (456, '0 0 0 0 0 0 0\n')):
+            for pid in (123, 456):
                 root = proc / str(pid)
                 (root / 'fd').mkdir(parents=True)
                 (root / f'task/{pid}').mkdir(parents=True)
-                (root / 'status').write_text('Name: fixture\nState:\tR (running)\nThreads:\t1\n')
-                (root / 'statm').write_text(statm)
+                (root / f'task/{pid}/children').write_text('')
             (proc / '123/task/123/children').write_text('456\n')
-            (proc / '456/task/456/children').write_text('')
             listed = Path.iterdir
 
-            def deny_exiting(path):
-                if path == proc / '456/fd':
-                    raise PermissionError('fixture denies fd access')
-                return listed(path)
+            def sample(denied, after_status, after_statm):
+                for pid in (123, 456):
+                    (proc / f'{pid}/status').write_text(live)
+                    (proc / f'{pid}/statm').write_text('5 2 0 0 0 0 0\n')
 
-            with patch.object(Path, 'iterdir', deny_exiting):
-                sample = corpus.resource_sample(123, proc)
-            self.assertEqual(sample['processes'], 1)
-            self.assertEqual(sample['vanished_processes'], 1)
-            self.assertTrue(sample['partial'])
-            (proc / '456/status').write_text('Name: fixture\nState:\tZ (zombie)\nThreads:\t1\n')
-            with patch.object(Path, 'iterdir', deny_exiting):
-                sample = corpus.resource_sample(123, proc)
-            self.assertEqual((sample['processes'], sample['zombies'], sample['fds_sum']), (2, 1, 0))
-            (proc / '456/statm').write_text('5 2 0 0 0 0 0\n')
-            with patch.object(Path, 'iterdir', deny_exiting):
-                with self.assertRaises(PermissionError):
-                    corpus.resource_sample(123, proc)
-            (proc / '123/statm').write_text('0 0 0 0 0 0 0\n')
-            with patch.object(Path, 'iterdir', side_effect=PermissionError('fixture denies fd access')):
-                with self.assertRaisesRegex(RuntimeError, 'owned shell disappeared'):
-                    corpus.resource_sample(123, proc)
+                def deny(path):
+                    if path.parent.name == str(denied) and path.name == 'fd':
+                        (path.parent / 'status').write_text(after_status)
+                        (path.parent / 'statm').write_text(after_statm)
+                        raise PermissionError('fixture denies fd access')
+                    return listed(path)
+
+                with patch.object(Path, 'iterdir', deny):
+                    return corpus.resource_sample(123, proc)
+
+            exiting = 'Name: fixture\nState:\tR (running)\nThreads:\t1\n'
+            result = sample(456, exiting, '0 0 0 0 0 0 0\n')
+            self.assertEqual((result['processes'], result['vanished_processes'], result['partial']), (1, 1, True))
+            result = sample(456, 'Name: fixture\nState:\tZ (zombie)\nThreads:\t1\n', '0 0 0 0 0 0 0\n')
+            zombie = result['samples'][-1]
+            self.assertEqual((result['processes'], result['zombies'], result['partial']), (2, 1, False))
+            self.assertEqual((zombie['state'], zombie['resident_pages'], zombie['rss_kib'], zombie['fds']), ('Z', 0, 0, 0))
+            with self.assertRaises(PermissionError):
+                sample(456, exiting, '5 2 0 0 0 0 0\n')
+            with self.assertRaises(PermissionError):
+                sample(456, 'Name: fixture\nState:\tR (running)\nThreads:\t2\n', '0 0 0 0 0 0 0\n')
+            with self.assertRaisesRegex(RuntimeError, 'owned shell disappeared'):
+                sample(123, exiting, '0 0 0 0 0 0 0\n')
 
 
 if __name__ == '__main__':

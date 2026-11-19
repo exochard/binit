@@ -233,6 +233,41 @@ static void reset_display(void)
     colors_painted = suggestion_visible = history_painted = false;
 }
 
+/* Readline 8.3 holds _rl_handling_signal at SIGWINCH while it runs a resize's forced update. The state
+   bit alone is not enough: a second SIGWINCH during that update runs Readline's asynchronous handler,
+   which clears RL_STATE_SIGHANDLER, and the update would then print the prompt at the cursor. The
+   marker only counts while Readline waits for a key, where the deferred resize runs; a marker left set
+   by a longjmp out of the handler must not turn the first redisplay of a new line into a resize.
+   The weak reference keeps the module loadable where Readline does not define the variable (8.2). */
+extern int volatile _rl_handling_signal __attribute__((weak));
+
+static bool resizing(void)
+{
+    if (RL_ISSTATE(RL_STATE_SIGHANDLER)) return true;
+    return &_rl_handling_signal && _rl_handling_signal == SIGWINCH && RL_ISSTATE(RL_STATE_READCMD);
+}
+
+/* Readline forces the update only when its screen size changed; an interrupt also redisplays from the
+   signal handler (clearing a message) and must not be treated as a resize. */
+static void prepare_resize(void)
+{
+    static int seen_rows, seen_columns;
+    int rows, columns;
+    rl_get_screen_size(&rows, &columns);
+    bool resized = seen_columns && (rows != seen_rows || columns != seen_columns);
+    seen_rows = rows;
+    seen_columns = columns;
+    if (!resized || !resizing() || !rl_outstream) return;
+    // Return to the start of the prompt and clear below, as Readline's own resize handling does, so the
+    // forced update replaces the old lines.  Terminals reflow wrapped input, so the new width places it.
+    struct binit_layout layout;
+    int lines = current_layout(&layout, &rows, &columns) ? layout.cursor.row : 0;
+    for (const char *p = rl_display_prompt; p && *p; ++p) lines += *p == '\n';
+    if (lines > 0) fprintf(rl_outstream, "\033[%dA", lines);
+    fputs("\r\033[J", rl_outstream);
+    colors_painted = suggestion_visible = history_painted = false;
+}
+
 /* With a redisplay hook installed Readline changes two behaviors: a TERM assignment re-initializes it
    without terminal capabilities, and a resize gets a forced update from wherever the cursor is. */
 static void prepare_redisplay(void)
@@ -250,28 +285,13 @@ static void prepare_redisplay(void)
         // Only cache failed resets: a later TERM assignment can drop capabilities again.
         if (up && *up) reinitialized[0] = '\0';
     }
-    // Readline forces the update only when its screen size changed; an interrupt also redisplays from the
-    // signal handler (clearing a message) and must not be treated as a resize.
-    static int seen_rows, seen_columns;
-    int rows, columns;
-    rl_get_screen_size(&rows, &columns);
-    bool resized = seen_columns && (rows != seen_rows || columns != seen_columns);
-    seen_rows = rows;
-    seen_columns = columns;
-    if (!resized || !RL_ISSTATE(RL_STATE_SIGHANDLER) || !rl_outstream) return;
-    // Return to the start of the prompt and clear below, as Readline's own resize handling does, so the
-    // forced update replaces the old lines.  Terminals reflow wrapped input, so the new width places it.
-    struct binit_layout layout;
-    int lines = current_layout(&layout, &rows, &columns) ? layout.cursor.row : 0;
-    for (const char *p = rl_display_prompt; p && *p; ++p) lines += *p == '\n';
-    if (lines > 0) fprintf(rl_outstream, "\033[%dA", lines);
-    fputs("\r\033[J", rl_outstream);
-    colors_painted = suggestion_visible = history_painted = false;
+    prepare_resize();
 }
 
 static void suggestion_redisplay(void)
 {
-    if (redisplay_running) {rl_redisplay(); return;}
+    // rl_redisplay runs pending signals when it finishes, so a resize can force a nested update here.
+    if (redisplay_running) {prepare_resize(); rl_redisplay(); return;}
     prepare_redisplay();
     redisplay_running = true;
     if (previous_redisplay && previous_redisplay != suggestion_redisplay) previous_redisplay();

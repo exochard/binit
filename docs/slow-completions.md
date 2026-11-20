@@ -25,26 +25,25 @@ for it too.
 Four shells received the same keys at the same moment through tmux:
 `deploy`, Tab, then `staging --dry-run`. The completion for `deploy` sleeps
 for 1.5 s before it answers, standing in for a network lookup. A script read
-each shell's command line every 11 ms and recorded when every typed character
-first appeared.
+each shell's command line and cursor every 11 ms and recorded when every typed
+character first appeared, so each figure is an upper bound.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/filmstrip-dark.svg">
-  <img alt="Snapshots of four command lines after Tab. At 0.5 s and 1.2 s Binit already shows stag and staging --dr while ble.sh, Oh My Bash and Bash-it show nothing past deploy. At 2.0 s all four show the full line. Slowest key: Binit 0.10 s, ble.sh 1.51 s, Oh My Bash 1.35 s, Bash-it 1.35 s." src="images/filmstrip-light.svg" width="800">
+  <img alt="Snapshots of four command lines after Tab. At 0.5 s and 1.2 s Binit already shows stag and staging --dr while ble.sh, Oh My Bash and Bash-it show nothing past deploy. At 2.0 s all four show the full line. Slowest key: Binit 0.01 s, ble.sh 1.49 s, Oh My Bash 1.36 s, Bash-it 1.36 s." src="images/filmstrip-light.svg" width="800">
 </picture>
 
 | Shell | Slowest key after Tab |
 | --- | --- |
-| Binit 0.1.0 | 0.10 s |
-| Oh My Bash, theme off | 1.35 s |
-| Bash-it, theme off | 1.35 s |
-| ble.sh 0.4 | 1.51 s |
+| Binit 0.1.0 | 0.01 s |
+| Oh My Bash, theme off | 1.36 s |
+| Bash-it, theme off | 1.36 s |
+| ble.sh 0.4 | 1.49 s |
 
-In Oh My Bash and Bash-it the first key waited 1.35 s and the rest followed in
+In Oh My Bash and Bash-it the first key waited 1.36 s and the rest followed in
 one burst. ble.sh also stopped again near the end: its automatic completion
-called the lookup a second time when typing paused. In Binit sixteen of the
-seventeen keys appeared within 10 ms. One space took 95 ms on every run, and
-that cost is still being traced.
+called the lookup a second time when typing paused. In Binit every key
+appeared within 11 ms.
 
 This run is a demonstration on one machine, a Ryzen 7 9800X3D with GNU Bash
 5.3.20. The scored benchmark ran on a second machine, a Ryzen 7 7800X3D, with a

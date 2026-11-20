@@ -45,6 +45,7 @@ and login shell stay as they are; installation is per user.
 | --- | --- |
 | [Editing](editor.md) | Completion menu, suggestions and editing keys |
 | [History](history.md) | History search and the inline panel |
+| [Why a slow completion freezes your prompt](slow-completions.md) | Where the pause comes from, measured in four shells, and how Binit avoids it |
 | [Isolated completion providers](completion-providers.md) | Slow completions in a separate process, cancelled by typing |
 | [Eligible completion](eligible-completion.md) | Which providers can run isolated, and their limits |
 

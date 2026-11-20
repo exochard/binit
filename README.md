@@ -69,8 +69,10 @@ End accepts it. Ctrl-R searches history and Enter inserts the match without
 running it. Ctrl-Backspace deletes the previous word.
 
 A completion that takes long can run in a separate process: typing cancels it
-and the line stays responsive. See [isolated completion
-providers](docs/completion-providers.md). `binit completion off` returns the
+and the line stays responsive. [Why a slow completion freezes your
+prompt](docs/slow-completions.md) explains the mechanism and its limits, and
+[isolated completion providers](docs/completion-providers.md) shows how to
+register one. `binit completion off` returns the
 current shell to Readline's ordinary completion.
 
 The built-in editor module targets Bash 5.3 with Readline 8.3. Other supported

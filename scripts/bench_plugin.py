@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import time
 
-from bench_interactive import PLUGINS, PROMPT, Shell, digest, profile
+from bench_interactive import PLUGINS, PROMPT, Shell, at_empty_prompt, digest, profile
 
 
 def prepare(directory, binary, source, home, mode, environment, project=None, long_line=False):
@@ -97,12 +97,6 @@ def paired(a, b):
         }
         for key, value in differences(a, b).items()
     }
-
-
-def at_empty_prompt(screen):
-    # Prompt plugins such as git-prompt and project-context prefix PS1 with segments.
-    row = screen.display[screen.cursor.y].rstrip()
-    return row.endswith(PROMPT.decode().rstrip()) and screen.cursor.x == len(row) + 1
 
 
 def measure(terminal, identifier, expected, long_line):

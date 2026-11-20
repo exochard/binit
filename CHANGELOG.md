@@ -35,10 +35,10 @@ supported Bash versions keep Readline's completion.
 ### Measured
 
 On one Linux machine with the same 50 plugins, a new shell was ready to type in
-22.1 ms, against 31.2 ms for Bash-it and 69.2 ms for Oh My Bash. Against
+22.4 ms, against 31.2 ms for Bash-it and 69.8 ms for Oh My Bash. Against
 ble.sh editing the same command lines, the slowest keystroke (p99) took
-0.26 ms against 29.9 ms, and cancelling a 1,024-item completion menu took
-13.9 ms against 34.1 ms. Binit won all 34 scored comparisons in both runs; the
+0.21 ms against 28.6 ms, and cancelling a 1,024-item completion menu took
+13.7 ms against 33.1 ms. Binit won all 34 scored comparisons in both runs; the
 results archive attached to the release has each one.
 
 ### Known limits

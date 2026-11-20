@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 #include "builtins.h"
@@ -238,20 +239,39 @@ static long milliseconds_left(const struct timespec *deadline)
     return (deadline->tv_sec - now.tv_sec) * 1000L + (deadline->tv_nsec - now.tv_nsec) / 1000000L;
 }
 
-/* Polls the request until it ends or the deadline passes. Terminal input ends the wait only when
-   input is given, and a signal always ends it. */
-static void await_connection(const struct timespec *deadline, int input)
+/* A prompt hook runs before Readline prepares the terminal, so it is still in canonical mode: a key
+   stays unreadable until a newline, and the line discipline consumes editing keys such as Ctrl-R. While
+   waiting, the terminal is held without canonical input or echo, so the first key ends the wait and
+   reaches Readline unchanged. Signal keys keep working. */
+static bool hold_input(int input, struct termios *saved)
 {
+    if (input < 0 || !isatty(input) || tcgetattr(input, saved) != 0 || !(saved->c_lflag & ICANON)) return false;
+    struct termios held = *saved;
+    held.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+    held.c_cc[VMIN] = 1;
+    held.c_cc[VTIME] = 0;
+    return tcsetattr(input, TCSANOW, &held) == 0;
+}
+
+/* Polls the request until it ends or the deadline passes. Terminal input ends the wait when
+   stop_on_input is set, and a signal always ends it. */
+static void await_connection(const struct timespec *deadline, bool stop_on_input)
+{
+    int input = fileno(rl_instream ? rl_instream : stdin);
+    struct termios saved;
+    bool held = hold_input(input, &saved);
     collect();
     while (connection >= 0 && !interrupt_state && !terminating_signal) {
         long left = milliseconds_left(deadline);
         if (left <= 0) break;
         struct pollfd watched[2] = {{connection, POLLIN, 0}, {input, POLLIN, 0}};
-        if (poll(watched, input >= 0 ? 2 : 1, (int)left) < 0 && errno != EINTR) break;
-        if (input >= 0 && watched[1].revents) break;
+        if (poll(watched, stop_on_input ? 2 : 1, (int)left) < 0 && errno != EINTR) break;
+        if (stop_on_input && watched[1].revents) break;
         if (watched[0].revents) collect();
-        if (input >= 0 && cancelled) break;
+        if (stop_on_input && cancelled) break;
     }
+    // The saved settings come back without flushing, so keys typed meanwhile stay queued for Readline.
+    if (held) (void)tcsetattr(input, TCSANOW, &saved);
 }
 
 static int start(WORD_LIST *arguments)
@@ -262,7 +282,7 @@ static int start(WORD_LIST *arguments)
     // A request cancelled moments ago, as by a quickly typed command, is still stopping its group.
     if (connection >= 0 && cancelled) {
         struct timespec deadline = deadline_after(STOP_WAIT_MS);
-        await_connection(&deadline, -1);
+        await_connection(&deadline, false);
     }
     if (connection >= 0 || ready) return EXECUTION_FAILURE;
     binit_prompt_worker_close();
@@ -312,7 +332,7 @@ static int await(const char *text)
     long milliseconds = strtol(text, &end, 10);
     if (!*text || *end || errno || strspn(text, "0123456789") != strlen(text) || milliseconds > 1000) return EX_USAGE;
     struct timespec deadline = deadline_after(milliseconds);
-    if (!cancelled) await_connection(&deadline, fileno(rl_instream ? rl_instream : stdin));
+    if (!cancelled) await_connection(&deadline, true);
     return ready ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
 }
 

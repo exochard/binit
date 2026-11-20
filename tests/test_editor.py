@@ -7,6 +7,7 @@ import struct
 import sys
 import termios
 import textwrap
+import time
 import unittest
 
 from test_completion import MODULE, Session, terminal
@@ -166,6 +167,26 @@ class EditorTests(unittest.TestCase):
                          "binit_complete prompt-worker take r; printf 'NEXT:%s:%s\\n' \"$s\" \"$r\"\n")
             session.wait(lambda: b"\rNEXT:" in session.transcript)
             self.assertIn(b"\rNEXT:0:new", session.transcript)
+            # The terminal settings a command sees are the same after a wait.
+            session.send(f"a=$(stty -g); {start} 'sleep .3'; binit_complete prompt-worker wait 100; "
+                         "b=$(stty -g); [[ $a == \"$b\" ]] && printf 'TTY:same\\n' || printf 'TTY:changed\\n'\n")
+            session.wait(lambda: b"\rTTY:" in session.transcript)
+            self.assertIn(b"\rTTY:same", session.transcript)
+        # A key typed during a prompt hook's wait ends it and reaches Readline unchanged, including keys the
+        # terminal would otherwise consume while it is still in canonical mode.
+        hook = (f"__hook() {{ {start} 'sleep 2'; binit_complete prompt-worker wait 1000; }}\n"
+                "history -s 'echo typed-ahead-witness'\n")
+        for mode in ("emacs", "vi"):
+            for key, shown in ((b"x", "READY> x"), (b"\x12", "(reverse-i-search)")):
+                with self.subTest(mode=mode, key=key), Session(extra=hook, mode=mode) as session:
+                    settle(session)
+                    session.send("PROMPT_COMMAND=__hook\n")
+                    session.pump(.3)
+                    started = time.monotonic()
+                    session.send(key)
+                    session.wait(lambda: shown in session.text, seconds=3)
+                    self.assertLess(time.monotonic() - started, .6)
+                    self.assertNotIn("^R", session.text)
         # Typed input ends the wait early.
         with Session() as session:
             session.send(f"{start} 'sleep 2'; s=$EPOCHREALTIME; binit_complete prompt-worker wait 1000; "

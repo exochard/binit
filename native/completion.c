@@ -2,6 +2,7 @@
 #include <config.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fnmatch.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -14,6 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
+#include <wctype.h>
 #include "builtins.h"
 #include "variables.h"
 #include "execute_cmd.h"
@@ -113,9 +115,22 @@ static bool keys_shown;
 static size_t history_matches;
 static bool poll_installed;
 static bool poll_running;
+static bool poll_explicit;
 static long last_poll;
 static rl_hook_func_t *previous_event_hook;
 static bool suggestions_enabled;
+enum suggestion_strategy { SUGGEST_HISTORY = 1, SUGGEST_PREVIOUS, SUGGEST_COMPLETION };
+enum suggestion_unit { SUGGEST_FULL, SUGGEST_WORD, SUGGEST_CHARACTER };
+static enum suggestion_strategy suggestion_strategies[3] = {SUGGEST_HISTORY};
+static size_t suggestion_strategy_count = 1;
+static enum suggestion_unit suggestion_accept;
+static int suggestion_limit = 4096;
+static const char *suggestion_style = "\033[2m";
+static char suggestion_ignore[1025], suggestion_completion_ignore[1025];
+static char suggestion_preview_line[4097], suggestion_preview_value[1025];
+static char suggestion_preview_directory[4097];
+static bool suggestion_preview_enabled;
+static bool suggestion_poll;
 static bool highlighting_enabled;
 static bool suggestion_visible, ghost_on_blank_row;
 static int ghost_column;
@@ -131,6 +146,8 @@ static void completion_cleanup(void *);
 static void select_history_delete(struct context *);
 static void delete_history_line(const struct context *);
 static const struct history_context_entry *history_context_for(const char *);
+static void install_poll_hook(void);
+static void remove_poll_hook(void);
 
 #ifdef BINIT_HIGHLIGHT
 static bool alias_context_unknown(const char *line)
@@ -146,21 +163,49 @@ static bool alias_context_unknown(const char *line)
 }
 #endif
 
-static const char *history_suggestion(void)
+static bool suggestion_eligible(void)
 {
     if (!suggestions_enabled || active || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1 ||
-        rl_point != rl_end || rl_end <= 0 || rl_end > 4096 || !rl_line_buffer) return NULL;
-    if (binit_cells(rl_line_buffer, (size_t)rl_end) < 0) return NULL;
+        rl_point != rl_end || rl_end <= 0 || rl_end > suggestion_limit || !rl_line_buffer) return false;
+    return binit_cells(rl_line_buffer, (size_t)rl_end) >= 0;
+}
+
+static const char *history_prefix(bool previous)
+{
     HIST_ENTRY **entries = history_list();
     if (!entries) return NULL;
     int lower = history_length > 1000 ? history_length - 1000 : 0;
+    const char *fallback = NULL;
+    const char *last = history_length > 0 ? entries[history_length - 1]->line : NULL;
     for (int i = history_length - 1; i >= lower; --i) {
         const char *line = entries[i]->line;
         if (!line || strncmp(line, rl_line_buffer, (size_t)rl_end) != 0 || !line[rl_end]) continue;
         const char *suffix = line + rl_end;
         size_t size = strnlen(suffix, 1025);
         if (size > 1024 || binit_cells(suffix, size) < 0) return NULL;
-        return suffix;
+        if (suggestion_ignore[0] && fnmatch(suggestion_ignore, line, 0) == 0) continue;
+        if (!previous) return suffix;
+        if (!fallback) fallback = suffix;
+        if (last && i > 0 && i < history_length - 1 && entries[i - 1]->line &&
+            strcmp(entries[i - 1]->line, last) == 0) return suffix;
+    }
+    return fallback;
+}
+
+static const char *history_suggestion(void)
+{
+    if (!suggestion_eligible()) return NULL;
+    for (size_t i = 0; i < suggestion_strategy_count; ++i) {
+        enum suggestion_strategy strategy = suggestion_strategies[i];
+        const char *suffix;
+        if (strategy == SUGGEST_COMPLETION) {
+            const char *cwd = get_string_value("PWD");
+            suffix = cwd && suggestion_preview_value[0] && strcmp(suggestion_preview_directory, cwd) == 0 &&
+                strcmp(suggestion_preview_line, rl_line_buffer) == 0 ? suggestion_preview_value : NULL;
+        } else {
+            suffix = history_prefix(strategy == SUGGEST_PREVIOUS);
+        }
+        if (suffix) return suffix;
     }
     return NULL;
 }
@@ -240,7 +285,7 @@ static bool draw_ghost(const char *suffix, int available)
     bool ellipsis = size < length && available > 0 && binit_cells("\xe2\x80\xa6", 3) == 1;
     if (ellipsis) size = binit_fit(suffix, length, available - 1, &used);
     if (!size && !ellipsis) return false;
-    fprintf(rl_outstream, "\033[2m%.*s%s\033[0m", (int)size, suffix, ellipsis ? "\xe2\x80\xa6" : "");
+    fprintf(rl_outstream, "%s%.*s%s\033[0m", suggestion_style, (int)size, suffix, ellipsis ? "\xe2\x80\xa6" : "");
     return true;
 }
 
@@ -356,7 +401,27 @@ static void suggestion_redisplay(void)
 static int accept_or(rl_command_func_t *fallback, int count, int key)
 {
     const char *suffix = suggestion_visible ? history_suggestion() : NULL;
-    if (suffix) return rl_insert_text(suffix) < 0 ? 1 : 0;
+    if (suffix) {
+        if (suggestion_accept == SUGGEST_FULL || fallback == rl_end_of_line)
+            return rl_insert_text(suffix) < 0 ? 1 : 0;
+        char text[1025];
+        size_t size = 0, length = strlen(suffix);
+        bool saw_word = false;
+        mbstate_t state = {0};
+        while (size < length) {
+            wchar_t decoded;
+            size_t width = mbrtowc(&decoded, suffix + size, length - size, &state);
+            if (!width || width > length - size) break;
+            bool word = iswalnum((wint_t)decoded) != 0;
+            if (saw_word && !word) break;
+            size += width;
+            if (suggestion_accept == SUGGEST_CHARACTER) break;
+            saw_word |= word;
+        }
+        memcpy(text, suffix, size);
+        text[size] = '\0';
+        return rl_insert_text(text) < 0 ? 1 : 0;
+    }
     return fallback(count, key);
 }
 
@@ -399,6 +464,10 @@ static void disable_suggestions(void)
 {
     suggestions_enabled = false;
     suggestion_visible = false;
+    if (suggestion_poll && !poll_explicit) remove_poll_hook();
+    suggestion_poll = false;
+    suggestion_preview_enabled = false;
+    suggestion_preview_line[0] = suggestion_preview_value[0] = '\0';
     if (!highlighting_enabled && !history_enabled) {
         if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
         previous_redisplay = NULL;
@@ -415,11 +484,75 @@ static void disable_suggestions(void)
     deprep_release();
 }
 
+static bool suggestion_options(void)
+{
+    const char *strategies = get_string_value("BINIT_SUGGESTION_STRATEGIES");
+    const char *unit = get_string_value("BINIT_SUGGESTION_ACCEPT");
+    const char *style = get_string_value("BINIT_SUGGESTION_STYLE");
+    const char *limit = get_string_value("BINIT_SUGGESTION_LIMIT");
+    const char *ignore = get_string_value("BINIT_SUGGESTION_IGNORE");
+    const char *completion_ignore = get_string_value("BINIT_SUGGESTION_COMPLETION_IGNORE");
+    if (!strategies) strategies = "history";
+    if (!unit) unit = "full";
+    if (!style) style = "dim";
+    if (!limit) limit = "4096";
+    if (!ignore) ignore = "";
+    if (!completion_ignore) completion_ignore = "";
+    enum suggestion_strategy order[3];
+    size_t count = 0;
+    bool preview = false;
+    for (const char *p = strategies; *p;) {
+        size_t length = strcspn(p, ",");
+        enum suggestion_strategy item;
+        if (length == 7 && !strncmp(p, "history", length)) item = SUGGEST_HISTORY;
+        else if (length == 8 && !strncmp(p, "previous", length)) item = SUGGEST_PREVIOUS;
+        else if (length == 10 && !strncmp(p, "completion", length)) item = SUGGEST_COMPLETION;
+        else return false;
+        if (count == 3 || (p[length] && !p[length + 1])) return false;
+        for (size_t j = 0; j < count; ++j) if (order[j] == item) return false;
+        order[count++] = item;
+        preview |= item == SUGGEST_COMPLETION;
+        p += length + (p[length] ? 1 : 0);
+    }
+    if (count == 0 || !*limit || strlen(limit) > 4 || strspn(limit, "0123456789") != strlen(limit) ||
+        atoi(limit) < 1 || atoi(limit) > 4096 || strlen(ignore) >= sizeof suggestion_ignore ||
+        strlen(completion_ignore) >= sizeof suggestion_completion_ignore) return false;
+    enum suggestion_unit accept;
+    if (!strcmp(unit, "full")) accept = SUGGEST_FULL;
+    else if (!strcmp(unit, "word")) accept = SUGGEST_WORD;
+    else if (!strcmp(unit, "character")) accept = SUGGEST_CHARACTER;
+    else return false;
+    const char *escape;
+    if (!strcmp(style, "dim")) escape = "\033[2m";
+    else if (!strcmp(style, "plain")) escape = "\033[22m";
+    else if (!strcmp(style, "bold")) escape = "\033[1m";
+    else if (!strcmp(style, "underline")) escape = "\033[4m";
+    else return false;
+    memcpy(suggestion_strategies, order, count * sizeof *order);
+    suggestion_strategy_count = count;
+    suggestion_preview_enabled = preview;
+    suggestion_accept = accept;
+    suggestion_style = escape;
+    suggestion_limit = atoi(limit);
+    memcpy(suggestion_ignore, ignore, strlen(ignore) + 1);
+    memcpy(suggestion_completion_ignore, completion_ignore, strlen(completion_ignore) + 1);
+    return true;
+}
+
+static void suggestion_update_poll(void)
+{
+    bool needed = suggestions_enabled && suggestion_preview_enabled && binit_worker_has_provider();
+    if (needed) install_poll_hook();
+    if (!needed && suggestion_poll && !poll_explicit) remove_poll_hook();
+    suggestion_poll = needed;
+}
+
 static int enable_suggestions(void)
 {
     if (suggestions_enabled) return EXECUTION_SUCCESS;
     const char *term = get_string_value("TERM");
     if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
+    if (!suggestion_options()) {builtin_error("invalid BINIT_SUGGESTION configuration"); return EXECUTION_FAILURE;}
     for (size_t i = 0; i < 2; ++i) {
         Keymap map = rl_get_keymap_by_name(accept_keymaps[i]);
         if (!map) continue;
@@ -434,6 +567,7 @@ static int enable_suggestions(void)
         rl_redisplay_function = suggestion_redisplay;
     }
     suggestions_enabled = true;
+    suggestion_update_poll();
     deprep_install();
     return EXECUTION_SUCCESS;
 }
@@ -1217,6 +1351,8 @@ static void history_deprep(void)
     colors_painted = suggestion_visible = history_painted = false;
     history_dismissed = false;
     history_line[0] = '\0';
+    suggestion_preview_line[0] = suggestion_preview_value[0] = '\0';
+    poll_running = false;
     if (history_previous_deprep && history_previous_deprep != history_deprep) history_previous_deprep();
     history_deprep_running = false;
 }
@@ -1617,10 +1753,11 @@ static void remove_wait_hook(void)
  * select finds input while an event hook is installed, so the hook runs forever and typed keys are never
  * read. rl_read_key checks its own buffer before each hook call, so moving ready input there unblocks it.
  * A fixed Readline calls the hook only when no input is ready, and this finds nothing. */
-static void pump_ready_input(void)
+static bool pump_ready_input(void)
 {
-    if (rl_readline_version != 0x0803 || !rl_instream) return;
+    if (rl_readline_version != 0x0803 || !rl_instream) return false;
     int saved_errno = errno;
+    bool transferred = false;
     struct pollfd fd = {.fd = fileno(rl_instream), .events = POLLIN};
     unsigned char byte;
     if (poll(&fd, 1, 0) > 0) {
@@ -1628,18 +1765,42 @@ static void pump_ready_input(void)
         if (count == 1) {
             binit_prompt_worker_input();
             rl_stuff_char(byte);
+            transferred = true;
         }
         else if (count == 0) rl_stuff_char(EOF);
     }
     errno = saved_errno;
+    return transferred;
+}
+
+static void refresh_completion_suggestion(void)
+{
+    if (!suggestion_preview_enabled || !suggestion_eligible() ||
+        RL_ISSTATE(RL_STATE_ISEARCH | RL_STATE_NSEARCH | RL_STATE_COMPLETING) ||
+        rl_get_keymap() == vi_movement_keymap ||
+        (suggestion_completion_ignore[0] && fnmatch(suggestion_completion_ignore, rl_line_buffer, 0) == 0)) return;
+    const char *cwd = get_string_value("PWD");
+    if (!cwd || strnlen(cwd, sizeof suggestion_preview_directory) >= sizeof suggestion_preview_directory ||
+        (strcmp(suggestion_preview_directory, cwd) == 0 && strcmp(suggestion_preview_line, rl_line_buffer) == 0)) return;
+    for (size_t i = 0; i < suggestion_strategy_count; ++i) {
+        enum suggestion_strategy strategy = suggestion_strategies[i];
+        if (strategy == SUGGEST_COMPLETION) break;
+        if (history_prefix(strategy == SUGGEST_PREVIOUS)) return;
+    }
+    memcpy(suggestion_preview_line, rl_line_buffer, (size_t)rl_end + 1);
+    memcpy(suggestion_preview_directory, cwd, strlen(cwd) + 1);
+    suggestion_preview_value[0] = '\0';
+    if (binit_worker_preview(suggestion_preview_value) && rl_redisplay_function == suggestion_redisplay)
+        suggestion_redisplay();
 }
 
 static int poll_hook(void)
 {
-    pump_ready_input();
+    bool input = pump_ready_input();
     if (poll_running) return 0;
     poll_running = true;
     if (previous_event_hook && previous_event_hook != poll_hook) previous_event_hook();
+    if (!input) refresh_completion_suggestion();
     poll_running = false;
     if (!poll_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
         get_current_prompt_level() != 1 || rl_end != 0) return 0;
@@ -1654,7 +1815,7 @@ static int poll_hook(void)
     return 0;
 }
 
-static int enable_poll(void)
+static void install_poll_hook(void)
 {
     if (!poll_installed) {
         previous_event_hook = rl_event_hook;
@@ -1662,6 +1823,12 @@ static int enable_poll(void)
         last_poll = 0;
         poll_installed = true;
     }
+}
+
+static int enable_poll(void)
+{
+    poll_explicit = true;
+    install_poll_hook();
     return EXECUTION_SUCCESS;
 }
 
@@ -1802,6 +1969,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
             return EX_USAGE;
         }
         if (strcmp(feature->word->word, "suggestions") == 0) {
+            if (strcmp(setting->word->word, "providers") == 0) {suggestion_update_poll(); return EXECUTION_SUCCESS;}
             if (strcmp(setting->word->word, "on") == 0) {history_owns_suggestions = false; return enable_suggestions();}
             if (strcmp(setting->word->word, "off") == 0) {history_owns_suggestions = false; disable_suggestions(); return EXECUTION_SUCCESS;}
         }
@@ -1832,7 +2000,11 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
     if (strcmp(action, "on") == 0) return enable_menu();
     if (strcmp(action, "wait") == 0) return enable_wait();
     if (strcmp(action, "poll") == 0) return enable_poll();
-    if (strcmp(action, "poll-off") == 0) {remove_poll_hook(); return EXECUTION_SUCCESS;}
+    if (strcmp(action, "poll-off") == 0) {
+        poll_explicit = false;
+        if (!suggestion_poll) remove_poll_hook();
+        return EXECUTION_SUCCESS;
+    }
     if (strcmp(action, "off") == 0) {disable_menu(); return EXECUTION_SUCCESS;}
     if (strcmp(action, "status") != 0) return EX_USAGE;
     printf("%-14s%s\n", "menu", enabled ? terminal_support < 0 ? "unavailable" : "on" : "off");
@@ -1865,6 +2037,7 @@ EXPORT void binit_complete_builtin_unload(char *name)
     disable_suggestions();
     binit_prompt_worker_close();
     remove_poll_hook();
+    poll_explicit = false;
 #ifdef BINIT_HIGHLIGHT
     highlighting_enabled = false;
     binit_highlight_clear();

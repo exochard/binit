@@ -62,6 +62,13 @@ covers every row and the colors are rewritten as one run, so the terminal keeps
 the line joined for selection. A suggestion that does not fit before the right
 margin is cut with an ellipsis; accepting it still inserts all of it.
 
+The autosuggestions plugin accepts an ordered
+`BINIT_SUGGESTION_STRATEGIES` list, such as `previous,history,completion`.
+Completion previews use registered isolated providers for unquoted input.
+They start during Readline idle time and cancel on pending input.
+`BINIT_SUGGESTION_ACCEPT=word` or `character` changes the forward key to
+partial acceptance. End still accepts the whole suggestion.
+
 Prompt width is measured on the last line of the prompt. Text inside `\[` and
 `\]` counts as zero width, so colors and title sequences are fine, and the
 `show-mode-in-prompt` string is included. The overlays are left to Readline when

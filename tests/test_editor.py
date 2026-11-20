@@ -40,6 +40,72 @@ def foreground(session, offset, prompt_cells=len(PROMPT)):
 
 
 class EditorTests(unittest.TestCase):
+    def test_word_and_character_suggestions_keep_end_for_full_acceptance(self):
+        for mode, unit, expected in (('emacs', 'word', 'echo naïve'), ('vi', 'character', 'echo n')):
+            extra = (f"BINIT_SUGGESTION_ACCEPT={unit}\nhistory -s 'echo naïve example'\n"
+                     "binit_complete editor suggestions on\n")
+            with self.subTest(unit=unit), Session(extra=extra, mode=mode) as session:
+                session.send('echo ')
+                session.wait(lambda: 'naïve example' in session.text)
+                session.send(b'\x06')
+                self.assertEqual(session.capture()[1], expected)
+                session.send(b'\x1b[F')
+                self.assertEqual(session.capture()[1], 'echo naïve example')
+
+    def test_previous_command_strategy_prefers_the_matching_predecessor(self):
+        extra = ("BINIT_SUGGESTION_STRATEGIES=previous,history\n"
+                 "history -s 'echo context'\nhistory -s 'git cherry-pick'\n"
+                 "history -s 'echo unrelated'\nhistory -s 'git checkout'\n"
+                 "history -s 'echo context'\nbinit_complete editor suggestions on\n")
+        with Session(extra=extra) as session:
+            session.send('git ch')
+            session.wait(lambda: 'git cherry-pick' in session.text)
+            session.send(b'\x06')
+            self.assertEqual(session.capture()[1], 'git cherry-pick')
+
+    def test_completion_suggestion_uses_only_an_isolated_registered_provider(self):
+        python = shlex.quote(sys.executable)
+        provider = shlex.quote("import sys; sys.stdout.buffer.write(b'answer\\0')")
+        extra = "BINIT_SUGGESTION_STRATEGIES=completion\nbinit_complete editor suggestions on\n"
+        with Session(extra=extra, framework=True) as session:
+            session.send(f"binit completions register suggest_demo {python} -c {provider}\n")
+            session.pump(.15)
+            session.send('suggest_demo an')
+            session.wait(lambda: 'suggest_demo answer' in session.text)
+            session.send(b'\x06')
+            self.assertEqual(session.capture()[1], 'suggest_demo answer')
+
+    def test_suggestion_ignore_and_style_apply_under_the_input_limit(self):
+        extra = ("BINIT_SUGGESTION_LIMIT=6\nBINIT_SUGGESTION_IGNORE='echo secret*'\n"
+                 "BINIT_SUGGESTION_STYLE=underline\nhistory -s 'echo safe'\n"
+                 "history -s 'echo secret'\nbinit_complete editor suggestions on\n")
+        with Session(extra=extra) as session:
+            session.send('echo ')
+            session.wait(lambda: 'echo safe' in session.text)
+            self.assertIn(b'\x1b[4m', session.transcript)
+            session.send('sec')
+            session.pump(.12)
+            self.assertNotIn('echo secret', session.text)
+
+    def test_completion_suggestion_is_cancelled_by_typing(self):
+        python = shlex.quote(sys.executable)
+        provider = shlex.quote(
+            "import sys, time\nfrom pathlib import Path\n"
+            "if sys.stdin.buffer.read().split(b'\\0')[1].endswith(b' an'):\n"
+            "    Path('preview-started').touch()\n    time.sleep(.6)\n"
+            "    Path('preview-finished').touch()\n    sys.stdout.buffer.write(b'answer\\0')\n"
+        )
+        extra = "BINIT_SUGGESTION_STRATEGIES=completion\nbinit_complete editor suggestions on\n"
+        with Session(extra=extra, framework=True) as session:
+            session.send(f"binit completions register suggest_demo {python} -c {provider}\n")
+            session.pump(.15)
+            session.send('suggest_demo an')
+            session.wait(lambda: (session.directory / 'preview-started').exists())
+            session.send('x')
+            self.assertEqual(session.capture()[1], 'suggest_demo anx')
+            session.pump(.65)
+            self.assertFalse((session.directory / 'preview-finished').exists())
+
     def test_prompt_worker_cannot_open_a_network_socket(self):
         executable = shlex.quote(sys.executable)
         manager = shlex.quote(str(terminal.BINARY.resolve()))

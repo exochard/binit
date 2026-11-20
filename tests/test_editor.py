@@ -288,6 +288,24 @@ class EditorTests(unittest.TestCase):
                     self.assertNotIn(b'\x1b[96m', session.transcript)
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_interrupt_right_after_a_lookup_answer_keeps_the_shell(self):
+        # Ctrl-C runs Readline's signal handling inside its key loop; a hook removed there would be called
+        # as a null pointer when the loop resumes.
+        extra = ("BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='missing=91,missing-path=95'\n"
+                 "binit_complete editor highlighting on\n")
+        for mode in ('emacs', 'vi'):
+            for line, painted in (('binit-no-such-cmd', b'\x1b[91mbinit-no-such-cmd'),
+                                  ('echo ./absent', b'\x1b[95m./absent')):
+                with self.subTest(mode=mode, line=line), Session(extra=extra, framework=True, mode=mode) as session:
+                    settle(session)
+                    session.send(line)
+                    session.wait(lambda: painted in session.transcript)
+                    session.send(b'\x03')
+                    session.pump(.2)
+                    session.send("echo still-$((40 + 2))\n")
+                    session.wait(lambda: 'still-42' in session.text)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_extended_highlighting_cancels_path_lookup_on_typing(self):
         fixture = textwrap.dedent("""
             from pathlib import Path

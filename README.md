@@ -99,7 +99,8 @@ Typing and completion are compared with ble.sh, which also draws its own complet
 Bash, and with plain Readline as a control. Every value comes from the release binary on one Linux
 machine (Ryzen 7 7800X3D, GNU Bash 5.3.20) and averages two runs of 20 interleaved pairs. Editor
 values are the median of six cells: Emacs and vi, each with three history sizes. The filmstrip
-comes from a separate, unscored run in which tmux sends the same keys to four shells at once.
+and the nvm chart come from separate, unscored runs on a second machine (Ryzen 7 9800X3D, GNU Bash
+5.3.20): tmux sends the same keys to four shells at once, and each nvm loader starts 15 times.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/typing-dark.svg">
@@ -113,7 +114,7 @@ comes from a separate, unscored run in which tmux sends the same keys to four sh
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/filmstrip-dark.svg">
-  <img alt="Binit keeps showing what you type while a completion runs. Same keys at the same moment in four shells: deploy, Tab, then staging --dry-run. A host lookup takes 1.5 s. Binit runs it in its own process; the others show nothing until it ends. Completions that run inside the shell, such as Git&#x27;s, make every shell wait, Binit included. Text after &quot;deploy&quot; on each command line: Binit: +0.5 s &quot;stag&quot;, +1.2 s &quot;staging --dr&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 0.10 s; ble.sh: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-ru&quot;, slowest key 1.51 s; Oh My Bash: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 1.35 s; Bash-it: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 1.35 s. Each cell is the line after deploy. Simulated lookup. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/filmstrip-light.svg" width="800">
+  <img alt="Binit keeps showing what you type while a completion runs. Same keys at the same moment in four shells: deploy, Tab, then staging --dry-run. A host lookup takes 1.5 s. Binit runs it in its own process; the others show nothing until it ends. Completions that run inside the shell, such as Git&#x27;s, make every shell wait, Binit included. Text after &quot;deploy&quot; on each command line: Binit: +0.5 s &quot;stag&quot;, +1.2 s &quot;staging --dr&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 0.10 s; ble.sh: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-ru&quot;, slowest key 1.51 s; Oh My Bash: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 1.35 s; Bash-it: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 1.35 s. Each cell is the line after deploy. Simulated lookup. Binit 0.1.0 on one Linux machine: Ryzen 7 9800X3D, GNU Bash 5.3.20." src="docs/images/filmstrip-light.svg" width="800">
 </picture>
 
 <picture>
@@ -126,6 +127,11 @@ comes from a separate, unscored run in which tmux sends the same keys to four sh
   <img alt="Binit adds 8.4 ms over a plain .bashrc; Zinit adds 87.2 ms over plain Zsh. Time a manager adds over the same shell sourcing the same 50 plugins directly. Reported: Zinit runs in Zsh, so this compares managers, not shells. Ready to type: Binit, in Bash 8.4 ms, Zinit, in Zsh 87.2 ms. All 50 plugins loaded: Binit, in Bash 10.7 ms, Zinit, in Zsh 316.0 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/overhead-light.svg" width="800">
 </picture>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/nvm-dark.svg">
+  <img alt="Binit moves nvm&#x27;s cost from every new shell to the first node command. nvm v0.41.0 with Node 26 as the default, loaded by each tool&#x27;s own nvm support. Each loader ran with and without nvm; medians of 15 interleaved launches. Reported, not scored. What nvm adds to a new shell: Binit 2.2 ms, Oh My Bash 25.7 ms, Bash-it 39.7 ms, Plain .bashrc 23.2 ms. First node --version: Binit 28.0 ms, Oh My Bash 2.5 ms, Bash-it 3.4 ms, Plain .bashrc 2.5 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 9800X3D, GNU Bash 5.3.20." src="docs/images/nvm-light.svg" width="800">
+</picture>
+
 ### Where Binit is slower
 
 - A `~/.bashrc` that sources the same 50 plugins directly is ready to type 8.4 ms sooner (14.0 ms
@@ -133,6 +139,8 @@ comes from a separate, unscored run in which tmux sends the same keys to four sh
   sourcing anything. Zinit adds 87.2 ms over Zsh doing the same.
 - Putting every plugin on `load=wait` makes the shell ready to type 4.8 ms later than loading them
   at startup (27.2 ms against 22.4 ms).
+- With nvm loaded on first use, the first `node` command in a new shell takes 28.0 ms, against
+  2.5 ms where nvm loaded at startup.
 - Plain Readline returns after a cancelled 1,024-item completion 5.5 to 5.7 times sooner (2.4 to
   2.5 ms against 13.7 to 13.8 ms).
 - A completion that has to run inside the shell takes as long as with plain Readline, and accepting

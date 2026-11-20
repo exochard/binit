@@ -48,6 +48,54 @@ round trips include prompt hooks. They expose interactive overhead, rather
 than a change to Bash's execution engine. The
 [interpreter benchmark](benchmarks.md) has separate workloads and gate.
 
+## Per-plugin comparisons
+
+Use `scripts/bench_plugin.py` to compare one plugin with the same Bash
+interpreter and the same history fixture. The two plugin directories can
+point to different committed snapshots.
+
+```bash
+python3 scripts/bench_plugin.py --plugin git-prompt \
+  --before-binary /path/to/baseline/binit --after-binary /path/to/updated/binit \
+  --before-plugin /path/to/baseline/git-prompt --after-plugin /path/to/updated/git-prompt \
+  --mode emacs --samples 30 --output tmp/git-prompt-emacs.json
+```
+
+Run again with `--mode vi` and the matching Binit binary for each Bash
+version. Set `--git-prompt-mode status` to measure rich status. The default
+is `branch`. `--git-files` controls the number of
+untracked fixture files and defaults to 30.
+
+The receipt includes two baseline arms, the candidate, and each shell's
+`binit profile` row. It reports startup medians and keystroke p99.
+Intervals resample entire paired rounds to keep the keystrokes from a shell
+together. Compare the candidate difference to the baseline arms' variation
+before drawing a conclusion about a small change.
+
+### Git prompt development comparison
+
+The reference used Binit 0.1.0 and git-prompt 0.1.0-dev in branch mode.
+Each row has 30 paired rounds on a shared host. The 20,000-file row has 60.
+First-prompt values are medians. All timings are in milliseconds.
+
+| Bash | Editing mode | Candidate mode | First prompt, before → after | Keystroke p99, before → after |
+| --- | --- | --- | ---: | ---: |
+| 5.2.15 | Emacs | Branch | 4.625 → 4.645 | 0.055 → 0.054 |
+| 5.2.15 | Emacs | Status | 4.668 → 4.628 | 0.057 → 0.052 |
+| 5.2.15 | vi | Branch | 4.632 → 4.656 | 0.066 → 0.059 |
+| 5.2.15 | vi | Status | 4.688 → 4.660 | 0.052 → 0.053 |
+| 5.3.20 | Emacs | Branch | 13.840 → 13.678 | 0.051 → 0.054 |
+| 5.3.20 | Emacs | Status | 13.733 → 13.715 | 0.052 → 0.054 |
+| 5.3.20 | vi | Branch | 13.741 → 13.903 | 0.050 → 0.051 |
+| 5.3.20 | vi | Status | 13.937 → 13.683 | 0.050 → 0.051 |
+| 5.3.20 | vi | Status, 20,000 untracked files | 13.728 → 13.618 | 0.051 → 0.050 |
+
+The paired intervals resolved no increase in first-prompt time or keystroke
+p99. The large fixture showed `[trunk status?]` at the next prompt after
+950 ms idle, which preserves the branch when the scan exceeds its record
+limit. The separate seven-plugin run on Bash 5.3.20 and vi measured a
+15.713 → 15.529 ms first acknowledged key, with 20 runs per configuration.
+
 ## Snapshot cost
 
 Plugin loading records newly introduced functions and aliases for conservative

@@ -2222,9 +2222,13 @@ static int enable_poll(void)
 static void remove_poll_hook(void)
 {
     /* Readline's key loop checks the hook, handles pending signals, then calls the hook without checking
-       again, and a key read must leave that loop with a key in hand. While the hook runs or a signal is
-       handled (Ctrl-C repaints the line), removal waits for the next repaint outside both. */
-    bool in_key_loop = poll_running || RL_ISSTATE(RL_STATE_SIGHANDLER) || (&_rl_handling_signal && _rl_handling_signal);
+       again, and a key read must leave that loop with a key in hand. While the hook runs, a key is read
+       or dispatched, or a signal is pending or handled (Ctrl-C repaints the line), removal waits for the
+       next repaint outside all of them. Readline brackets every key read with READCMD, MOREINPUT or
+       DISPATCHING; SIGHANDLER alone is not enough, since its SIGWINCH handler clears that bit. */
+    bool in_key_loop = poll_running ||
+        RL_ISSTATE(RL_STATE_READCMD | RL_STATE_MOREINPUT | RL_STATE_DISPATCHING | RL_STATE_SIGHANDLER) ||
+        rl_pending_signal() || (&_rl_handling_signal && _rl_handling_signal);
     if (in_key_loop && rl_event_hook == poll_hook && !previous_event_hook) {
         poll_removal_deferred = true;
         return;

@@ -46,13 +46,32 @@ static void test_combining(void)
     assert(binit_cells("e\xcc\x81", 3) == 1);
 }
 
+/* Readline starts a row at a newline and pads a tab to the next multiple of eight, past the margin if needed. */
+static void test_breaks(void)
+{
+    struct binit_layout layout;
+    check(7, 20, "ab\ncd", 1, 2, 2);
+    check(7, 20, "ab\n", 1, 0, 2);
+    check(0, 5, "abcde\nf", 2, 1, 3); /* a full row and then a newline leave an empty row */
+    assert(LAYOUT(7, 20, "ab\ncd", 2, &layout) && layout.cursor.row == 0 && layout.cursor.column == 9);
+    assert(LAYOUT(7, 20, "ab\ncd", 3, &layout) && layout.cursor.row == 1 && layout.cursor.column == 0);
+    assert(layout.offset[1] == 3 && layout.column[1] == 0);
+    check(7, 20, "a\tb", 0, 17, 1);
+    check(0, 20, "\tb", 0, 9, 1);
+    assert(LAYOUT(7, 20, "a\tb", 1, &layout) && layout.cursor.row == 0 && layout.cursor.column == 8);
+    check(7, 16, "a\tb", 1, 1, 2); /* the tab ends at the margin */
+    assert(LAYOUT(0, 20, "abcdefghijklmnopq\tb", 19, &layout) && layout.rows == 2);
+    assert(layout.offset[1] == 18 && layout.column[1] == 4 && layout.end.column == 5);
+    assert(!LAYOUT(2, 3, "\t", 0, &layout)); /* the spill would not fit a row */
+}
+
 static void test_rejects(void)
 {
     struct binit_layout layout;
     assert(binit_cells("a\x01", 2) == -1 && binit_cells("a\t", 2) == -1 && binit_cells("\xff", 1) == -1);
     assert(binit_cells("\xe7\x95", 2) == -1 && binit_cells("a\0b", 3) == -1 && binit_cells("\xc2\x85", 2) == -1);
     assert(binit_cells("\xe2\x80\xae", 3) == -1 && binit_cells("\xe7\x95\x8c" "a", 4) == 3);
-    assert(!LAYOUT(0, 20, "a\x01", 0, &layout) && !LAYOUT(0, 20, "a\t", 0, &layout) && !LAYOUT(0, 20, "a\xff", 0, &layout));
+    assert(!LAYOUT(0, 20, "a\x01", 0, &layout) && !LAYOUT(0, 20, "a\xff", 0, &layout));
     assert(!LAYOUT(20, 20, "a", 0, &layout) && !LAYOUT(0, 1, "a", 0, &layout) && !LAYOUT(-1, 20, "a", 0, &layout));
     assert(!LAYOUT(0, 20, "a", 2, &layout));
     static char big[4100];
@@ -103,6 +122,7 @@ int main(void)
     test_wrap();
     test_wide();
     test_combining();
+    test_breaks();
     test_rejects();
     test_prompt();
     test_fit();

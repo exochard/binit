@@ -597,6 +597,36 @@ class EditorTests(unittest.TestCase):
                 self.assertTrue(plain[plain.rindex('echo '):].startswith(WRAPPED), plain[-200:])
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_pasted_lines_are_colored_where_readline_draws_them(self):
+        # Readline starts a row at each newline and pads a tab with spaces to the next multiple of eight,
+        # continuing on the next row when the tab crosses the margin.
+        full = 'echo ' + 'c' * 34 + ';'
+        cases = (
+            (40, '\n'.join(('echo one', '\tls | cat', full, 'echo four')),
+             ['READY> echo one', '        ls | cat', full, '', 'echo four'],
+             [(0, 7), (1, 8), (1, 13), (2, 0), (4, 0)], (4, 9)),
+            (42, 'true\n' + full + '\tls',
+             ['READY> true', full, '      ls'], [(0, 7), (1, 0), (2, 6)], (2, 8)),
+        )
+        for mode in ('emacs', 'vi'):
+            for columns, pasted, rows, commands, cursor in cases:
+                with self.subTest(mode=mode, columns=columns), Session(
+                        extra='binit_complete editor highlighting on\n', mode=mode, columns=columns) as session:
+                    settle(session)
+                    start = prompt_row(session)
+                    session.send(b'\x1b[200~' + pasted.encode() + b'\x1b[201~')
+                    row, column = commands[-1]
+                    session.wait(lambda: session.screen.buffer[start + row][column].fg != 'default')
+                    color = session.screen.buffer[start][7].fg
+                    self.assertNotEqual(color, 'default')
+                    for row, column in commands:
+                        self.assertEqual(session.screen.buffer[start + row][column].fg, color, (row, column))
+                    shown = [line.rstrip() for line in session.screen.display[start:start + len(rows)]]
+                    self.assertEqual(shown, rows)
+                    self.assertEqual((session.screen.cursor.y - start, session.screen.cursor.x), cursor)
+                    self.assertEqual(session.capture()[1], pasted)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_multiline_prompt_is_highlighted(self):
         with Session(extra='binit_complete editor highlighting on\n') as session:
             settle(session)

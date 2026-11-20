@@ -453,8 +453,52 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
     }
 }
 
-/* The input is rewritten as one run that the terminal wraps, as Readline wrote it: moving between
-   rows would end the terminal's soft wrap, and a copied command would then contain line breaks. */
+/* Where the repaint has left the cursor. A row written to the right margin keeps the cursor on its last
+   cell until the next cell makes the terminal wrap. */
+struct paint_cursor {
+    int row, column, columns;
+    bool pending;
+};
+
+static void paint_spaces(struct paint_cursor *cursor, int cells)
+{
+    if (cells <= 0) return;
+    for (int i = 0; i < cells; ++i) fputc(' ', rl_outstream);
+    if (cursor->pending) *cursor = (struct paint_cursor){cursor->row + 1, 0, cursor->columns, false};
+    cursor->column += cells;
+    cursor->pending = cursor->column >= cursor->columns;
+}
+
+static void paint_text(struct paint_cursor *cursor, const char *text, size_t size)
+{
+    fwrite(text, 1, size, rl_outstream);
+    if (cursor->pending) *cursor = (struct paint_cursor){cursor->row + 1, 0, cursor->columns, false};
+    cursor->column += binit_cells(text, size);
+    cursor->pending = cursor->column >= cursor->columns;
+}
+
+static void paint_color(unsigned int *color, unsigned int wanted, bool styled_plain)
+{
+    if (wanted == *color) return;
+    if ((*color || styled_plain) && (wanted || styled_plain) && (highlighting_extended || highlight_custom_styles))
+        fputs("\033[0m", rl_outstream);
+    *color = wanted;
+    const char *style = highlight_overrides[wanted][0] ? highlight_overrides[wanted] : highlight_styles[wanted].sgr;
+    fprintf(rl_outstream, "\033[%sm", style);
+}
+
+/* Ends the current color so padding and row ends stay unstyled. */
+static void paint_plain(unsigned int *color, bool styled_plain)
+{
+    if (*color || styled_plain) fputs("\033[0m", rl_outstream);
+    *color = 0;
+    if (styled_plain) fprintf(rl_outstream, "\033[%sm", highlight_overrides[HL_PLAIN]);
+}
+
+/* Wrapped rows are rewritten as one run that the terminal wraps, as Readline wrote them: moving between
+   them would end the terminal's soft wrap, and a copied command would then contain line breaks. Readline
+   ends a row at a newline with a line feed, so the repaint moves down there, and it draws a tab as
+   spaces. */
 static bool paint_colors(const struct binit_layout *layout, int columns, int *row)
 {
     uint8_t colors[BINIT_HIGHLIGHT_LIMIT];
@@ -469,32 +513,42 @@ static bool paint_colors(const struct binit_layout *layout, int columns, int *ro
     unsigned int color = 0;
     bool styled_plain = highlight_overrides[HL_PLAIN][0] != '\0';
     if (styled_plain) fprintf(rl_outstream, "\033[%sm", highlight_overrides[HL_PLAIN]);
+    struct paint_cursor cursor = {0, layout->column[0], columns, false};
     for (int r = 0; r < layout->rows; ++r) {
-        size_t end = r + 1 < layout->rows ? layout->offset[r + 1] : (size_t)rl_end;
-        for (size_t i = layout->offset[r]; i < end;) {
-            if (colors[i] != color) {
-                if ((color || styled_plain) && (colors[i] || styled_plain) &&
-                    (highlighting_extended || highlight_custom_styles)) fputs("\033[0m", rl_outstream);
-                color = colors[i];
-                const char *style = highlight_overrides[color][0] ? highlight_overrides[color] : highlight_styles[color].sgr;
-                fprintf(rl_outstream, "\033[%sm", style);
+        size_t start = layout->offset[r], end = r + 1 < layout->rows ? layout->offset[r + 1] : (size_t)rl_end;
+        if (r > 0 && rl_line_buffer[start - 1] == '\n') {
+            paint_plain(&color, styled_plain);
+            fprintf(rl_outstream, "\r\033[%dB", r - cursor.row);
+            cursor = (struct paint_cursor){r, 0, columns, false};
+        } else if (r > 0) {
+            // Readline pads a row with spaces when a wide character moves to the next one.
+            if (!cursor.pending) {
+                paint_plain(&color, styled_plain);
+                paint_spaces(&cursor, columns - cursor.column);
+            }
+            // A tab that reached the margin continues at the start of this row.
+            if (layout->column[r]) {
+                paint_color(&color, colors[start - 1], styled_plain);
+                paint_spaces(&cursor, layout->column[r]);
+            }
+        }
+        for (size_t i = start; i < end;) {
+            if (rl_line_buffer[i] == '\n') {++i; continue;}
+            paint_color(&color, colors[i], styled_plain);
+            if (rl_line_buffer[i] == '\t') {
+                int at = cursor.pending ? 0 : cursor.column, cells = 8 - at % 8;
+                paint_spaces(&cursor, cells < columns - at ? cells : columns - at);
+                ++i;
+                continue;
             }
             size_t next = i + 1u;
-            while (next < end && colors[next] == color) ++next;
-            fwrite(rl_line_buffer + i, 1, next - i, rl_outstream);
+            while (next < end && colors[next] == color && rl_line_buffer[next] != '\n' && rl_line_buffer[next] != '\t') ++next;
+            paint_text(&cursor, rl_line_buffer + i, next - i);
             i = next;
         }
-        if (r + 1 == layout->rows || end == (size_t)rl_end) break;
-        // Readline pads a row with spaces when a wide character moves to the next one.
-        int used = layout->column[r] + binit_cells(rl_line_buffer + layout->offset[r], end - layout->offset[r]);
-        if (used < columns && (color || styled_plain)) {fputs("\033[0m", rl_outstream); color = 0;}
-        for (; used < columns; ++used) fputc(' ', rl_outstream);
-        if (styled_plain && !color) fprintf(rl_outstream, "\033[%sm", highlight_overrides[HL_PLAIN]);
     }
     fputs("\033[0m", rl_outstream);
-    // Text that ends at the right margin leaves the cursor on the last cell of the full row.
-    bool full = layout->rows > 1 && layout->end.column == 0 && layout->offset[layout->rows - 1] == (size_t)rl_end;
-    *row = full ? layout->rows - 2 : layout->rows - 1;
+    *row = cursor.row;
     return true;
 }
 #endif

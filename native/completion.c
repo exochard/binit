@@ -61,7 +61,7 @@ struct context {
     char sequence[32];
     size_t sequence_length;
     struct binit_menu menu;
-    bool filtering, history;
+    bool filtering, history, filenames;
     char word[64];
 };
 
@@ -547,8 +547,10 @@ static void move_cursor(int row, int column)
     fprintf(rl_outstream, "\033[%d;%dH", row, column);
 }
 
-static const char *label(const char *value)
+// Like Readline's printable_part: only filename completion shows the part after the last slash.
+static const char *label(const struct context *ctx, const char *value)
 {
+    if (!ctx->filenames) return value;
     const char *slash = strrchr(value, '/');
     return slash && slash[1] ? slash + 1 : value;
 }
@@ -582,7 +584,7 @@ static void paint_menu(struct context *ctx)
             if (item >= ctx->menu.count) break;
             move_cursor(ctx->row + 1 + row, column * ctx->cell_width + 1);
             const char *value = ctx->menu.values[ctx->menu.visible[item]];
-            int width = binit_text(text, sizeof text, ctx->history ? value : label(value), ctx->cell_width - 3);
+            int width = binit_text(text, sizeof text, ctx->history ? value : label(ctx, value), ctx->cell_width - 3);
             bool chosen = item == ctx->menu.selected;
             fprintf(rl_outstream, "%s%s%s", chosen ? "\033[7m" : "", chosen ? "> " : "  ", text);
             for (int i = width + 2; i < ctx->cell_width; ++i) fputc(' ', rl_outstream);
@@ -731,7 +733,7 @@ static int picker(struct context *ctx)
     char text[2048];
     int longest = 0;
     for (size_t i = 0; i < ctx->menu.total; ++i) {
-        int width = binit_text(text, sizeof text, label(ctx->menu.values[i]), 32);
+        int width = binit_text(text, sizeof text, label(ctx, ctx->menu.values[i]), 32);
         if (width > longest) longest = width;
     }
     int cell = ctx->history ? ctx->columns - 2 : longest + 3;
@@ -1084,6 +1086,7 @@ static void capture(char **matches, int count, int width)
     (void)width;
     if (active && count > 1 && count <= BINIT_MENU_LIMIT) {
         active->captured = binit_menu_init(&active->menu, (const char *const *)(matches + 1), (size_t)count) == 0;
+        active->filenames = rl_filename_completion_desired != 0;
         // The word as typed names what is being completed; Readline's common prefix can be longer.
         const char *breaks = rl_completer_word_break_characters ? rl_completer_word_break_characters : " \t\n";
         // Readline has already inserted the common prefix, so read the line saved before completion.
@@ -1091,7 +1094,7 @@ static void capture(char **matches, int count, int width)
         while (start > 0 && !strchr(breaks, active->line[start - 1])) --start;
         char typed[sizeof active->word];
         snprintf(typed, sizeof typed, "%.*s", active->point - start, active->line + start);
-        snprintf(active->word, sizeof active->word, "%s", label(typed));
+        snprintf(active->word, sizeof active->word, "%s", label(active, typed));
         for (size_t end = strlen(active->word); end && active->word[end - 1] == ' '; --end) active->word[end - 1] = 0;
         active->oversized = !active->captured;
     } else if (active && count > BINIT_MENU_LIMIT) {

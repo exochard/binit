@@ -199,6 +199,26 @@ fn run_reports_missing_arguments_and_engine_failures() {
     }
 }
 
+#[test]
+fn version_flag_prints_the_release_and_nothing_else() {
+    let expected = format!("binit {}\n", env!("CARGO_PKG_VERSION"));
+    for flag in ["--version", "-V"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_binit"))
+            .arg(flag)
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(String::from_utf8_lossy(&result.stdout), expected);
+        assert!(result.stderr.is_empty());
+    }
+    // As an argument to a command it is not a global flag.
+    let result = Command::new(env!("CARGO_BIN_EXE_binit"))
+        .args(["status", "--version"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+}
+
 struct Fixture {
     dir: TempDir,
 }

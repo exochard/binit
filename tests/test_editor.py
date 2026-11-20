@@ -204,6 +204,17 @@ class EditorTests(unittest.TestCase):
                     session.wait(lambda: shown in session.text, seconds=3)
                     self.assertLess(time.monotonic() - started, .6)
                     self.assertNotIn("^R", session.text)
+        # Return typed during the wait reaches Readline as Ctrl-M, as it does at an idle prompt.
+        distinct = "bind -m emacs '\"\\C-j\": \"ctrl-j\"'; bind -m vi-insert '\"\\C-j\": \"ctrl-j\"'\n"
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode, key=b"\r"), Session(extra=hook + distinct, mode=mode) as session:
+                settle(session)
+                session.send("PROMPT_COMMAND=__hook\r")
+                session.pump(.3)
+                prompts = session.text.count("READY>")
+                session.send(b"\r")
+                session.wait(lambda: session.text.count("READY>") > prompts, seconds=3)
+                self.assertNotIn("ctrl-j", session.text)
         # Typed input ends the wait early.
         with Session() as session:
             session.send(f"{start} 'sleep 2'; s=$EPOCHREALTIME; binit_complete prompt-worker wait 1000; "

@@ -251,6 +251,8 @@ static bool hold_input(int input, struct termios *saved)
         !(saved->c_lflag & ICANON)) return false;
     struct termios held = *saved;
     held.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+    // Readline reads keys with these translations off; a held Return must reach it as Ctrl-M.
+    held.c_iflag &= ~(tcflag_t)(ICRNL | INLCR);
     held.c_cc[VMIN] = 1;
     held.c_cc[VTIME] = 0;
     return tcsetattr(input, TCSANOW, &held) == 0;

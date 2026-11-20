@@ -2,8 +2,10 @@
 
 Binit runs the plugins in your interactive Bash from a pinned, verified
 snapshot and loads each one when it is needed. It also draws a completion
-menu, history search and suggestions inside Bash itself, so the line you are
-typing never waits on a slow plugin or completion.
+menu, history search and suggestions inside Bash itself, and a completion
+that runs in its own process never holds up the line you are typing.
+
+<img alt="A terminal running Binit. Ctrl-R opens the history panel over 13 entries, typing rsync narrows it to two, Down selects the deploy to web1 and Enter puts that command back on the line, highlighted and not yet run." src="docs/images/demo-history.gif" width="800">
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/startup-dark.svg">
@@ -94,7 +96,8 @@ generation before any new shell uses it.
 Typing and completion are compared with ble.sh, which also draws its own completion menu inside
 Bash, and with plain Readline as a control. Every value comes from the release binary on one Linux
 machine (Ryzen 7 7800X3D, GNU Bash 5.3.20) and averages two runs of 20 interleaved pairs. Editor
-values are the median of six cells: Emacs and vi, each with three history sizes.
+values are the median of six cells: Emacs and vi, each with three history sizes. The filmstrip
+comes from a separate, unscored run in which tmux sends the same keys to four shells at once.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/typing-dark.svg">
@@ -104,6 +107,11 @@ values are the median of six cells: Emacs and vi, each with three history sizes.
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/completion-dark.svg">
   <img alt="A slow completion leaves Binit answering keys in 2.0 ms; one that must run inside the shell makes every editor wait. Typing is scored against ble.sh. Waiting is reported: a completion that changes shell state blocks every editor until it ends. Typing while it runs in its own process, slowest 1 in 20 keys: Binit 2.0 ms, ble.sh 224.8 ms, Plain Readline 200.1 ms. Waiting for one that runs inside the shell: Binit 201.3 ms, ble.sh 256.0 ms, Plain Readline 201.3 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/completion-light.svg" width="800">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/filmstrip-dark.svg">
+  <img alt="Binit keeps showing what you type while a completion runs. Same keys at the same moment in four shells: deploy, Tab, then staging --dry-run. A host lookup takes 1.5 s. Binit runs it in its own process; the others show nothing until it ends. Completions that run inside the shell, such as Git&#x27;s, make every shell wait, Binit included. Text after &quot;deploy&quot; on each command line: Binit: +0.5 s &quot;stag&quot;, +1.2 s &quot;staging --dr&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 0.10 s; ble.sh: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-ru&quot;, slowest key 1.51 s; Oh My Bash: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 1.35 s; Bash-it: +0.5 s &quot;&quot;, +1.2 s &quot;&quot;, +2.0 s &quot;staging --dry-run&quot;, slowest key 1.35 s. Each cell is the line after deploy. Simulated lookup. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/filmstrip-light.svg" width="800">
 </picture>
 
 <picture>

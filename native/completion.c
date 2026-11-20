@@ -335,13 +335,30 @@ bad_style:
     return false;
 }
 
+/* Readline runs the event hook only after its keyboard timeout, 0.1 s by default, passes without input.
+   While a lookup is pending the hook runs every 10 ms, so the answer replaces the provisional color
+   within a frame or two; Readline's own timeout returns once nothing is pending. */
+#define HIGHLIGHT_POLL_US 10000
+static int highlight_saved_timeout = -1;
+
+static void set_highlighting_poll(bool on)
+{
+    highlighting_poll = on;
+    if (on && highlight_saved_timeout < 0) {
+        highlight_saved_timeout = rl_set_keyboard_input_timeout(HIGHLIGHT_POLL_US);
+    } else if (!on && highlight_saved_timeout >= 0) {
+        rl_set_keyboard_input_timeout(highlight_saved_timeout);
+        highlight_saved_timeout = -1;
+    }
+}
+
 static void highlight_work_reset(void)
 {
     binit_path_worker_close();
     highlight_wanted.size = highlight_pending.size = highlight_resolved.size = 0;
     highlight_shown_count = 0;
     if (highlighting_poll && !suggestion_poll && !poll_explicit) remove_poll_hook();
-    highlighting_poll = false;
+    set_highlighting_poll(false);
 }
 
 static bool same_highlight_request(const struct highlight_request *a, const struct highlight_request *b)
@@ -451,7 +468,7 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
     if (!resolved) {
         const char *manager = get_string_value("__binit_manager");
         if (manager && manager[0] == '/' && !highlighting_poll) {
-            highlighting_poll = true;
+            set_highlighting_poll(true);
             install_poll_hook();
         }
     }
@@ -2120,7 +2137,7 @@ static void refresh_highlighting(void)
     }
     if (!highlight_wanted.size || same_highlight_request(&highlight_wanted, &highlight_resolved)) {
         if (!suggestion_poll && !poll_explicit) remove_poll_hook();
-        highlighting_poll = false;
+        set_highlighting_poll(false);
         return;
     }
     const char *manager = get_string_value("__binit_manager");
@@ -2405,7 +2422,7 @@ EXPORT void binit_complete_builtin_unload(char *name)
     poll_explicit = false;
 #ifdef BINIT_HIGHLIGHT
     highlighting_enabled = false;
-    highlighting_extended = highlighting_poll = false;
+    highlighting_extended = false;
     highlight_work_reset();
     binit_highlight_clear();
     if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;

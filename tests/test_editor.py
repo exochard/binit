@@ -306,6 +306,30 @@ class EditorTests(unittest.TestCase):
                     session.wait(lambda: 'still-42' in session.text)
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_answers_within_a_few_frames(self):
+        # Readline's idle hook runs every 0.1 s; a pending lookup polls faster, so the provisional
+        # color of a new word is replaced almost at once.
+        extra = ("BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='missing=91'\n"
+                 "binit_complete editor highlighting on\n")
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, framework=True, mode=mode) as session:
+                settle(session)
+                delays = []
+                for attempt in range(5):
+                    word = f'binit-no-such-{attempt}'
+                    session.transcript.clear()
+                    started = time.monotonic()
+                    session.send(word)
+                    # A tight loop: Session.wait checks every 20 ms and keeps reading after a match.
+                    while b'\x1b[91m' + word.encode() not in session.transcript and time.monotonic() - started < 2:
+                        session.pump(.002)
+                    delays.append(time.monotonic() - started)
+                    session.send(b'\x03')
+                    session.wait(lambda: session.screen.cursor.x == len(PROMPT) and
+                                 session.screen.display[session.screen.cursor.y].rstrip() == PROMPT.rstrip())
+                self.assertLess(sorted(delays)[2], .06, delays)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_extended_highlighting_cancels_path_lookup_on_typing(self):
         fixture = textwrap.dedent("""
             from pathlib import Path

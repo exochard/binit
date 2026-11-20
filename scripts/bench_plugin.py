@@ -12,8 +12,9 @@ import shlex
 import statistics
 import subprocess
 import tempfile
+import time
 
-from bench_interactive import PLUGINS, Shell, digest, profile
+from bench_interactive import PLUGINS, PROMPT, Shell, digest, profile
 
 
 def prepare(directory, binary, source, home, mode, environment):
@@ -84,16 +85,19 @@ def paired(a, b):
     }
 
 
-def measure(terminal, identifier):
+def measure(terminal, identifier, expected):
     startup = terminal.startup_ms
-    first_input = terminal.settled(b":")
+    started = time.perf_counter_ns()
+    os.write(terminal.fd, b":")
+    marker = PROMPT.decode() + ":"
+    terminal.until(lambda: any(marker in row for row in terminal.screen.display))
+    first_input = (time.perf_counter_ns() - started) / 1e6
     terminal.cancel()
     typing = [terminal.settled(bytes([byte])) for byte in b"git status --short"]
     terminal.cancel()
     typing.extend(terminal.settled(bytes([byte])) for byte in b"nonmatching-fragment")
     terminal.cancel()
     plugins = profile(terminal)
-    expected = "pending" if identifier == "git-completion" else "loaded"
     if plugins.get(identifier, {}).get("state") != expected:
         raise RuntimeError(f"{identifier} expected {expected}, saw {plugins}")
     return {
@@ -135,11 +139,13 @@ def benchmark(args, work):
     }
     raw = {name: [] for name in cases}
     orders = tuple(permutations(cases))
+    default_state = "pending" if args.plugin == "git-completion" else "loaded"
     for round_index in range(args.samples):
         for name in orders[round_index % len(orders)]:
             terminal = Shell(str(args.bash), rcfiles[name], repo, environment)
             try:
-                raw[name].append(measure(terminal, args.plugin))
+                expected = args.after_state if name == "after" and args.after_state else default_state
+                raw[name].append(measure(terminal, args.plugin, expected))
             finally:
                 terminal.close()
     return {
@@ -149,6 +155,7 @@ def benchmark(args, work):
         "mode": args.mode,
         "plugin": args.plugin,
         "git_prompt_mode": args.git_prompt_mode,
+        "after_state": args.after_state or default_state,
         "git_files": args.git_files,
         "bash_version": subprocess.check_output([args.bash, "--version"], text=True).splitlines()[0],
         "bash_sha256": digest(args.bash),
@@ -158,7 +165,7 @@ def benchmark(args, work):
         "inputs": {
             name: {
                 file.name: digest(file)
-                for file in (binary, source / "plugin.toml", *sorted(source.glob("*.bash")))
+                for file in (binary, *package_files(source))
             }
             for name, (binary, source) in cases.items()
         },
@@ -169,6 +176,11 @@ def benchmark(args, work):
     }
 
 
+def package_files(source):
+    directory = source.parent if source.is_file() else source
+    return [*sorted(directory.glob("*.toml")), *sorted(directory.glob("*.bash"))]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plugin", choices=PLUGINS, required=True)
@@ -176,6 +188,7 @@ def main():
     parser.add_argument("--after-binary", type=Path, required=True)
     parser.add_argument("--before-plugin", type=Path, required=True)
     parser.add_argument("--after-plugin", type=Path, required=True)
+    parser.add_argument("--after-state", choices=("pending", "loaded"))
     parser.add_argument("--bash", type=Path, default=Path("/bin/bash"))
     parser.add_argument("--mode", choices=("emacs", "vi"), default="vi")
     parser.add_argument("--git-prompt-mode", choices=("branch", "status"), default="branch")

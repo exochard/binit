@@ -96,6 +96,31 @@ p99. The large fixture showed `[trunk status?]` at the next prompt after
 limit. The separate seven-plugin run on Bash 5.3.20 and vi measured a
 15.713 → 15.529 ms first acknowledged key, with 20 runs per configuration.
 
+### Git completion development comparison
+
+Each row uses the same Binit binary on both sides and 30 paired rounds.
+The reference is git-completion 0.1.0-dev with its Git-only declaration.
+For the installed mode, the candidate uses `installed.toml` and
+`--after-state loaded`. A terminal-screen probe times the first acknowledged
+key, including the post-prompt registration.
+
+| Bash | Editing mode | Candidate mode | First prompt, before → after | First key ready, before → after | Keystroke p99, before → after |
+| --- | --- | --- | ---: | ---: | ---: |
+| 5.2.15 | Emacs | Git | 3.561 → 3.707 | 4.931 → 5.089 | 0.063 → 0.055 |
+| 5.2.15 | Emacs | Installed | 3.771 → 3.439 | 5.115 → 5.668 | 0.059 → 0.055 |
+| 5.2.15 | vi | Git | 3.724 → 3.745 | 5.150 → 5.095 | 0.058 → 0.054 |
+| 5.2.15 | vi | Installed | 3.620 → 3.406 | 4.961 → 5.840 | 0.053 → 0.055 |
+| 5.3.20 | Emacs | Git | 13.922 → 13.658 | 15.405 → 14.994 | 0.056 → 0.058 |
+| 5.3.20 | Emacs | Installed | 13.824 → 13.406 | 15.192 → 15.826 | 0.056 → 0.054 |
+| 5.3.20 | vi | Git | 13.599 → 13.608 | 14.935 → 14.944 | 0.059 → 0.058 |
+| 5.3.20 | vi | Installed | 13.995 → 13.218 | 15.341 → 15.758 | 0.061 → 0.060 |
+
+The paired intervals resolved no increase in first-prompt time or keystroke
+p99. The opt-in mode increased the first acknowledged key median by
+0.4–0.9 ms across these absolute measurements. Git's first Tab in separate
+20-run seven-plugin measurements was 5.958 → 6.020 ms. Warm Tab was
+2.294 → 2.309 ms. Those runs used Bash 5.3.20 in vi mode.
+
 ## Snapshot cost
 
 Plugin loading records newly introduced functions and aliases for conservative

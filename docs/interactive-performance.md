@@ -95,9 +95,9 @@ The native module was built against each interpreter's own headers: Bash
 | --- | ---: | ---: |
 | Rust tests | 179 passed | 179 passed |
 | Native C tests | 3 passed | 3 passed |
-| Python and PTY tests, Emacs and vi | 490 run, 9 skipped | 490 run, 8 skipped |
+| Python and PTY tests, Emacs and vi | 493 run, 9 skipped | 493 run, 8 skipped |
 | Terminal smoke checks | 16 passed | 16 passed |
-| Standalone plugin tests | 51 passed | 51 passed |
+| Standalone plugin tests | 54 passed | 54 passed |
 | ShellCheck, warning severity | clean | clean |
 
 Seven skips on both interpreters need optional pinned sources that the
@@ -145,25 +145,31 @@ shows the median across the six runs, then the lowest and highest run.
 
 | Measurement (ms) | Bash 5.2.15 before | Bash 5.2.15 after | Bash 5.3.20 before | Bash 5.3.20 after |
 | --- | ---: | ---: | ---: | ---: |
-| First prompt, median | 6.954 (6.733–7.183) | 7.067 (6.900–7.529) | 18.150 (16.917–19.295) | 17.999 (17.536–19.037) |
-| First key ready, median | 7.090 (6.895–7.319) | 7.219 (7.026–7.716) | 18.282 (17.052–19.457) | 18.137 (17.671–19.211) |
-| Matching keystroke, p95 | 0.688 (0.617–0.962) | 0.786 (0.602–1.032) | 0.819 (0.620–1.033) | 0.671 (0.637–1.020) |
-| Non-matching keystroke, p95 | 0.133 (0.113–0.169) | 0.150 (0.114–0.194) | 0.149 (0.113–0.195) | 0.134 (0.125–0.178) |
-| First history search, median | 1.918 (1.897–1.930) | 1.882 (1.821–1.955) | 1.938 (1.905–1.987) | 1.860 (1.840–1.915) |
-| First Git completion, median | 6.538 (6.375–6.671) | 6.540 (6.389–7.013) | 6.471 (6.225–6.601) | 6.408 (6.302–6.662) |
-| Warm Git completion, median | 2.314 (2.125–2.443) | 2.325 (2.154–2.728) | 2.601 (2.374–2.926) | 2.509 (2.451–2.968) |
-| Bare Bash first prompt | 1.928 (1.575–1.987) | 1.828 (1.718–2.059) | 12.761 (11.443–13.578) | 12.732 (12.421–13.885) |
-| Empty Binit first prompt | 3.899 (3.577–4.136) | 3.864 (3.646–4.083) | 14.805 (13.589–15.893) | 14.934 (14.249–16.037) |
+| First prompt, median | 8.294 (8.014–11.043) | 9.999 (9.036–13.011) | 26.269 (19.819–35.843) | 24.441 (22.585–30.685) |
+| First key ready, median | 8.473 (8.169–11.462) | 10.154 (9.181–13.188) | 26.574 (19.945–36.093) | 24.637 (22.735–30.932) |
+| Matching keystroke, p95 | 1.130 (1.008–2.299) | 1.111 (0.977–1.419) | 1.739 (0.979–4.265) | 1.065 (0.983–1.727) |
+| Non-matching keystroke, p95 | 0.230 (0.197–0.903) | 0.249 (0.194–0.801) | 0.694 (0.197–3.238) | 0.229 (0.178–1.292) |
+| First history search, median | 2.245 (1.991–2.929) | 2.284 (1.902–3.124) | 2.921 (1.979–4.156) | 2.027 (1.883–3.123) |
+| First Git completion, median | 7.463 (6.962–9.668) | 7.296 (6.748–9.728) | 8.528 (6.786–11.966) | 7.229 (6.632–9.146) |
+| Warm Git completion, median | 2.992 (2.614–3.490) | 2.665 (2.373–3.484) | 3.517 (2.843–5.523) | 2.979 (2.726–3.673) |
+| Bare Bash first prompt | 2.154 (2.034–2.763) | 2.304 (2.034–2.783) | 18.322 (14.959–27.646) | 16.719 (14.886–23.257) |
+| Empty Binit first prompt | 4.875 (4.689–5.925) | 4.778 (4.417–5.950) | 23.322 (17.280–34.795) | 19.550 (16.810–24.442) |
 
-The Bash 5.2 first prompt moved 6.954 → 7.067 ms. That is inside the spread
-between runs, which spans 6.733–7.183 ms before and 6.900–7.529 ms after. The
-first two runs alone suggested +0.34 and +0.43 ms; four alternating repeats
-did not reproduce that size. On Bash 5.3, the first prompt moved
-18.150 → 17.999 ms. Keystroke ranges overlap on both interpreters.
+These runs shared the host with other work, at a load average of 9–11, so
+the Bash 5.3 columns spread widely: bare Bash alone took 14.959–27.646 ms
+before and 14.886–23.257 ms after. On Bash 5.2 the first prompt moved
+8.294 → 9.999 ms. The benchmark runs inside a Git repository, and that rise
+matches the Git prompt's paired cost of about 1.7 ms below. Keystroke and
+completion ranges overlap on both interpreters.
 
 `make bench` times the core runtime with the three plugins in
 `config/demo.toml`. Each cell gives the paired overhead median from two runs
-per arm, separated by a semicolon.
+per arm, separated by a semicolon. These ran on the build before the final
+Git prompt and editor fixes. On the final build, two alternating pairs on the
+loaded host gave startup overheads of 4.705–4.858 ms before and
+4.563–4.832 ms after on Bash 5.3. On Bash 5.2 they gave 4.698–4.730 ms
+before and 4.787–4.942 ms after. Two pairs cannot settle a difference of
+that size.
 
 | Paired overhead, median (ms) | Bash 5.2.15 before → after | Bash 5.3.20 before → after |
 | --- | ---: | ---: |
@@ -179,38 +185,51 @@ per arm, separated by a semicolon.
 Status mode adds the branch or exact tag, the short commit when detached,
 divergence from the local upstream ref, and counts for stashes, conflicts,
 staged, unstaged and untracked files. It also shows rebase, merge,
-cherry-pick, revert and bisect, with step counts for a rebase. One worker per
-shell scans in the background. It stops after 700 ms or 16,384 records, and
-typing cancels it.
+cherry-pick, revert and bisect, with step counts for a rebase.
+
+Each prompt in a repository starts a lookup and waits up to 50 ms for it, so
+the segment follows `cd` and the command that just ran. In status mode one
+worker per shell scans. A scan that outlasts the wait keeps running, stops
+after 700 ms or 16,384 records, and is cancelled by typing. Directories
+outside a repository start no lookup.
 
 | Setting | Default | Opt-in |
 | --- | --- | --- |
 | `BINIT_GIT_PROMPT_MODE` | `branch`, which works without the native module | `status`, which needs prompt workers |
+| `BINIT_GIT_PROMPT_WAIT_MS` | `50` | `0` to `1000`; `0` never waits and shows each result one prompt later |
 
-The standalone suite passed 10 tests on each Bash, including the single
-message status mode prints when the native module is missing. Three PTY cases
-cover the worker. Typing cancels it in Emacs and vi, output over its limit is
-rejected, and it cannot open a network socket.
+The standalone suite passed 13 tests on each Bash. They cover the segment on
+the prompt right after `cd`, after a command that changes the status, and
+after leaving a repository; a slow lookup that does not hold the prompt in
+Emacs and vi; and the single messages for a missing native module or an
+invalid wait. Four PTY cases cover the worker. Typing cancels it in Emacs and
+vi, output over its limit is rejected, and it cannot open a network socket.
+The fourth covers the wait. A fast result returns at once, and a slow one
+stays for a later prompt. A key typed during the wait ends it and reaches
+Readline unchanged, Ctrl-R included, and the terminal settings are restored.
+A request started right after a cancelled one still runs.
 
 | Bash | Mode | Settings | First prompt (ms) | Change; A/A | Keystroke p99 (ms) | Change; A/A | Result |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
-| 5.2.15 | Emacs | Default (branch) | 4.625 → 4.645 | -0.006 [-0.028, +0.032]; A/A [-0.057, +0.152] | 0.055 → 0.054 | -0.001 [-0.076, +0.076]; A/A [-0.082, +0.003] | clear |
-| 5.2.15 | Emacs | Status | 4.668 → 4.628 | -0.007 [-0.082, +0.078]; A/A [-0.098, +0.056] | 0.057 → 0.052 | -0.005 [-0.142, +0.005]; A/A [-0.140, +0.007] | clear |
-| 5.2.15 | vi | Default (branch) | 4.632 → 4.656 | +0.010 [-0.033, +0.097]; A/A [-0.100, +0.055] | 0.066 → 0.059 | -0.006 [-0.020, +0.004]; A/A [-0.016, +0.039] | clear |
-| 5.2.15 | vi | Status | 4.688 → 4.660 | +0.028 [-0.037, +0.104]; A/A [-0.002, +0.113] | 0.052 → 0.053 | +0.001 [-0.004, +0.008]; A/A [-0.004, +0.005] | clear |
-| 5.3.20 | Emacs | Default (branch) | 13.840 → 13.678 | -0.069 [-0.264, +0.188]; A/A [-0.142, +0.110] | 0.051 → 0.054 | +0.003 [-0.007, +0.037]; A/A [-0.005, +0.014] | clear |
-| 5.3.20 | Emacs | Status | 13.733 → 13.715 | -0.030 [-0.137, +0.112]; A/A [-0.191, +0.040] | 0.052 → 0.054 | +0.002 [-0.003, +0.008]; A/A [-0.005, +0.018] | clear |
-| 5.3.20 | vi | Default (branch) | 13.741 → 13.903 | +0.122 [-0.110, +0.230]; A/A [-0.133, +0.154] | 0.050 → 0.051 | +0.001 [-0.006, +0.006]; A/A [-0.006, +0.009] | clear |
-| 5.3.20 | vi | Status | 13.937 → 13.683 | +0.056 [-0.122, +0.220]; A/A [-0.170, +0.083] | 0.050 → 0.051 | +0.002 [-0.003, +0.009]; A/A [-0.005, +0.012] | inconclusive: first prompt |
-| 5.3.20 | vi | Status, 20,000 untracked files | 13.728 → 13.618 | -0.106 [-0.202, +0.039]; A/A [-0.205, -0.003] | 0.051 → 0.050 | -0.001 [-0.006, +0.008]; A/A [-0.003, +0.011] | clear |
+| 5.2.15 | Emacs | Default (branch) | 7.466 → 9.757 | +1.909 [+1.564, +2.625]; A/A [-0.449, +0.180] | 1.016 → 0.714 | -0.302 [-0.583, +0.114]; A/A [-0.304, +0.983] | increase: first prompt; inconclusive: keystroke p99 |
+| 5.2.15 | Emacs | Status | 7.179 → 22.073 | +15.182 [+13.525, +16.198]; A/A [-0.253, +0.606] | 2.010 → 0.949 | -1.061 [-1.947, +0.027]; A/A [-1.546, +0.619] | increase: first prompt; inconclusive: keystroke p99 |
+| 5.2.15 | vi | Default (branch) | 5.720 → 7.314 | +1.713 [+1.582, +1.852]; A/A [-0.139, +0.083] | 0.069 → 0.066 | -0.003 [-0.023, +0.011]; A/A [-0.019, +0.005] | increase: first prompt |
+| 5.2.15 | vi | Status | 5.655 → 20.377 | +14.539 [+14.453, +14.685]; A/A [-0.221, +0.022] | 0.254 → 0.229 | -0.025 [-0.355, +0.523]; A/A [-0.373, +0.852] | increase: first prompt; inconclusive: keystroke p99 |
+| 5.3.20 | Emacs | Default (branch) | 16.394 → 17.887 | +1.520 [+1.366, +1.704]; A/A [-0.284, +0.058] | 0.051 → 0.052 | +0.000 [-0.007, +0.013]; A/A [-0.005, +0.004] | increase: first prompt |
+| 5.3.20 | Emacs | Status | 16.503 → 31.267 | +14.861 [+14.482, +15.234]; A/A [-0.302, +0.435] | 0.054 → 0.052 | -0.002 [-0.007, +0.006]; A/A [-0.001, +0.008] | increase: first prompt |
+| 5.3.20 | vi | Default (branch) | 16.918 → 18.878 | +1.726 [+1.349, +2.128]; A/A [-0.176, +0.278] | 0.070 → 0.065 | -0.005 [-0.101, +0.021]; A/A [-0.120, +0.026] | increase: first prompt |
+| 5.3.20 | vi | Status | 17.575 → 31.854 | +14.400 [+13.715, +14.871]; A/A [-0.636, +0.176] | 0.084 → 0.095 | +0.011 [-0.013, +0.042]; A/A [-0.013, +0.041] | increase: first prompt |
+| 5.3.20 | vi | Status, 20,000 untracked files | 16.937 → 66.235 | +49.393 [+49.101, +49.627]; A/A [-0.274, +0.283] | 0.067 → 0.095 | +0.028 [-0.004, +0.188]; A/A [-0.011, +0.001] | increase: first prompt; inconclusive: keystroke p99 |
 
 Rounds per cell: 30, 60.
 
-One cell is inconclusive: Bash 5.3 vi status first prompt, at
-+0.056 [−0.122, +0.220] ms against an A/A upper end of +0.083 ms. The
-20,000-file row ran 60 rounds. That fixture showed `[trunk status?]` at
-the next prompt after 950 ms idle. The scan hit its record limit, and the
-prompt kept the branch.
+The first prompt in a repository now includes the lookup. On the 30-file
+fixture that adds 1.5–1.9 ms for the branch and 14.4–15.2 ms for status. No
+keystroke increase was resolved; three Bash 5.2 cells had A/A intervals over
+1 ms wide and stay inconclusive. The 20,000-file row ran 60 rounds. Its scan
+outlasts the wait, so the first prompt pays the full 50 ms and the segment
+appears at a later prompt only if the scan finishes before a key. Set
+`BINIT_GIT_PROMPT_WAIT_MS=0` for the earlier behavior, where no prompt waits.
 
 ### 2. Git completion
 
@@ -476,6 +495,29 @@ inconclusive.
 | 5.3.20 | Emacs | Extended | 100 | 16.403 → 16.672 | +0.129 [+0.007, +0.327]; A/A [-0.100, +0.363] (increase) | 0.748 → 0.715 | -0.033 [-0.400, +0.323]; A/A [-0.506, +0.222] (inconclusive) | 17.762 → 17.603 | -0.158 [-2.745, +3.864]; A/A [-4.412, +1.513] (inconclusive) |
 | 5.3.20 | vi | Extended | 100 | 19.668 → 19.293 | -0.148 [-0.520, +0.319]; A/A [-0.592, +0.390] (clear) | 1.813 → 1.783 | -0.030 [-0.458, +0.369]; A/A [-0.029, +1.432] (inconclusive) | 22.907 → 23.987 | +1.080 [-2.781, +3.631]; A/A [-1.926, +4.309] (inconclusive) |
 
+The final build changes how the input is repainted when it holds newlines or
+tabs, and it keeps a word's resolved color while a newer lookup runs. The
+same eight cells were rerun with only the after build replaced. First prompt
+and wrapped-line p99 show no resolved increase. Keystroke p99 is clear in five
+cells and inconclusive in one. The two Bash 5.2 extended cells resolved
++0.015 [+0.003, +0.028] ms in
+Emacs and +0.034 [+0.012, +0.071] ms in vi. The earlier build measured
++0.013 [−0.019, +0.033] ms for the Emacs cell, so these likely resolve the
+extended-mode cost that was already there.
+
+| Bash | Mode | Settings | First prompt (ms) | Change; A/A | Keystroke p99 (ms) | Change; A/A | Wrapped-line p99 (ms) | Change; A/A | Result |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 5.2.15 | Emacs | Default | 4.317 → 4.317 | +0.018 [-0.093, +0.067]; A/A [-0.038, +0.112] | 0.172 → 0.167 | -0.005 [-0.040, +0.013]; A/A [-0.041, +0.018] | 10.647 → 10.688 | +0.041 [-0.115, +0.125]; A/A [-0.196, +0.114] | clear |
+| 5.2.15 | Emacs | Extended | 4.373 → 4.432 | +0.041 [-0.206, +0.136]; A/A [-0.108, +0.072] | 0.174 → 0.189 | +0.015 [+0.003, +0.028]; A/A [-0.012, +0.017] | 10.760 → 10.711 | -0.049 [-1.536, +3.623]; A/A [-1.481, +3.909] | increase: keystroke p99; inconclusive: wrapped-line p99 |
+| 5.2.15 | vi | Default | 4.720 → 4.511 | -0.041 [-0.200, +0.123]; A/A [-0.141, +0.117] | 0.190 → 0.176 | -0.013 [-0.031, -0.001]; A/A [-0.011, +1.204] | 12.836 → 11.802 | -1.033 [-2.453, +2.160]; A/A [-2.941, +0.930] | inconclusive: keystroke p99; inconclusive: wrapped-line p99 |
+| 5.2.15 | vi | Extended | 4.358 → 4.434 | +0.038 [-0.079, +0.190]; A/A [-0.220, +0.103] | 0.164 → 0.197 | +0.034 [+0.012, +0.071]; A/A [-0.006, +0.026] | 10.656 → 11.008 | +0.351 [-2.593, +1.632]; A/A [-2.973, +1.238] | increase: keystroke p99; inconclusive: wrapped-line p99 |
+| 5.3.20 | Emacs | Default | 14.793 → 14.855 | -0.029 [-0.365, +0.355]; A/A [-0.360, +0.544] | 0.154 → 0.166 | +0.012 [-0.017, +0.030]; A/A [-0.039, +0.005] | 10.772 → 10.897 | +0.126 [-0.076, +1.862]; A/A [-0.142, +0.268] | inconclusive: wrapped-line p99 |
+| 5.3.20 | Emacs | Extended | 14.898 → 15.076 | -0.138 [-0.677, +0.300]; A/A [-0.711, +0.219] | 0.141 → 0.149 | +0.007 [-0.013, +0.022]; A/A [-0.042, -0.002] | 10.613 → 10.634 | +0.021 [-0.077, +0.103]; A/A [-0.082, +0.298] | clear |
+| 5.3.20 | vi | Default | 14.390 → 14.540 | +0.183 [-0.276, +0.499]; A/A [-0.155, +0.318] | 0.135 → 0.132 | -0.004 [-0.034, +0.020]; A/A [-0.035, +0.009] | 10.467 → 10.498 | +0.031 [-0.048, +0.116]; A/A [-0.051, +0.090] | inconclusive: first prompt |
+| 5.3.20 | vi | Extended | 16.117 → 16.232 | +0.164 [-0.373, +0.498]; A/A [-0.367, +0.294] | 0.154 → 0.164 | +0.009 [-0.021, +0.048]; A/A [-0.026, +0.042] | 10.446 → 10.550 | +0.104 [-0.080, +0.873]; A/A [-0.099, +1.202] | inconclusive: first prompt; inconclusive: wrapped-line p99 |
+
+Rounds per cell: 24.
+
 ### Repeated cells
 
 The first-pass values stay in the tables above. Repeats ran 36 rounds on the
@@ -527,7 +569,7 @@ prompt detection, which changes no timed step.
 
 | Plugin | Deferred | Reason |
 | --- | --- | --- |
-| Git prompt | A persistent status daemon or index cache | The bounded worker kept the branch on the 20,000-file fixture, and no first-prompt or keystroke increase was resolved. A daemon is a new runtime dependency that needs its own approval. |
+| Git prompt | A persistent status daemon or index cache | Status costs 14–15 ms per prompt in a small repository and the full 50 ms wait on the 20,000-file fixture. A cached daemon could answer sooner, but it is a new runtime dependency that needs its own approval. |
 | Git completion | Cancelling installed definitions once they run | Definitions change live Bash state, so a running script cannot be stopped without losing that state. Discovery can be cancelled, and sourcing stays an explicit step. |
 | History search | A larger persistent index, sync and accounts | A larger index needs a new storage dependency and approval. Search stays bounded to the newest 1,000 entries. Sync and accounts are out of scope. |
 | Autosuggestions | Previews from arbitrary shell completion, and asynchronous history | Shell completion functions can have side effects and need live definitions, so previews use isolated providers only. The history strategy stays synchronous with fixed limits until large histories are qualified. |

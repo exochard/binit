@@ -114,8 +114,9 @@ is useful for diagnosis; only the complete paired runs are comparable.
 
 ## Sending a change
 
-Use a branch and a concise conventional commit subject, for example
-`fix: preserve completion arguments`. Explain the behavior before and after
+`main` holds released code only; development happens on `dev`. Branch from
+`dev`, open pull requests against `dev`, and use a concise conventional commit
+subject, for example `fix: preserve completion arguments`. Explain the behavior before and after
 the change, and include the exact checks run. Use ordinary Bash terminology
 for names. Put generated builds and raw machine logs under ignored paths.
 

@@ -446,6 +446,9 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
     }
     for (size_t i = 0; i < request->count; ++i) {
         uint8_t color = highlight_path_color(highlight_result[i]);
+        /* The word under the cursor may still be half typed; marking each prefix missing makes it flash. */
+        bool editing = (size_t)rl_point >= pending[i].start && (size_t)rl_point <= pending[i].end;
+        if (editing && (color == HL_MISSING || color == HL_MISSING_PATH)) continue;
         if (color) memset(colors + pending[i].start, color, (size_t)(pending[i].end - pending[i].start));
     }
 }

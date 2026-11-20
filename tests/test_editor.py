@@ -195,8 +195,9 @@ class EditorTests(unittest.TestCase):
         for mode in ('emacs', 'vi'):
             for line, painted in (
                     ('ls', b'\x1b[92mls'),
-                    ('binit-no-such-command-781', b'\x1b[91mbinit-no-such-command-781'),
-                    ('echo ./present ./absent', b'\x1b[95m./absent')):
+                    # A missing word is marked once the cursor has left it.
+                    ('binit-no-such-command-781 ', b'\x1b[91mbinit-no-such-command-781'),
+                    ('echo ./present ./absent ', b'\x1b[95m./absent')):
                 with self.subTest(line=line, mode=mode), Session(extra=extra, framework=True, mode=mode) as session:
                     (session.directory / 'present').touch()
                     session.send(line)
@@ -207,6 +208,30 @@ class EditorTests(unittest.TestCase):
                     session.send(b'\x03')
                     session.wait(lambda: session.screen.cursor.x == len(PROMPT) and
                                  session.screen.display[session.screen.cursor.y].rstrip() == PROMPT.rstrip())
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_marks_a_missing_word_only_after_the_cursor_leaves_it(self):
+        extra = (
+            "BINIT_HIGHLIGHT_EXTENDED=1\n"
+            "BINIT_HIGHLIGHT_STYLES='missing=91,path=94,missing-path=95'\n"
+            "binit_complete editor highlighting on\n"
+        )
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode, word='path'), Session(extra=extra, framework=True, mode=mode) as session:
+                (session.directory / 'present').touch()
+                session.send('echo ./present ./absent')
+                # Both paths resolve in one request, so the present path proves the lookup finished.
+                session.wait(lambda: b'\x1b[94m./present' in session.transcript)
+                session.pump(.3)
+                self.assertNotIn(b'\x1b[95m', session.transcript)
+                session.send(' ')
+                session.wait(lambda: b'\x1b[95m./absent' in session.transcript)
+            with self.subTest(mode=mode, word='command'), Session(extra=extra, framework=True, mode=mode) as session:
+                session.send('binit-no-such-command-782')
+                session.pump(.8)
+                self.assertNotIn(b'\x1b[91m', session.transcript)
+                session.send(' ')
+                session.wait(lambda: b'\x1b[91mbinit-no-such-command-782' in session.transcript)
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_extended_highlighting_cancels_path_lookup_on_typing(self):

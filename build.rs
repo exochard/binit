@@ -76,10 +76,15 @@ fn main() {
             "-shared",
             "-Wl,-z,relro,-z,now,-z,noexecstack",
         ])
-        .arg(format!("-I{}", headers.display()))
-        .arg(format!("-I{}", readline.display()))
-        .arg(format!("-I{}", headers.join("include").display()))
-        .arg(format!("-I{}", headers.join("builtins").display()))
+        // Bash's own headers keep pre-C23 declarations; as system headers their warnings do not fail -Werror.
+        .arg("-isystem")
+        .arg(&headers)
+        .arg("-isystem")
+        .arg(&readline)
+        .arg("-isystem")
+        .arg(headers.join("include"))
+        .arg("-isystem")
+        .arg(headers.join("builtins"))
         .args([
             "native/completion.c",
             "native/menu.c",

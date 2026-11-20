@@ -133,6 +133,7 @@ class UpdateCandidateTests(unittest.TestCase):
         self.assertEqual(result.stdout, '')
         self.assertNotEqual(self.current(), self.first)
 
+    @unittest.skipIf(os.geteuid() == 0, 'root reads a file whatever its mode, as in CI containers')
     def test_unreadable_new_source_leaves_no_review_configuration(self):
         unreadable = self.source('v2', BASE)
         (unreadable / 'init.bash').chmod(0)

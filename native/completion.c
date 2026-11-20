@@ -287,6 +287,14 @@ struct highlight_request {
 };
 static struct highlight_request highlight_wanted, highlight_pending, highlight_resolved;
 static char highlight_result[BINIT_HIGHLIGHT_TOKENS];
+/* Colors from the last answered lookup, by word start and kind ('c' command, 'p' path). A word keeps
+   its color while a newer lookup runs, so typing does not flash it back to the unresolved color. */
+static struct {
+    size_t start;
+    char kind;
+    uint8_t color;
+} highlight_shown[BINIT_HIGHLIGHT_TOKENS];
+static size_t highlight_shown_count;
 
 static bool highlight_options(void)
 {
@@ -331,6 +339,7 @@ static void highlight_work_reset(void)
 {
     binit_path_worker_close();
     highlight_wanted.size = highlight_pending.size = highlight_resolved.size = 0;
+    highlight_shown_count = 0;
     if (highlighting_poll && !suggestion_poll && !poll_explicit) remove_poll_hook();
     highlighting_poll = false;
 }
@@ -405,6 +414,7 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
                *home = get_string_value("HOME");
     bool usable = directory && strnlen(directory, sizeof request->directory) < sizeof request->directory;
     struct binit_highlight_token pending[BINIT_HIGHLIGHT_TOKENS];
+    char kinds[BINIT_HIGHLIGHT_TOKENS];
     request->count = 0;
     request->size = 2;
     if (!usable || !highlight_field(request, 0, path ? "1" : "0") ||
@@ -425,6 +435,7 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
             memset(colors + scope.start, color, (size_t)(scope.end - scope.start));
             if (!request->size) return;
         } else if (usable && highlight_field(request, command ? 'c' : 'p', name)) {
+            kinds[request->count] = command ? 'c' : 'p';
             pending[request->count++] = scope;
         }
     }
@@ -436,21 +447,32 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
     request->frame[0] = (char)(payload & 255u);
     request->frame[1] = (char)(payload >> 8u);
     memcpy(request->directory, directory, strlen(directory) + 1u);
-    if (!same_highlight_request(request, &highlight_resolved)) {
+    bool resolved = same_highlight_request(request, &highlight_resolved);
+    if (!resolved) {
         const char *manager = get_string_value("__binit_manager");
         if (manager && manager[0] == '/' && !highlighting_poll) {
             highlighting_poll = true;
             install_poll_hook();
         }
-        return;
     }
     for (size_t i = 0; i < request->count; ++i) {
-        uint8_t color = highlight_path_color(highlight_result[i]);
-        /* The word under the cursor may still be half typed; marking each prefix missing makes it flash. */
-        bool editing = (size_t)rl_point >= pending[i].start && (size_t)rl_point <= pending[i].end;
-        if (editing && (color == HL_MISSING || color == HL_MISSING_PATH)) continue;
+        uint8_t color = HL_PLAIN;
+        if (resolved) {
+            color = highlight_path_color(highlight_result[i]);
+        } else {
+            for (size_t j = 0; j < highlight_shown_count; ++j) {
+                if (highlight_shown[j].start == pending[i].start && highlight_shown[j].kind == kinds[i])
+                    color = highlight_shown[j].color;
+            }
+        }
         if (color) memset(colors + pending[i].start, color, (size_t)(pending[i].end - pending[i].start));
+        if (resolved) {
+            highlight_shown[i].start = pending[i].start;
+            highlight_shown[i].kind = kinds[i];
+            highlight_shown[i].color = color;
+        }
     }
+    if (resolved) highlight_shown_count = request->count;
 }
 
 /* Where the repaint has left the cursor. A row written to the right margin keeps the cursor on its last

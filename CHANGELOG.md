@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - 2026-11-19
+## 0.1.0 - 2026-11-20
 
 The first release, for Linux x86_64 with glibc 2.39 or newer and GNU Bash 5.2
 or later. The built-in editor module targets Bash 5.3 with Readline 8.3; other

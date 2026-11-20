@@ -242,7 +242,8 @@ static long milliseconds_left(const struct timespec *deadline)
 /* A prompt hook runs before Readline prepares the terminal, so it is still in canonical mode: a key
    stays unreadable until a newline, and the line discipline consumes editing keys such as Ctrl-R. While
    waiting, the terminal is held without canonical input or echo, so the first key ends the wait and
-   reaches Readline unchanged. Signal keys keep working. */
+   reaches Readline unchanged. Signal and flow-control keys keep their terminal meaning, as they do
+   while a command runs. */
 static bool hold_input(int input, struct termios *saved)
 {
     if (input < 0 || !isatty(input) || tcgetattr(input, saved) != 0 || !(saved->c_lflag & ICANON)) return false;
@@ -257,10 +258,11 @@ static bool hold_input(int input, struct termios *saved)
    stop_on_input is set, and a signal always ends it. */
 static void await_connection(const struct timespec *deadline, bool stop_on_input)
 {
+    collect();
+    if (connection < 0) return;
     int input = fileno(rl_instream ? rl_instream : stdin);
     struct termios saved;
     bool held = hold_input(input, &saved);
-    collect();
     while (connection >= 0 && !interrupt_state && !terminating_signal) {
         long left = milliseconds_left(deadline);
         if (left <= 0) break;

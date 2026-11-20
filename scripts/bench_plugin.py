@@ -17,7 +17,7 @@ import time
 from bench_interactive import PLUGINS, PROMPT, Shell, digest, profile
 
 
-def prepare(directory, binary, source, home, mode, environment, project=None):
+def prepare(directory, binary, source, home, mode, environment, project=None, long_line=False):
     directory.mkdir()
     state = directory / "state"
     config = directory / "plugins.toml"
@@ -33,10 +33,11 @@ def prepare(directory, binary, source, home, mode, environment, project=None):
         )
     rc = directory / "rc"
     init = shlex.join([str(binary), "init", "--state", str(state)])
+    paste = "bind 'set enable-bracketed-paste on'\n" if long_line else ""
     rc.write_text(
         f"set -o {mode}\nPS1='BENCH> '\nHISTSIZE=1000\nHISTFILE=/dev/null\n"
         f"history -r {shlex.quote(str(home / 'history'))}\n"
-        f'eval "$({init})"\n'
+        f'{paste}eval "$({init})"\n'
     )
     return rc
 
@@ -45,21 +46,25 @@ def percentile(values, fraction):
     return sorted(values)[math.ceil(len(values) * fraction) - 1]
 
 
-def flatten_typing(rows):
-    return [duration for row in rows for duration in row["typing"]]
+def flatten_typing(rows, field="typing"):
+    return [duration for row in rows for duration in row[field]]
 
 
 def summary(rows):
-    return {
+    result = {
         "startup_visible_median": statistics.median(row["startup_visible"] for row in rows),
         "startup_usable_median": statistics.median(row["startup_usable"] for row in rows),
         "typing_p99": percentile(flatten_typing(rows), .99),
         "typing_samples": len(flatten_typing(rows)),
     }
+    if rows[0]["long_typing"]:
+        samples = flatten_typing(rows, "long_typing")
+        result.update(long_typing_p99=percentile(samples, .99), long_typing_samples=len(samples))
+    return result
 
 
 def differences(a, b):
-    return {
+    result = {
         "startup_visible_median": statistics.median(
             after["startup_visible"] - before["startup_visible"]
             for before, after in zip(a, b, strict=True)
@@ -70,6 +75,10 @@ def differences(a, b):
         ),
         "typing_p99": percentile(flatten_typing(b), .99) - percentile(flatten_typing(a), .99),
     }
+    if a[0]["long_typing"]:
+        result["long_typing_p99"] = (percentile(flatten_typing(b, "long_typing"), .99)
+                                     - percentile(flatten_typing(a, "long_typing"), .99))
+    return result
 
 
 def paired(a, b):
@@ -90,18 +99,28 @@ def paired(a, b):
     }
 
 
-def measure(terminal, identifier, expected):
+def measure(terminal, identifier, expected, long_line):
+    def clear_line():
+        terminal.cancel()
+        terminal.until(lambda: terminal.screen.cursor.x == len(PROMPT) and
+                       terminal.screen.display[terminal.screen.cursor.y].rstrip() == PROMPT.decode().rstrip())
+
     startup = terminal.startup_ms
     started = time.perf_counter_ns()
     os.write(terminal.fd, b":")
     marker = PROMPT.decode() + ":"
     terminal.until(lambda: any(marker in row for row in terminal.screen.display))
     first_input = (time.perf_counter_ns() - started) / 1e6
-    terminal.cancel()
+    clear_line()
     typing = [terminal.settled(bytes([byte])) for byte in b"git status --short"]
-    terminal.cancel()
+    clear_line()
     typing.extend(terminal.settled(bytes([byte])) for byte in b"nonmatching-fragment")
-    terminal.cancel()
+    clear_line()
+    long_typing = []
+    if long_line:
+        terminal.settled(b"\x1b[200~echo '" + b"x" * 3400 + b"' && git -C . status --\x1b[201~")
+        long_typing = [terminal.settled(bytes([byte])) for byte in b"short && echo ./fixture"]
+        clear_line()
     plugins = profile(terminal)
     if plugins.get(identifier, {}).get("state") != expected:
         raise RuntimeError(f"{identifier} expected {expected}, saw {plugins}")
@@ -109,6 +128,7 @@ def measure(terminal, identifier, expected):
         "startup_visible": startup,
         "startup_usable": startup + first_input,
         "typing": typing,
+        "long_typing": long_typing,
         "profile": plugins[identifier],
     }
 
@@ -142,7 +162,7 @@ def benchmark(args, work):
     }
     rcfiles = {
         name: prepare(work / name, *case, home, args.mode, environment,
-                      project=repo if args.project_profile else None)
+                      project=repo if args.project_profile else None, long_line=args.long_line)
         for name, case in cases.items()
     }
     raw = {name: [] for name in cases}
@@ -154,7 +174,7 @@ def benchmark(args, work):
             terminal = Shell(str(args.bash), rcfiles[name], repo, case_environment)
             try:
                 expected = args.after_state if name == "after" and args.after_state else default_state
-                raw[name].append(measure(terminal, args.plugin, expected))
+                raw[name].append(measure(terminal, args.plugin, expected, args.long_line))
             finally:
                 terminal.close()
     return {
@@ -168,6 +188,7 @@ def benchmark(args, work):
         "after_settings": dict(args.after_setting),
         "git_files": args.git_files,
         "project_profile": args.project_profile,
+        "long_line": args.long_line,
         "bash_version": subprocess.check_output([args.bash, "--version"], text=True).splitlines()[0],
         "bash_sha256": digest(args.bash),
         "history_sha256": digest(history),
@@ -207,6 +228,8 @@ def main():
     parser.add_argument("--git-files", type=int, default=30)
     parser.add_argument("--project-profile", action="store_true",
                         help="start in a directory with a trusted environment profile")
+    parser.add_argument("--long-line", action="store_true",
+                        help="also sample edits near the end of a wrapped 3,400-byte line")
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

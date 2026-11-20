@@ -17,7 +17,7 @@ import time
 from bench_interactive import PLUGINS, PROMPT, Shell, digest, profile
 
 
-def prepare(directory, binary, source, home, mode, environment):
+def prepare(directory, binary, source, home, mode, environment, project=None):
     directory.mkdir()
     state = directory / "state"
     config = directory / "plugins.toml"
@@ -26,6 +26,11 @@ def prepare(directory, binary, source, home, mode, environment):
         [binary, "prepare", config, "--state", state],
         env=environment, check=True, stdout=subprocess.DEVNULL,
     )
+    if project is not None:
+        subprocess.run(
+            [binary, "trust", project, "--state", state],
+            env=environment, check=True, stdout=subprocess.DEVNULL,
+        )
     rc = directory / "rc"
     init = shlex.join([str(binary), "init", "--state", str(state)])
     rc.write_text(
@@ -128,13 +133,16 @@ def benchmark(args, work):
     subprocess.run(["git", "init", "-q", "-b", "main", repo], env=environment, check=True)
     for i in range(args.git_files):
         (repo / f"fixture-{i:06d}").touch()
+    if args.project_profile:
+        (repo / ".binit-project.toml").write_text('[env]\nPROJECT_MODE = "development"\n')
     cases = {
         "before": (args.before_binary, args.before_plugin),
         "after": (args.after_binary, args.after_plugin),
         "control": (args.before_binary, args.before_plugin),
     }
     rcfiles = {
-        name: prepare(work / name, *case, home, args.mode, environment)
+        name: prepare(work / name, *case, home, args.mode, environment,
+                      project=repo if args.project_profile else None)
         for name, case in cases.items()
     }
     raw = {name: [] for name in cases}
@@ -159,6 +167,7 @@ def benchmark(args, work):
         "after_state": args.after_state or default_state,
         "after_settings": dict(args.after_setting),
         "git_files": args.git_files,
+        "project_profile": args.project_profile,
         "bash_version": subprocess.check_output([args.bash, "--version"], text=True).splitlines()[0],
         "bash_sha256": digest(args.bash),
         "history_sha256": digest(history),
@@ -196,6 +205,8 @@ def main():
     parser.add_argument("--mode", choices=("emacs", "vi"), default="vi")
     parser.add_argument("--git-prompt-mode", choices=("branch", "status"), default="branch")
     parser.add_argument("--git-files", type=int, default=30)
+    parser.add_argument("--project-profile", action="store_true",
+                        help="start in a directory with a trusted environment profile")
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

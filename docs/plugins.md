@@ -256,6 +256,9 @@ ends. Worker output is passed as data and never evaluated. Use
 
 ```toml
 label = "example"
+path_prepend = ["tools/bin"]
+python_venv = ".venv"
+node_bin = true
 
 [env]
 PROJECT_MODE = "development"
@@ -263,7 +266,9 @@ PROJECT_MODE = "development"
 
 `binit trust DIRECTORY` approves the file's current content and prints its digest, label and variables. `binit trust DIRECTORY --sha256 HEX` approves only content with the digest you reviewed, so a change made between review and approval is refused; use it for checkouts that other people or tools can write. Trust records belong to the selected private state directory. Project values use NUL-delimited transport and quoted assignment, without `eval`. Bash control variables such as `PATH` and `POSIXLY_CORRECT` are rejected. That list is not a sandbox: values such as `GIT_SSH_COMMAND`, `PAGER` or `NODE_OPTIONS` decide what other programs run, so approving a project file is as consequential as running its code. Arrays and integer variables are skipped, as are readonly variables and namerefs.
 
-The runtime restores prior values and export declarations on the next directory change. If a variable changes to an incompatible type while the project is active, restoration leaves it intact and reports the conflict. Project profiles explicitly configure environment variables. External programs retain their normal permissions.
+The project-context plugin selects the profile in the current directory by default. Set `BINIT_PROJECT_SCOPE=ancestors` to select the nearest profile, including a nested profile that needs its own approval.
+
+The optional `path_prepend` list adds up to 16 existing directories. `python_venv` sets `VIRTUAL_ENV` and adds the environment's `bin` directory. `node_bin` adds `node_modules/.bin` when it exists. Helper directories resolve relative to the profile and must stay inside it. The plugin restores previous scalar values, unset states and export attributes on directory change. If a variable changes to an incompatible type while the project is active, restoration leaves it intact and reports the conflict. Run `binit-project-status` to see the selected profile and the variables it changed.
 
 ## Trust and loading failures
 

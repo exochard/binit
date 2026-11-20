@@ -99,11 +99,16 @@ def paired(a, b):
     }
 
 
+def at_empty_prompt(screen):
+    # Prompt plugins such as git-prompt and project-context prefix PS1 with segments.
+    row = screen.display[screen.cursor.y].rstrip()
+    return row.endswith(PROMPT.decode().rstrip()) and screen.cursor.x == len(row) + 1
+
+
 def measure(terminal, identifier, expected, long_line):
     def clear_line():
         terminal.cancel()
-        terminal.until(lambda: terminal.screen.cursor.x == len(PROMPT) and
-                       terminal.screen.display[terminal.screen.cursor.y].rstrip() == PROMPT.decode().rstrip())
+        terminal.until(lambda: at_empty_prompt(terminal.screen))
 
     startup = terminal.startup_ms
     started = time.perf_counter_ns()

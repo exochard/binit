@@ -44,7 +44,7 @@ __binit_capture_plugin_completions() {
     if [[ -n "${__binit_completions[$__binit_comp_id]}" ]]; then IFS=' ' read -r -a __binit_comp_names <<< "${__binit_completions[$__binit_comp_id]}"; else __binit_comp_names=(); fi
     for __binit_comp_name in "${__binit_comp_names[@]}"; do
         [[ ${__binit_pre_completion[$__binit_comp_name]-safe} == safe ]] || continue
-        __binit_comp_current=$( { builtin complete -p -- "$__binit_comp_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_comp_current=''
+        __binit_comp_current=$( { builtin complete -p -- "$__binit_comp_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_comp_current=''
         [[ -n $__binit_comp_current ]] || continue
         __binit_completion_spec[$__binit_comp_name]=$__binit_comp_current
         if [[ ${__binit_completion_disabled[$__binit_comp_name]-0} == 1 ]]; then
@@ -234,7 +234,7 @@ __binit_unload() {
             printf 'binit: %s: completion changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2
             return 1
         fi
-        __binit_unload_current=$( { builtin complete -p -- "$__binit_unload_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_unload_current=''
+        __binit_unload_current=$( { builtin complete -p -- "$__binit_unload_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_unload_current=''
         [[ -z $__binit_unload_current || $__binit_unload_current == "${__binit_completion_spec[$__binit_unload_name]-}" ]] || { printf 'binit: %s: completion changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2; return 1; }
     done
     __binit_unload_keep=()
@@ -386,7 +386,7 @@ __binit_load() {
     fi
     if [[ -n "${__binit_completions[$__binit_load_id]}" ]]; then IFS=' ' read -r -a __binit_load_completions <<< "${__binit_completions[$__binit_load_id]}"; else __binit_load_completions=(); fi
     for __binit_load_comp in "${__binit_load_completions[@]}"; do
-        __binit_load_comp_before=$( { builtin complete -p -- "$__binit_load_comp" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_load_comp_before=''
+        __binit_load_comp_before=$( { builtin complete -p -- "$__binit_load_comp" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_load_comp_before=''
         if [[ -n $__binit_load_comp_before && $__binit_load_comp_before != "${__binit_completion_spec[$__binit_load_comp]-}" ]]; then
             __binit_pre_completion[$__binit_load_comp]=foreign
         else
@@ -618,7 +618,7 @@ __binit_provider_register() {
         printf 'binit: declare completion in plugin manifest: %s\n' "$__binit_provider_name" >&2
         return 1
     fi
-    __binit_provider_current=$( { builtin complete -p -- "$__binit_provider_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_provider_current=''
+    __binit_provider_current=$( { builtin complete -p -- "$__binit_provider_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_provider_current=''
     if [[ -v __binit_provider_count[$__binit_provider_name] ]]; then
         if [[ ${__binit_provider_owner[$__binit_provider_name]} != "$__binit_provider_plugin" || ( -n $__binit_provider_current && $__binit_provider_current != "${__binit_provider_spec[$__binit_provider_name]}" ) ]]; then
             printf 'binit: completion changed: %s\n' "$__binit_provider_name" >&2
@@ -650,7 +650,7 @@ __binit_provider_unregister() {
         return 2
     fi
     local __binit_provider_name=$1 __binit_provider_current
-    __binit_provider_current=$( { builtin complete -p -- "$__binit_provider_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_provider_current=''
+    __binit_provider_current=$( { builtin complete -p -- "$__binit_provider_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_provider_current=''
     if [[ -n $__binit_provider_current && $__binit_provider_current != "${__binit_provider_spec[$__binit_provider_name]}" ]]; then
         printf 'binit: completion changed: %s\n' "$__binit_provider_name" >&2
         return 1
@@ -726,7 +726,7 @@ binit() {
         if (( $# != 3 )) || [[ ! $__binit_admin_action =~ ^(enable|disable)$ || ! $3 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ( ! -v __binit_completion_owner[$3] && ! -v __binit_provider_count[$3] ) ]]; then printf 'usage: binit completions list|enable|disable|register|unregister [NAME] [PROGRAM ARG...]\n' >&2; return 2; fi
         __binit_admin_name=$3
         __binit_admin_spec=${__binit_provider_spec[$__binit_admin_name]-${__binit_completion_spec[$__binit_admin_name]-}}
-        __binit_admin_current=$( { builtin complete -p -- "$__binit_admin_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_admin_current=''
+        __binit_admin_current=$( { builtin complete -p -- "$__binit_admin_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_admin_current=''
         if [[ $__binit_admin_action == disable ]]; then
             if [[ -n $__binit_admin_current && $__binit_admin_current != "$__binit_admin_spec" ]]; then printf 'binit: completion changed: %s\n' "$__binit_admin_name" >&2; return 1; fi
             [[ -z $__binit_admin_current ]] || builtin complete -r -- "$__binit_admin_name" || return 1

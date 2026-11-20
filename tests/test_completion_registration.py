@@ -51,6 +51,16 @@ class CompletionRegistrationTests(unittest.TestCase):
             self.assertEqual(self.command(session, "binit completions unregister probe_cmd"), 0)
             self.assertEqual(self.command(session, "! complete -p probe_cmd >/dev/null 2>&1"), 0)
 
+    def test_commands_without_an_earlier_specification_stay_quiet(self):
+        errors = self.root / "errors"
+        quiet = f"2>> {shlex.quote(str(errors))}"
+        with completion.Session(framework=True, values=0) as session:
+            self.assertEqual(self.command(session, f"binit completions register probe_cmd {self.provider} {quiet}"), 0)
+            self.assertEqual(self.command(session, f"binit completions disable probe_cmd {quiet}"), 0)
+            self.assertEqual(self.command(session, f"binit completions disable probe_cmd {quiet}"), 0)
+            self.assertEqual(self.command(session, f"binit completions unregister probe_cmd {quiet}"), 0)
+        self.assertEqual(errors.read_text(), "")
+
     def test_registration_preserves_existing_stateful_provider(self):
         with completion.Session(framework=True, values=0) as session:
             self.assertEqual(self.command(session, f"binit completions register demo_cmd {self.provider}"), 1)

@@ -949,6 +949,9 @@ fn run() -> Result<()> {
     {
         return completion_worker::run(&raw_args[1..]);
     }
+    if raw_args.first().is_some_and(|arg| arg == "__prompt-worker") {
+        return process::run_prompt_worker(&raw_args[1..]);
+    }
     if raw_args.first().is_some_and(|arg| arg == "run") {
         return engine::run(&raw_args[1..]);
     }

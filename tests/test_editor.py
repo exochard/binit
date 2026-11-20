@@ -1,12 +1,14 @@
 import fcntl
 import os
 import re
+import shlex
 import signal
 import struct
+import sys
 import termios
 import unittest
 
-from test_completion import MODULE, Session
+from test_completion import MODULE, Session, terminal
 
 PROMPT = 'READY> '
 WRAPPED = 'echo ' + 'a' * 28 + '; ls -l | cat'
@@ -38,6 +40,47 @@ def foreground(session, offset, prompt_cells=len(PROMPT)):
 
 
 class EditorTests(unittest.TestCase):
+    def test_prompt_worker_cannot_open_a_network_socket(self):
+        executable = shlex.quote(sys.executable)
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        program = shlex.quote(
+            "import socket\n"
+            "try:\n"
+            "    sock = socket.socket()\n"
+            "except PermissionError:\n"
+            "    print('offline', end='')\n"
+            "else:\n"
+            "    sock.close()\n"
+            "    print('online', end='')\n"
+        )
+        with Session(extra=f"binit_complete prompt-worker start {manager} {executable} -c {program}\n") as session:
+            session.pump(.3)
+            session.send("result=; binit_complete prompt-worker take result; printf 'WORKER:%s\\n' \"$result\"\n")
+            session.wait(lambda: b"\rWORKER:" in session.transcript)
+            self.assertIn(b"\rWORKER:offline", session.transcript)
+
+    def test_prompt_worker_is_cancelled_by_input_in_both_editing_modes(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        worker = "touch started; (sleep .6; touch late) & wait"
+        command = f"binit_complete prompt-worker start {manager} /bin/bash -c {shlex.quote(worker)}"
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode), Session(extra=command + "\n", mode=mode) as session:
+                session.wait(lambda: (session.directory / "started").exists(), seconds=.5)
+                session.send("witness")
+                self.assertEqual(session.capture()[1], "witness")
+                session.pump(.7)
+                self.assertFalse((session.directory / "late").exists())
+
+    def test_prompt_worker_rejects_output_over_its_limit(self):
+        executable = shlex.quote(sys.executable)
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        program = shlex.quote("print('x' * 513, end='')")
+        with Session(extra=f"binit_complete prompt-worker start {manager} {executable} -c {program}\n") as session:
+            session.pump(.3)
+            session.send("result=empty; binit_complete prompt-worker take result; printf 'WORKER:%s\\n' \"$result\"\n")
+            session.wait(lambda: b"\rWORKER:" in session.transcript)
+            self.assertIn(b"\rWORKER:empty", session.transcript)
+
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_highlighting_never_executes_input_and_preserves_line(self):
         with Session(extra='binit_complete editor highlighting on\n') as session:

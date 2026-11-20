@@ -1,0 +1,223 @@
+#define _GNU_SOURCE 1
+#include <config.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "builtins.h"
+#include "general.h"
+#include "shell.h"
+#include "variables.h"
+#include <readline/readline.h>
+#include "prompt_worker.h"
+
+#define RESULT_LIMIT 512u
+#define ARGUMENT_LIMIT 32u
+#define CONTEXT_LIMIT 65536u
+
+static int connection = -1;
+static bool cancelled, ready;
+static size_t used;
+static char data[RESULT_LIMIT + 1u];
+static char *directory, *generation;
+static struct stat cwd;
+static rl_getc_func_t *previous_getc;
+static int prompt_getc(FILE *stream);
+
+static const char *value(const char *name)
+{
+    const char *text = get_string_value(name);
+    return text ? text : "";
+}
+
+static void remove_input_hook(void)
+{
+    if (rl_getc_function == prompt_getc) rl_getc_function = previous_getc;
+}
+
+void binit_prompt_worker_close(void)
+{
+    remove_input_hook();
+    if (connection >= 0) close(connection);
+    connection = -1;
+    ready = cancelled = false;
+    used = 0;
+    free(directory);
+    free(generation);
+    directory = generation = NULL;
+}
+
+static void collect(void)
+{
+    while (connection >= 0) {
+        ssize_t count = read(connection, data + used, sizeof(data) - used);
+        if (count > 0) {
+            used += (size_t)count;
+            if (used >= sizeof(data)) binit_prompt_worker_close();
+        } else if (count == 0) {
+            close(connection);
+            connection = -1;
+            data[used] = '\0';
+            ready = !cancelled && used && !memchr(data, '\0', used);
+            remove_input_hook();
+        } else if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            break;
+        } else {
+            binit_prompt_worker_close();
+        }
+    }
+}
+
+/* Closing the write half wakes the supervisor. Keep the read half until it
+ * exits so another prompt cannot overlap the group it is still reaping. */
+void binit_prompt_worker_input(void)
+{
+    if (connection < 0 || cancelled) return;
+    int saved_errno = errno;
+    collect();
+    if (connection >= 0) {
+        (void)shutdown(connection, SHUT_WR);
+        cancelled = true;
+    }
+    remove_input_hook();
+    errno = saved_errno;
+}
+
+static int prompt_getc(FILE *stream)
+{
+    int byte = previous_getc(stream);
+    binit_prompt_worker_input();
+    return byte;
+}
+
+static bool append_size(size_t *total, const char *word)
+{
+    size_t length = strnlen(word, CONTEXT_LIMIT) + 1;
+    if (length > CONTEXT_LIMIT - *total) return false;
+    *total += length;
+    return true;
+}
+
+static bool allowed(const char *entry)
+{
+    return strncmp(entry, "LD_", 3) != 0 && strncmp(entry, "DYLD_", 5) != 0 &&
+        strncmp(entry, "GLIBC_TUNABLES=", 15) != 0 && strncmp(entry, "GCONV_PATH=", 11) != 0 &&
+        strncmp(entry, "BASH_FUNC_", 10) != 0;
+}
+
+static int launch(char *const arguments[], char *const environment[])
+{
+    int sockets[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) < 0) return -1;
+    int parent = sockets[0], child = sockets[1];
+    if (parent < 3 || child < 3 || fcntl(parent, F_SETFL, O_NONBLOCK) < 0) goto fail;
+    posix_spawn_file_actions_t files;
+    if (posix_spawn_file_actions_init(&files) != 0) goto fail;
+    int error = posix_spawn_file_actions_adddup2(&files, child, STDIN_FILENO);
+    if (!error) error = posix_spawn_file_actions_adddup2(&files, child, STDOUT_FILENO);
+    if (!error) error = posix_spawn_file_actions_addopen(&files, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    if (!error) error = posix_spawn_file_actions_addclosefrom_np(&files, 3);
+    posix_spawnattr_t attributes;
+    if (!error) error = posix_spawnattr_init(&attributes);
+    if (!error) {
+        sigset_t mask, defaults;
+        sigemptyset(&mask);
+        sigemptyset(&defaults);
+        sigaddset(&defaults, SIGCHLD);
+        error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP |
+                                         POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
+        if (!error) error = posix_spawnattr_setsigmask(&attributes, &mask);
+        if (!error) error = posix_spawnattr_setsigdefault(&attributes, &defaults);
+        pid_t pid;
+        if (!error) error = posix_spawn(&pid, arguments[0], &files, &attributes, arguments, environment);
+        posix_spawnattr_destroy(&attributes);
+    }
+    posix_spawn_file_actions_destroy(&files);
+    if (error) goto fail;
+    close(child);
+    return parent;
+fail:
+    close(parent);
+    close(child);
+    return -1;
+}
+
+static int start(WORD_LIST *arguments)
+{
+    if (!interactive_shell || !rl_getc_function || !arguments || !arguments->next ||
+        arguments->word->word[0] != '/' || arguments->next->word->word[0] != '/') return EXECUTION_FAILURE;
+    collect();
+    if (connection >= 0 || ready) return EXECUTION_FAILURE;
+    binit_prompt_worker_close();
+    char *argv[ARGUMENT_LIMIT + 1u] = {arguments->word->word, "__prompt-worker"};
+    size_t count = 2, size = 0;
+    if (!append_size(&size, argv[0])) return EXECUTION_FAILURE;
+    for (WORD_LIST *word = arguments->next; word; word = word->next) {
+        if (count == ARGUMENT_LIMIT || !append_size(&size, word->word->word)) return EXECUTION_FAILURE;
+        argv[count++] = word->word->word;
+    }
+    maybe_make_export_env();
+    count = 0;
+    for (char **entry = export_env; entry && *entry; ++entry) {
+        if (!allowed(*entry)) continue;
+        if (!append_size(&size, *entry)) return EXECUTION_FAILURE;
+        ++count;
+    }
+    char **environment = (char **)calloc(count + 1u, sizeof(*environment));
+    if (!environment) return EXECUTION_FAILURE;
+    size_t index = 0;
+    for (char **entry = export_env; entry && *entry; ++entry) {
+        if (!allowed(*entry)) continue;
+        if (index >= count) {
+            free((void *)environment);
+            return EXECUTION_FAILURE;
+        }
+        environment[index++] = *entry;
+    }
+    directory = strdup(value("PWD"));
+    generation = strdup(value("__binit_generation_dir"));
+    if (directory && generation && stat(".", &cwd) == 0) connection = launch(argv, environment);
+    free((void *)environment);
+    if (connection < 0) {
+        binit_prompt_worker_close();
+        return EXECUTION_FAILURE;
+    }
+    if (rl_getc_function != prompt_getc) previous_getc = rl_getc_function;
+    rl_getc_function = prompt_getc;
+    return EXECUTION_SUCCESS;
+}
+
+static int take(const char *name)
+{
+    SHELL_VAR *target = legal_identifier(name) ? find_variable_noref(name) : NULL;
+    if (!target || readonly_p(target) || noassign_p(target) || nameref_p(target) ||
+        integer_p(target) || array_p(target) || assoc_p(target) || specialvar_p(target)) return EXECUTION_FAILURE;
+    binit_prompt_worker_input();
+    collect();
+    if (connection >= 0) return EXECUTION_FAILURE;
+    int status = EXECUTION_FAILURE;
+    struct stat current;
+    if (ready && strcmp(value("PWD"), directory) == 0 &&
+        strcmp(value("__binit_generation_dir"), generation) == 0 &&
+        stat(".", &current) == 0 && current.st_dev == cwd.st_dev && current.st_ino == cwd.st_ino &&
+        bind_variable(name, data, 0)) status = EXECUTION_SUCCESS;
+    binit_prompt_worker_close();
+    return status;
+}
+
+int binit_prompt_worker(WORD_LIST *arguments)
+{
+    if (!arguments) return EX_USAGE;
+    const char *action = arguments->word->word;
+    WORD_LIST *options = arguments->next;
+    if (strcmp(action, "available") == 0 && !options) return EXECUTION_SUCCESS;
+    if (strcmp(action, "start") == 0) return start(options);
+    if (strcmp(action, "take") == 0 && options && !options->next) return take(options->word->word);
+    return EX_USAGE;
+}

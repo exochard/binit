@@ -36,7 +36,7 @@ provides a separate basis for the Bash implementation.
 | Index and worktree | Reports separate staged, unstaged, untracked and conflicted counts, with limits and an unknown state for skipped scans. | No counts. | Build (1). Parse bounded porcelain v2 records and preserve unknown separately from zero. |
 | Stash | Exposes a stash count and displays it when nonzero. | No stash information. | Build (1). Use the porcelain stash header where supported. |
 | Operation and progress | The protocol exposes an action label. The formatter displays it verbatim. The cited interface has no separate progress fields. | No operation indicator. | Build (1). Detect rebase, merge, cherry-pick and bisect from worktree-aware Git state. Show step and total where a reliable progress record exists, such as a rebase with counters. |
-| Prompt latency and huge repositories | Persistent daemon with cached index work, optional scan limits and asynchronous callbacks in Zsh. Powerlevel10k can use bounded waits as well as zero-wait queries. | One process substitution at a time with a two-second refresh interval. Polling can attempt a 1 ms read. A result appears at a later prompt, and typing does not cancel the worker. | Build (1, approval required). Reuse Binit's worker lifecycle internally and add a narrow prompt registration interface. Cap aggregate time and bytes, cancel on pending input and reject results from an old directory or request. Publish complete data only. |
+| Prompt latency and huge repositories | Persistent daemon with cached index work, optional scan limits and asynchronous callbacks in Zsh. Powerlevel10k can use bounded waits as well as zero-wait queries. | One process substitution at a time with a two-second refresh interval. Polling can attempt a 1 ms read. A result appears at a later prompt, and typing does not cancel the worker. | Build (1, approved). Add a narrow prompt-worker interface. Cap aggregate time and bytes, cancel on pending input and reject results from an old directory or request. Publish complete data only. |
 | Additional runtime | gitstatus supplies a separate daemon. | Git and GNU timeout are declared requirements. | Later. Evaluate an additional daemon only if the Git-only worker fails the frozen large-repository readiness cases. A dependency requires approval. |
 
 Keep the existing branch-only display as the default. Offer rich status as an
@@ -159,14 +159,11 @@ and [theme guide](https://github.com/zdharma-continuum/fast-syntax-highlighting/
 
 ## Approval before implementation
 
-The first decision is the Git prompt's native interface. Recommend a narrow,
-opt-in registration for one local status worker per shell. Let the existing
-native input path cancel requests and return bounded data to the prompt
-plugin. Keep branch-only as the default and keep Git plus GNU timeout as the
-declared requirements. The existing isolated completion provider API runs
-only during completion and forbids child processes. Reuse its cancellation
-and stale-result checks. A prompt worker that needs multiple local Git calls
-must own its process group so cancellation also stops its children.
+The Git prompt's native interface is approved. It provides one opt-in local
+status worker per shell. The native input path cancels requests and returns
+bounded data to the prompt plugin. Branch-only stays the default. Git and
+GNU timeout are the declared requirements. The worker owns its process group
+so cancellation also stops its Git subprocesses.
 
 Review later changes separately if they require another native API or a
 dependency, or change a visible default. General completion discovery needs

@@ -12,6 +12,8 @@ fn main() {
         "native/layout.c",
         "native/worker.c",
         "native/worker.h",
+        "native/prompt_worker.c",
+        "native/prompt_worker.h",
         "native/layout.h",
         "native/highlight.c",
         "native/highlight.h",
@@ -86,6 +88,7 @@ fn main() {
             "native/effects.c",
             "native/layout.c",
             "native/worker.c",
+            "native/prompt_worker.c",
         ]);
     if let Some(source) = env::var_os("BINIT_SYNTAX_SOURCE") {
         let source = PathBuf::from(source);

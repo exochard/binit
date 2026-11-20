@@ -231,6 +231,27 @@ binit_on prompt example_prompt
 
 The runtime prepends one dispatcher to the existing `PROMPT_COMMAND`. It returns the saved command status so the original first hook sees that status. It leaves `DEBUG` traps and shell options intact. Hook failures do not stop later callbacks. The first dispatch also adds the segment prefix to `PS1`, so a `PS1` assigned later in the startup file keeps it. A later `PROMPT_COMMAND="history -a; $PROMPT_COMMAND"` keeps the dispatcher but runs it after `history -a`, so hooks then see that command's status; a plain `PROMPT_COMMAND=...` assignment drops the dispatcher.
 
+### Prompt workers
+
+The native module exposes one worker slot for a plugin's prompt hook.
+Check availability with `builtin binit_complete prompt-worker available`.
+`builtin binit_complete prompt-worker start MANAGER PROGRAM [ARG...]`
+starts an absolute program through the Binit manager with the current
+directory and a filtered copy of the exported environment. Use the manager
+path supplied by Binit. The worker should be reviewed local code.
+
+`builtin binit_complete prompt-worker take NAME` sets an existing writable
+scalar once the worker exits successfully with a nonempty result.
+A different working directory or active generation
+invalidates it. Taking an unfinished request cancels it and returns failure.
+The first Readline input also cancels pending work, without consuming the key.
+
+A request has a one-second deadline and a 512-byte output limit. Stdin and
+stderr go to `/dev/null`. The worker and its children cannot open network
+sockets or leave their process group. Binit stops that group when the request
+ends. Worker output is passed as data and never evaluated. Use
+`binit_segment` to render it through the prompt-text filter and length limit.
+
 ## Project data
 
 ```toml

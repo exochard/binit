@@ -1,9 +1,11 @@
 use crate::Result;
-use std::io::Read;
+use std::ffi::OsString;
+use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::process::{Command, ExitStatus, Stdio};
+use std::path::Path;
+use std::process::{ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -161,6 +163,210 @@ impl Drop for OwnedGroup {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+const PROMPT_OUTPUT_LIMIT: usize = 512;
+const PROMPT_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn prompt_permissions(command: &mut Command) {
+    #[cfg(target_arch = "x86_64")]
+    let architecture = 0xc000_003e;
+    #[cfg(target_arch = "aarch64")]
+    let architecture = 0xc000_00b7;
+    let load = libc::BPF_LD | libc::BPF_W | libc::BPF_ABS;
+    let eq = libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K;
+    let ret = libc::BPF_RET | libc::BPF_K;
+    let denied = libc::SECCOMP_RET_ERRNO | libc::EPERM as u32;
+    let instruction = |code: u32, k, jt, jf| libc::sock_filter {
+        code: code as u16,
+        jt,
+        jf,
+        k,
+    };
+    let mut filter = vec![
+        instruction(
+            load,
+            std::mem::offset_of!(libc::seccomp_data, arch) as u32,
+            0,
+            0,
+        ),
+        instruction(eq, architecture, 1, 0),
+        instruction(ret, libc::SECCOMP_RET_KILL_PROCESS, 0, 0),
+        instruction(
+            load,
+            std::mem::offset_of!(libc::seccomp_data, nr) as u32,
+            0,
+            0,
+        ),
+    ];
+    #[cfg(target_arch = "x86_64")]
+    filter.extend([
+        instruction(
+            libc::BPF_JMP | libc::BPF_JSET | libc::BPF_K,
+            0x4000_0000,
+            0,
+            1,
+        ),
+        instruction(ret, denied, 0, 0),
+    ]);
+    for syscall in [
+        libc::SYS_socket,
+        libc::SYS_connect,
+        libc::SYS_io_uring_setup,
+        libc::SYS_setsid,
+        libc::SYS_setpgid,
+    ] {
+        filter.extend([
+            instruction(eq, syscall as u32, 0, 1),
+            instruction(ret, denied, 0, 0),
+        ]);
+    }
+    filter.push(instruction(ret, libc::SECCOMP_RET_ALLOW, 0, 0));
+    // Apply after Command assigns the group and before exec. The kernel copies the filter.
+    unsafe {
+        command.pre_exec(move || {
+            let program = libc::sock_fprog {
+                len: filter.len() as u16,
+                filter: filter.as_ptr().cast_mut(),
+            };
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1 as libc::c_ulong, 0, 0, 0) == -1
+                || libc::prctl(
+                    libc::PR_SET_SECCOMP,
+                    libc::SECCOMP_MODE_FILTER as libc::c_ulong,
+                    &program,
+                    0,
+                    0,
+                ) == -1
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn prompt_permissions(command: &mut Command) {
+    unsafe {
+        command.pre_exec(|| Err(io::Error::from(io::ErrorKind::Unsupported)));
+    }
+}
+
+fn prompt_output(
+    mut output: ChildStdout,
+    pid: u32,
+    started: Instant,
+) -> io::Result<Option<Vec<u8>>> {
+    let fd = output.as_raw_fd();
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut bytes = Vec::new();
+    let mut buffer = [0; PROMPT_OUTPUT_LIMIT + 1];
+    let mut eof = false;
+    let mut exited = false;
+    while started.elapsed() < PROMPT_TIMEOUT {
+        let mut poll = [
+            libc::pollfd {
+                fd: libc::STDIN_FILENO,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: if eof { -1 } else { fd },
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        if unsafe { libc::poll(poll.as_mut_ptr(), 2, 10) } < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if poll[0].revents != 0 {
+            return Ok(None);
+        }
+        if poll[1].revents != 0 {
+            match output.read(&mut buffer) {
+                Ok(0) => eof = true,
+                Ok(count) if bytes.len() + count <= PROMPT_OUTPUT_LIMIT => {
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                Ok(_) => return Ok(None),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        if !exited {
+            // Keep the leader's PID reserved until all group members are stopped.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            if unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            } < 0
+            {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            exited = unsafe { info.si_pid() } != 0;
+        }
+        if eof && exited {
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
+}
+
+pub(super) fn run_prompt_worker(arguments: &[OsString]) -> Result<()> {
+    let Some((program, arguments)) = arguments.split_first() else {
+        return Ok(());
+    };
+    if !Path::new(program).is_absolute() {
+        return Ok(());
+    }
+    let started = Instant::now();
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
+        .env_remove("BASH_ENV")
+        .env_remove("ENV")
+        .env_remove("SHELLOPTS")
+        .env_remove("BASHOPTS")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    prompt_permissions(&mut command);
+    let mut child = command.spawn()?;
+    let mut group = OwnedGroup(Some(child.id() as libc::pid_t));
+    let result = prompt_output(
+        child.stdout.take().expect("piped stdout"),
+        child.id(),
+        started,
+    );
+    group.stop();
+    let status = child.wait()?;
+    if let Some(bytes) = result?
+        && status.success()
+        && !bytes.contains(&0)
+    {
+        io::stdout().write_all(&bytes)?;
+    }
+    Ok(())
 }
 
 fn drain(

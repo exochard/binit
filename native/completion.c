@@ -32,6 +32,7 @@
 #include "effects.h"
 #include "layout.h"
 #include "worker.h"
+#include "prompt_worker.h"
 #ifdef BINIT_HIGHLIGHT
 #include "highlight.h"
 #endif
@@ -1375,7 +1376,10 @@ static void pump_ready_input(void)
     unsigned char byte;
     if (poll(&fd, 1, 0) > 0) {
         ssize_t count = read(fd.fd, &byte, 1);
-        if (count == 1) rl_stuff_char(byte);
+        if (count == 1) {
+            binit_prompt_worker_input();
+            rl_stuff_char(byte);
+        }
         else if (count == 0) rl_stuff_char(EOF);
     }
     errno = saved_errno;
@@ -1480,6 +1484,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
 {
     const char *action = arguments ? arguments->word->word : "status";
     if (strcmp(action, "request") == 0) return binit_worker_request(arguments->next);
+    if (strcmp(action, "prompt-worker") == 0) return binit_prompt_worker(arguments->next);
     if (strcmp(action, "effects") == 0) return binit_effects(arguments->next);
     if (strcmp(action, "editor") == 0) {
         WORD_LIST *feature = arguments->next;
@@ -1599,6 +1604,7 @@ EXPORT void binit_complete_builtin_unload(char *name)
     disable_keys();
     disable_history();
     disable_suggestions();
+    binit_prompt_worker_close();
     remove_poll_hook();
 #ifdef BINIT_HIGHLIGHT
     highlighting_enabled = false;

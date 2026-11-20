@@ -4,6 +4,11 @@ The baseline is Binit 0.1.0 at `169096bdfa2c3ba35d47ca3d39f7a0fe4c7488b4`
 and the seven independent plugin repos at `0.1.0-dev`. The tables use those
 repos as the baseline. The copies under Binit's `plugins/` are examples.
 
+The build rows shipped with the plugins at `0.2.0-dev`. Their settings, test
+counts, latency comparisons and remaining deferrals are in
+[interactive performance](interactive-performance.md#development-plugins-at-020-dev).
+The "Binit today" columns still describe the baseline.
+
 Build rows carry a value rank. A build row with an approval condition is a
 proposal. Keep existing defaults until the corresponding change is approved.
 

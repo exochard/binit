@@ -518,6 +518,21 @@ class CompletionTests(unittest.TestCase):
             self.assertFalse(session.panel)
             self.assertIn("value", session.capture()[1])
 
+    def test_slashes_shorten_only_filename_candidates_as_in_readline(self):
+        extra = "__refs() { COMPREPLY=('feature/history-panel' 'release/0.1'); }\ncomplete -F __refs refs_cmd\n"
+        with Session(extra=extra) as session:
+            session.open('refs_cmd ')
+            rows = "\n".join(session.screen.display)
+            self.assertIn("feature/history-panel", rows)
+            self.assertIn("release/0.1", rows)
+        with Session() as session:
+            (session.directory / "sub").mkdir()
+            for name in ("one.txt", "two.txt"):
+                (session.directory / "sub" / name).touch()
+            session.open('cat sub/')
+            row = next(row for row in session.screen.display if "one.txt" in row)
+            self.assertNotIn("sub/one.txt", row)
+
     def test_few_candidates_keep_compact_cells_on_a_wide_terminal(self):
         with Session(columns=200) as session:
             session.open('demo_cmd va')

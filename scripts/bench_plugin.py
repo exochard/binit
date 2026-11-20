@@ -142,7 +142,8 @@ def benchmark(args, work):
     default_state = "pending" if args.plugin == "git-completion" else "loaded"
     for round_index in range(args.samples):
         for name in orders[round_index % len(orders)]:
-            terminal = Shell(str(args.bash), rcfiles[name], repo, environment)
+            case_environment = environment | (dict(args.after_setting) if name == "after" else {})
+            terminal = Shell(str(args.bash), rcfiles[name], repo, case_environment)
             try:
                 expected = args.after_state if name == "after" and args.after_state else default_state
                 raw[name].append(measure(terminal, args.plugin, expected))
@@ -156,6 +157,7 @@ def benchmark(args, work):
         "plugin": args.plugin,
         "git_prompt_mode": args.git_prompt_mode,
         "after_state": args.after_state or default_state,
+        "after_settings": dict(args.after_setting),
         "git_files": args.git_files,
         "bash_version": subprocess.check_output([args.bash, "--version"], text=True).splitlines()[0],
         "bash_sha256": digest(args.bash),
@@ -189,6 +191,7 @@ def main():
     parser.add_argument("--before-plugin", type=Path, required=True)
     parser.add_argument("--after-plugin", type=Path, required=True)
     parser.add_argument("--after-state", choices=("pending", "loaded"))
+    parser.add_argument("--after-setting", action="append", default=[], metavar="BINIT_NAME=VALUE")
     parser.add_argument("--bash", type=Path, default=Path("/bin/bash"))
     parser.add_argument("--mode", choices=("emacs", "vi"), default="vi")
     parser.add_argument("--git-prompt-mode", choices=("branch", "status"), default="branch")
@@ -198,6 +201,9 @@ def main():
     args = parser.parse_args()
     if args.samples < 1 or args.git_files < 0:
         parser.error("samples must be positive and git-files must be nonnegative")
+    args.after_setting = [setting.split("=", 1) for setting in args.after_setting]
+    if any(len(setting) != 2 or not setting[0].startswith("BINIT_") for setting in args.after_setting):
+        parser.error("after-setting requires BINIT_NAME=VALUE")
     for name in ("before_binary", "after_binary", "before_plugin", "after_plugin", "bash", "output"):
         path = getattr(args, name)
         setattr(args, name, path.resolve())

@@ -62,7 +62,10 @@ struct context {
     char sequence[32];
     size_t sequence_length;
     struct binit_menu menu;
-    bool filtering, history;
+    bool filtering, history, delete_pending;
+    char *delete_text;
+    const HIST_ENTRY *delete_entry;
+    time_t delete_time;
     char word[64];
 };
 
@@ -84,6 +87,21 @@ extern int running_trap;
 static rl_hook_func_t *previous_pre_input;
 static bool wait_installed;
 static bool history_enabled, history_owns_suggestions, history_dismissed, history_live;
+static enum binit_match history_method;
+static bool history_context_enabled, history_delete_enabled;
+enum history_scope { HISTORY_ALL, HISTORY_DIRECTORY, HISTORY_SESSION };
+static enum history_scope history_scope;
+struct history_context_entry {
+    const HIST_ENTRY *entry;
+    char *line, *directory;
+    time_t time;
+    int status;
+};
+static struct history_context_entry history_context[1000];
+static const HIST_ENTRY *history_last_entry;
+static char *history_last_directory;
+static rl_hook_func_t *previous_history_input;
+static bool history_input_installed;
 static bool history_painted, colors_painted;
 static bool history_deprep_active, history_deprep_running, history_deprep_detached;
 static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
@@ -110,6 +128,9 @@ static void history_clear(void);
 static int history_tab(int, int);
 static int binit_history_search(int, int);
 static void completion_cleanup(void *);
+static void select_history_delete(struct context *);
+static void delete_history_line(const struct context *);
+static const struct history_context_entry *history_context_for(const char *);
 
 #ifdef BINIT_HIGHLIGHT
 static bool alias_context_unknown(const char *line)
@@ -602,7 +623,22 @@ static void paint_menu(struct context *ctx)
                  queried ? "/" : "", query, *ctx->word || queried ? "  " : "");
     // `?` is shown only where it works: once a query has text, `?` is part of the query.
     bool help = !(ctx->filtering && ctx->menu.query[0]);
-    snprintf(state + used, sizeof state - (size_t)used, "%zu/%zu%s", selected, ctx->menu.count, help ? "   ?" : "");
+    if (ctx->delete_pending) {
+        snprintf(state, sizeof state, "Delete entry? y delete  esc cancel");
+    } else {
+        int written = snprintf(state + used, sizeof state - (size_t)used, "%zu/%zu%s",
+                               selected, ctx->menu.count, help ? "   ?" : "");
+        size_t choice = binit_menu_choice(&ctx->menu);
+        if (ctx->history && history_context_enabled && choice && written > 0 &&
+            (size_t)(used + written) < sizeof state) {
+            const struct history_context_entry *entry = history_context_for(ctx->menu.values[choice - 1]);
+            if (entry) {
+                size_t offset = (size_t)(used + written);
+                snprintf(state + offset, sizeof state - offset, "  exit %d  %jd  %s", entry->status,
+                         (intmax_t)entry->time, entry->directory);
+            }
+        }
+    }
     binit_text(text, sizeof text, state, ctx->columns - 1);
     move_cursor(ctx->row + ctx->list_rows + 1, 1);
     fprintf(rl_outstream, "\033[2K\033[2m%s\033[0m", text);
@@ -754,6 +790,15 @@ static int picker(struct context *ctx)
         paint_menu(ctx);
         int key = read_key(ctx);
         if (ctx->resized) break;
+        if (ctx->delete_pending) {
+            ctx->delete_pending = false;
+            if (key == 'y') {
+                delete_history_line(ctx);
+                break;
+            }
+            if (key < 0 || key == 3 || key == 7) break;
+            continue;
+        }
         if (key == '\r' || key == '\n') {
             choice = (int)binit_menu_choice(&ctx->menu);
             if (choice) break;
@@ -779,6 +824,8 @@ static int picker(struct context *ctx)
             keys_shown = !keys_shown;
             reserve_panel(ctx);
         } else if (!ctx->filtering && key == '/') ctx->filtering = true;
+        else if (ctx->history && history_delete_enabled && !ctx->filtering && key == 'x' && ctx->menu.count)
+            select_history_delete(ctx);
         else if (ctx->filtering && (key == 127 || key == 8)) binit_menu_backspace(&ctx->menu);
         else if (ctx->filtering && key == 21) binit_menu_clear(&ctx->menu);
         else if (key >= 32 && key <= 255 && key != 127 && (ctx->filtering || !ctx->history)) {
@@ -808,7 +855,164 @@ static int picker(struct context *ctx)
     return choice;
 }
 
-static size_t history_collect(const char **items, size_t limit, const char *query)
+static struct history_context_entry *history_context_slot(int offset)
+{
+    return &history_context[((unsigned int)history_base + (unsigned int)offset) % 1000u];
+}
+
+static const struct history_context_entry *history_context_at(HIST_ENTRY *current, int offset)
+{
+    const struct history_context_entry *entry = history_context_slot(offset);
+    return history_context_enabled && entry->entry == current && entry->line &&
+        entry->time == history_get_time(current) && !strcmp(entry->line, current->line) ? entry : NULL;
+}
+
+static const struct history_context_entry *history_context_for(const char *line)
+{
+    HIST_ENTRY **entries = history_list();
+    if (history_context_enabled && entries)
+        for (int j = history_length - 1, lower = history_length > 1000 ? history_length - 1000 : 0; j >= lower; --j)
+            if (entries[j]->line == line) return history_context_at(entries[j], j);
+    return NULL;
+}
+
+extern int bash_delete_histent(int);
+
+static void select_history_delete(struct context *ctx)
+{
+    size_t choice = binit_menu_choice(&ctx->menu);
+    HIST_ENTRY **entries = history_list();
+    if (!choice || !entries) return;
+    const char *line = ctx->menu.values[choice - 1];
+    for (int i = history_length - 1, lower = history_length > 1000 ? history_length - 1000 : 0; i >= lower; --i) {
+        if (entries[i]->line != line) continue;
+        free(ctx->delete_text);
+        ctx->delete_text = strdup(line);
+        ctx->delete_entry = entries[i];
+        ctx->delete_time = history_get_time(entries[i]);
+        ctx->delete_pending = ctx->delete_text != NULL;
+        return;
+    }
+}
+
+static void delete_history_line(const struct context *ctx)
+{
+    HIST_ENTRY **entries = history_list();
+    if (!entries) return;
+    for (int i = history_length - 1, lower = history_length > 1000 ? history_length - 1000 : 0; i >= lower; --i)
+        if (entries[i] == ctx->delete_entry && history_get_time(entries[i]) == ctx->delete_time &&
+            strcmp(entries[i]->line, ctx->delete_text) == 0) {
+            if (bash_delete_histent(i) && history_context_enabled) {
+                struct history_context_entry *entry = history_context_slot(i);
+                free(entry->line);
+                free(entry->directory);
+                *entry = (struct history_context_entry){0};
+                for (int j = i; j < history_length; ++j) {
+                    *history_context_slot(j) = *history_context_slot(j + 1);
+                    *history_context_slot(j + 1) = (struct history_context_entry){0};
+                }
+            }
+            return;
+        }
+}
+
+static void clear_history_context(void)
+{
+    for (size_t i = 0; i < sizeof history_context / sizeof *history_context; ++i) {
+        free(history_context[i].line);
+        free(history_context[i].directory);
+        history_context[i] = (struct history_context_entry){0};
+    }
+    free(history_last_directory);
+    history_last_directory = NULL;
+    history_last_entry = NULL;
+}
+
+static void history_record(const char *status, const char *cwd)
+{
+    if (!history_context_enabled || strlen(cwd) > 4096) return;
+    HIST_ENTRY **entries = history_list();
+    HIST_ENTRY *current = entries && history_length > 0 ? entries[history_length - 1] : NULL;
+    if (history_last_directory && current && current != history_last_entry && current->line &&
+        strnlen(current->line, 4097) <= 4096) {
+        struct history_context_entry *entry = history_context_slot(history_length - 1);
+        free(entry->line);
+        free(entry->directory);
+        *entry = (struct history_context_entry){current, strdup(current->line), strdup(history_last_directory),
+                                               history_get_time(current), atoi(status)};
+        if (!entry->directory) {free(entry->line); entry->line = NULL;}
+    }
+    history_last_entry = current;
+    if (!history_last_directory || strcmp(history_last_directory, cwd) != 0) {
+        free(history_last_directory);
+        history_last_directory = strdup(cwd);
+    }
+}
+
+static int history_input_hook(void)
+{
+    if (previous_history_input) previous_history_input();
+    if (!history_input_installed || !interactive_shell || executing_builtin || running_trap ||
+        parse_and_execute_level || get_current_prompt_level() != 1) return 0;
+    const char *cwd = get_string_value("PWD");
+    const char *status = get_string_value("BINIT_LAST_STATUS");
+    if (cwd && status && *status && strlen(status) <= 3 && strspn(status, "0123456789") == strlen(status))
+        history_record(status, cwd);
+    return 0;
+}
+
+static void history_input_hook_update(bool enable)
+{
+    rl_hook_func_t **hook = wait_installed && rl_pre_input_hook == wait_hook ?
+        &previous_pre_input : &rl_pre_input_hook;
+    if (enable && !history_input_installed) {
+        previous_history_input = *hook;
+        *hook = history_input_hook;
+        history_input_installed = true;
+    } else if (!enable && history_input_installed) {
+        if (*hook == history_input_hook) *hook = previous_history_input;
+        history_input_installed = false;
+        previous_history_input = NULL;
+    }
+}
+
+static bool parse_history_scope(const char *name, enum history_scope *scope)
+{
+    if (!name || strcmp(name, "all") == 0) *scope = HISTORY_ALL;
+    else if (strcmp(name, "directory") == 0) *scope = HISTORY_DIRECTORY;
+    else if (strcmp(name, "session") == 0) *scope = HISTORY_SESSION;
+    else return false;
+    return true;
+}
+
+static bool history_options(void)
+{
+    const char *method = get_string_value("BINIT_HISTORY_MATCH");
+    const char *context = get_string_value("BINIT_HISTORY_CONTEXT");
+    const char *delete = get_string_value("BINIT_HISTORY_DELETE");
+    enum binit_match match = BINIT_LITERAL;
+    enum history_scope scope;
+    if (method && strcmp(method, "literal") != 0) {
+        if (strcmp(method, "words") == 0) match = BINIT_WORDS;
+        else if (strcmp(method, "fuzzy") == 0) match = BINIT_FUZZY;
+        else {builtin_error("BINIT_HISTORY_MATCH must be literal, words or fuzzy"); return false;}
+    }
+    if (!parse_history_scope(get_string_value("BINIT_HISTORY_SCOPE"), &scope)) {
+        builtin_error("BINIT_HISTORY_SCOPE must be all, directory or session");
+        return false;
+    }
+    if (scope != HISTORY_ALL && (!context || strcmp(context, "1") != 0)) {
+        builtin_error("history scope requires BINIT_HISTORY_CONTEXT=1");
+        return false;
+    }
+    history_method = match;
+    history_scope = scope;
+    history_context_enabled = context && strcmp(context, "1") == 0;
+    history_delete_enabled = delete && strcmp(delete, "1") == 0;
+    return true;
+}
+
+static size_t history_collect(const char **items, size_t limit, const char *query, enum history_scope scope)
 {
     HIST_ENTRY **entries = history_list();
     if (!entries) return 0;
@@ -816,11 +1020,19 @@ static size_t history_collect(const char **items, size_t limit, const char *quer
     uint64_t hashes[1000];
     if (limit > sizeof hashes / sizeof *hashes) limit = sizeof hashes / sizeof *hashes;
     size_t count = 0;
+    const char *cwd = scope == HISTORY_DIRECTORY ? get_string_value("PWD") : NULL;
     for (int i = history_length - 1; i >= lower && count < limit; --i) {
         const char *line = entries[i]->line;
         if (!line || !*line) continue;
         size_t length = strnlen(line, 4097);
-        if (length > 4096 || !strcasestr(line, query) || binit_cells(line, length) < 0) continue;
+        if (length > 4096) continue;
+        if (history_method == BINIT_LITERAL ? !strcasestr(line, query) :
+            !binit_query_matches(line, query, history_method)) continue;
+        if (binit_cells(line, length) < 0) continue;
+        if (scope != HISTORY_ALL) {
+            const struct history_context_entry *entry = history_context_at(entries[i], i);
+            if (!entry || (scope == HISTORY_DIRECTORY && (!cwd || strcmp(entry->directory, cwd) != 0))) continue;
+        }
         uint64_t hash = UINT64_C(14695981039346656037);
         for (size_t j = 0; j < length; ++j) hash = (hash ^ (unsigned char)line[j]) * UINT64_C(1099511628211);
         bool duplicate = false;
@@ -828,6 +1040,40 @@ static size_t history_collect(const char **items, size_t limit, const char *quer
         if (!duplicate) {hashes[count] = hash; items[count++] = line;}
     }
     return count;
+}
+
+static int history_action(WORD_LIST *args)
+{
+    if (!args || !args->next || !args->next->next) return EX_USAGE;
+    const char *action = args->word->word;
+    const char *first = args->next->word->word;
+    const char *second = args->next->next->word->word;
+    if (args->next->next->next) return EX_USAGE;
+    if (strcmp(action, "record") == 0) {
+        if (strlen(first) > 3 || !*first || strspn(first, "0123456789") != strlen(first) || atoi(first) > 255)
+            return EX_USAGE;
+        history_record(first, second);
+        return EXECUTION_SUCCESS;
+    }
+    enum history_scope scope;
+    if (strcmp(action, "list") != 0 || !parse_history_scope(second, &scope) || strlen(first) >= BINIT_QUERY_SIZE)
+        return EX_USAGE;
+    const char *items[1000];
+    size_t count = history_collect(items, 1000, first, scope);
+    for (size_t i = 0; i < count; ++i) {
+        const struct history_context_entry *entry = history_context_for(items[i]);
+        if (history_context_enabled) {
+            if (entry) {
+                char path[4097];
+                binit_text(path, sizeof path, entry->directory, 4096);
+                printf("%jd\t%d\t%s\t", (intmax_t)entry->time, entry->status, path);
+            } else {
+                fputs("-\t-\t-\t", stdout);
+            }
+        }
+        puts(items[i]);
+    }
+    return count ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
 }
 
 /* Erases the panel and the suggestion below and after the input, leaving the cursor where it was. */
@@ -865,7 +1111,7 @@ static size_t history_panel(const char **items, const struct binit_layout *layou
         history_dismissed = false;
     }
     if (!rl_end || history_dismissed || rows < 5 || columns < 20) return 0;
-    size_t count = history_collect(items, 5, rl_line_buffer);
+    size_t count = history_collect(items, 5, rl_line_buffer, history_scope);
     if (layout->end.row + 2 + (int)count > rows) return 0;
     history_matches = count;
     return count;
@@ -891,7 +1137,7 @@ static int history_pick(bool search)
     if (!history_enabled || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
         get_current_prompt_level() != 1 || active || !rl_line_buffer || rl_end > 4096) return 0;
     const char *items[1000];
-    size_t count = history_collect(items, 1000, search ? "" : rl_line_buffer);
+    size_t count = history_collect(items, 1000, search ? "" : rl_line_buffer, history_scope);
     if (!count) return 0;
     history_clear();
     struct context *ctx = calloc(1, sizeof *ctx);
@@ -907,6 +1153,7 @@ static int history_pick(bool search)
     ctx->show_all = option("show-all-if-ambiguous");
     ctx->prefix_first = option("menu-complete-display-prefix");
     ctx->history = true;
+    ctx->menu.match = history_method;
     ctx->filtering = search;
     active = ctx;
     begin_unwind_frame("binit-history");
@@ -1038,6 +1285,7 @@ static int enable_history(bool live)
 
 static void disable_history(void)
 {
+    history_input_hook_update(false);
     history_clear();
     history_enabled = false;
     history_live = false;
@@ -1116,6 +1364,7 @@ static void completion_cleanup(void *data)
     rl_event_hook = ctx->event;
     if (ctx->undo) rl_end_undo_group();
     binit_menu_free(&ctx->menu);
+    free(ctx->delete_text);
     free(ctx->line);
     free(ctx);
     active = NULL;
@@ -1484,6 +1733,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
 {
     const char *action = arguments ? arguments->word->word : "status";
     if (strcmp(action, "request") == 0) return binit_worker_request(arguments->next);
+    if (strcmp(action, "history") == 0) return history_action(arguments->next);
     if (strcmp(action, "prompt-worker") == 0) return binit_prompt_worker(arguments->next);
     if (strcmp(action, "effects") == 0) return binit_effects(arguments->next);
     if (strcmp(action, "editor") == 0) {
@@ -1532,9 +1782,17 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
                     builtin_error("BINIT_HISTORY_MODE must be search or live");
                     return EXECUTION_FAILURE;
                 }
-                return enable_history(mode && strcmp(mode, "live") == 0);
+                if (!history_options()) return EXECUTION_FAILURE;
+                int result = enable_history(mode && strcmp(mode, "live") == 0);
+                if (result == EXECUTION_SUCCESS) history_input_hook_update(history_context_enabled);
+                return result;
             }
-            if (strcmp(setting->word->word, "live") == 0) return enable_history(true);
+            if (strcmp(setting->word->word, "live") == 0) {
+                if (!history_options()) return EXECUTION_FAILURE;
+                int result = enable_history(true);
+                if (result == EXECUTION_SUCCESS) history_input_hook_update(history_context_enabled);
+                return result;
+            }
             if (strcmp(setting->word->word, "off") == 0) {disable_history(); return EXECUTION_SUCCESS;}
             return EX_USAGE;
         }
@@ -1603,6 +1861,7 @@ EXPORT void binit_complete_builtin_unload(char *name)
     (void)name;
     disable_keys();
     disable_history();
+    clear_history_context();
     disable_suggestions();
     binit_prompt_worker_close();
     remove_poll_hook();

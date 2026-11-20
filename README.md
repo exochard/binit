@@ -7,12 +7,11 @@ typing never waits on a slow plugin or completion.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/startup-dark.svg">
-  <img alt="Binit is ready to type 1.4–3.1× sooner than Bash-it and Oh My Bash. Same 50 plugins. A .bashrc that sources them directly is ready 1.6× sooner than Binit. Log scale. Ready to type in a new shell, 50 plugins: vs Bash-it, 1.4× faster (Binit 22.4 ms · Bash-it 31.2 ms, scored); vs Oh My Bash, 3.1× faster (Binit 22.4 ms · Oh My Bash 69.8 ms, scored); vs a .bashrc sourcing them directly, 1.6× slower (Binit 22.4 ms · .bashrc 14.0 ms, reported); load=wait plugins, vs Bash-it, 1.1× faster (Binit 27.2 ms · Bash-it 31.2 ms, reported); load=wait plugins, vs Oh My Bash, 2.6× faster (Binit 27.2 ms · Oh My Bash 69.8 ms, reported). All 50 plugins loaded: vs Bash-it, 1.3× faster (Binit 33.1 ms · Bash-it 42.4 ms, scored); vs Oh My Bash, 2.7× faster (Binit 33.1 ms · Oh My Bash 88.3 ms, scored); vs a .bashrc sourcing them directly, 1.5× slower (Binit 33.1 ms · .bashrc 22.4 ms, reported); load=wait plugins, vs Bash-it, 1.1× faster (Binit 38.2 ms · Bash-it 42.4 ms, reported); load=wait plugins, vs Oh My Bash, 2.3× faster (Binit 38.2 ms · Oh My Bash 88.3 ms, reported)." src="docs/images/startup-light.svg" width="880">
+  <img alt="Binit is ready sooner than Bash-it and Oh My Bash, and later than a plain .bashrc. A new shell loading the same 50 plugins. Binit is scored against Bash-it and Oh My Bash; load=wait and a plain .bashrc with no manager are reported. Ready to type: Binit 22.4 ms, Binit, load=wait 27.2 ms, Bash-it 31.2 ms, Oh My Bash 69.8 ms, Plain .bashrc 14.0 ms. All 50 plugins loaded: Binit 33.1 ms, Binit, load=wait 38.2 ms, Bash-it 42.4 ms, Oh My Bash 88.3 ms, Plain .bashrc 22.4 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/startup-light.svg" width="800">
 </picture>
 
-Binit, Bash-it and Oh My Bash load the same 50 plugins on one Linux machine. Bars to the right are
-comparisons Binit wins and bars to the left are comparisons it loses; solid bars are scored and
-outlined bars are reported without a verdict. [Performance](#performance) covers typing and
+Binit, Bash-it and Oh My Bash load the same 50 plugins on one Linux machine, and a plain `.bashrc`
+that sources them directly is the control. [Performance](#performance) covers typing and
 completion, and the [publication scoreboard](docs/publication-scoreboard.md) describes the method and
 the verdict rules. Every number comes from the timing archive attached to each
 [release](https://github.com/exochard/binit/releases).
@@ -93,26 +92,28 @@ generation before any new shell uses it.
 ## Performance
 
 Typing and completion are compared with ble.sh, which also draws its own completion menu inside
-Bash, and with plain Readline as a control.
+Bash, and with plain Readline as a control. Every value comes from the release binary on one Linux
+machine (Ryzen 7 7800X3D, GNU Bash 5.3.20) and averages two runs of 20 interleaved pairs. Editor
+values are the median of six cells: Emacs and vi, each with three history sizes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/typing-dark.svg">
-  <img alt="Binit echoes keys 133–389× sooner than ble.sh and as fast as plain Readline. Time from a key to its echo on the command line, in Emacs and vi modes. Log scale. Typing a character, slowest 1 in 100 keystrokes (p99): vs ble.sh, 133–146× faster (Binit 0.20–0.21 ms · ble.sh 27.5–29.1 ms, scored); vs plain Readline, about the same, 0.98–1.20× (Binit 0.20–0.21 ms · Readline 0.20–0.24 ms, reported). Deleting a character, slowest 1 in 100 keystrokes (p99): vs ble.sh, 344–389× faster (Binit 0.21–0.25 ms · ble.sh 83.2–84.8 ms, scored); vs plain Readline, about the same, 0.91–1.04× (Binit 0.21–0.25 ms · Readline 0.21–0.23 ms, reported)." src="docs/images/typing-light.svg" width="880">
+  <img alt="Binit echoes a key in 0.20 ms, like plain Readline; ble.sh takes 28.4 ms. The slowest 1 in 100 keystrokes (p99), from key press to echo. Scored against ble.sh; plain Readline, which has no menu or suggestions, is reported. Typing a character: Binit 0.20 ms, ble.sh 28.4 ms, Plain Readline 0.21 ms. Deleting a character: Binit 0.23 ms, ble.sh 83.9 ms, Plain Readline 0.22 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/typing-light.svg" width="800">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/completion-dark.svg">
-  <img alt="Binit answers keys 109–116× sooner than ble.sh; plain Readline cancels a big menu 5.5–5.7× sooner. Completions that run in their own process, so typing can cancel them. Log scale. Typing while a slow completion runs in its own process, slowest 1 in 20 keys (p95): vs ble.sh, 109–116× faster (Binit 1.9–2.1 ms · ble.sh 224.2–226.0 ms, scored); vs plain Readline, 96–103× faster (Binit 1.9–2.1 ms · Readline 200.0–200.3 ms, reported). Accepting that completion, median: vs ble.sh, 85–144× faster (Binit 0.29–0.31 ms · ble.sh 26.3–41.8 ms, scored); vs plain Readline, 1.6× faster (Binit 0.29–0.31 ms · Readline 0.47–0.49 ms, reported). Cancelling a 1,024-item menu, median: vs ble.sh, 2.4–4.7× faster (Binit 13.7–13.8 ms · ble.sh 33.1–64.4 ms, scored); vs plain Readline, 5.5–5.7× slower (Binit 13.7–13.8 ms · Readline 2.4–2.5 ms, reported)." src="docs/images/completion-light.svg" width="880">
+  <img alt="A slow completion leaves Binit answering keys in 2.0 ms; one that must run inside the shell makes every editor wait. Typing is scored against ble.sh. Waiting is reported: a completion that changes shell state blocks every editor until it ends. Typing while it runs in its own process, slowest 1 in 20 keys: Binit 2.0 ms, ble.sh 224.8 ms, Plain Readline 200.1 ms. Waiting for one that runs inside the shell: Binit 201.3 ms, ble.sh 256.0 ms, Plain Readline 201.3 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/completion-light.svg" width="800">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/in-shell-dark.svg">
-  <img alt="Completion inside the shell: Binit ties plain Readline, then accepts it 1.2–1.4× slower. Such a provider changes shell state, so every editor waits for it. Reported, not scored. Log scale. A slow completion that has to run inside the shell, median: vs ble.sh, 1.2–1.3× faster (Binit 201.3–201.4 ms · ble.sh 246.4–258.1 ms, reported); vs plain Readline, about the same, 1.00× (Binit 201.3–201.4 ms · Readline 201.3 ms, reported). Accepting that in-shell completion, median: vs ble.sh, 67–88× faster (Binit 0.34–0.38 ms · ble.sh 23.4–31.4 ms, reported); vs plain Readline, 1.2–1.4× slower (Binit 0.34–0.38 ms · Readline 0.26–0.29 ms, reported)." src="docs/images/in-shell-light.svg" width="880">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/menus-dark.svg">
+  <img alt="Binit accepts and cancels sooner than ble.sh; plain Readline is ahead on a big menu and in-shell accepts. Medians. Own-process accept and cancel are scored against ble.sh; the in-shell accept and plain Readline are reported. Accepting, own process: Binit 0.29 ms, ble.sh 35.7 ms, Plain Readline 0.48 ms. Accepting, inside the shell: Binit 0.35 ms, ble.sh 27.4 ms, Plain Readline 0.28 ms. Cancelling a 1,024-item menu: Binit 13.7 ms, ble.sh 57.8 ms, Plain Readline 2.5 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/menus-light.svg" width="800">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/overhead-dark.svg">
-  <img alt="Binit adds 8.4 ms to a new shell with 50 plugins; Zinit adds 87.2 ms to Zsh. Time over the same shell sourcing the same plugins directly. Reported, not scored. Ready to type: Binit adds 8.4 ms over Bash sourcing the plugins directly; Zinit adds 87.2 ms over Zsh doing the same. All 50 plugins loaded: Binit adds 10.7 ms over Bash sourcing the plugins directly; Zinit adds 316 ms over Zsh doing the same." src="docs/images/overhead-light.svg" width="880">
+  <img alt="Binit adds 8.4 ms over a plain .bashrc; Zinit adds 87.2 ms over plain Zsh. Time a manager adds over the same shell sourcing the same 50 plugins directly. Reported: Zinit runs in Zsh, so this compares managers, not shells. Ready to type: Binit, in Bash 8.4 ms, Zinit, in Zsh 87.2 ms. All 50 plugins loaded: Binit, in Bash 10.7 ms, Zinit, in Zsh 316.0 ms. Binit 0.1.0 on one Linux machine: Ryzen 7 7800X3D, GNU Bash 5.3.20." src="docs/images/overhead-light.svg" width="800">
 </picture>
 
 ### Where Binit is slower

@@ -126,7 +126,7 @@ mod tests {
             }
         }
         // A failed write fails the whole set, whichever thread meets it.
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         fs::write(root.path().join("f40"), b"taken").unwrap();
         assert!(write_entries(root.path(), &entries, 4).is_err());
     }

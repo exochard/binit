@@ -287,14 +287,24 @@ struct highlight_request {
 };
 static struct highlight_request highlight_wanted, highlight_pending, highlight_resolved;
 static char highlight_result[BINIT_HIGHLIGHT_TOKENS];
-/* Colors from the last answered lookup, by word start and kind ('c' command, 'p' path). A word keeps
-   its color while a newer lookup runs, so typing does not flash it back to the unresolved color. */
+/* Colors from the last answered lookup, by word start, kind ('c' command, 'p' path) and text. A word
+   keeps its color while a newer lookup runs when it only grew or shrank at its end, so typing does not
+   flash it back to the unresolved color; a different word at the same place, as after recalling
+   history, starts unresolved. */
 static struct {
-    size_t start;
+    size_t start, length;
     char kind;
     uint8_t color;
+    char text[64];
 } highlight_shown[BINIT_HIGHLIGHT_TOKENS];
 static size_t highlight_shown_count;
+
+static bool highlight_same_word(size_t i, const char *name)
+{
+    size_t length = strlen(name), common = highlight_shown[i].length < length ? highlight_shown[i].length : length;
+    if (common > sizeof highlight_shown[i].text - 1u) common = sizeof highlight_shown[i].text - 1u;
+    return memcmp(highlight_shown[i].text, name, common) == 0;
+}
 
 static bool highlight_options(void)
 {
@@ -432,6 +442,7 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
     bool usable = directory && strnlen(directory, sizeof request->directory) < sizeof request->directory;
     struct binit_highlight_token pending[BINIT_HIGHLIGHT_TOKENS];
     char kinds[BINIT_HIGHLIGHT_TOKENS];
+    const char *names[BINIT_HIGHLIGHT_TOKENS];
     request->count = 0;
     request->size = 2;
     if (!usable || !highlight_field(request, 0, path ? "1" : "0") ||
@@ -451,13 +462,18 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
             }
             memset(colors + scope.start, color, (size_t)(scope.end - scope.start));
             if (!request->size) return;
-        } else if (usable && highlight_field(request, command ? 'c' : 'p', name)) {
-            kinds[request->count] = command ? 'c' : 'p';
-            pending[request->count++] = scope;
+        } else {
+            size_t at = request->size + 1u;
+            if (usable && highlight_field(request, command ? 'c' : 'p', name)) {
+                kinds[request->count] = command ? 'c' : 'p';
+                names[request->count] = request->frame + at;
+                pending[request->count++] = scope;
+            }
         }
     }
     if (!request->count) {
         request->size = 0;
+        highlight_shown_count = 0;
         return;
     }
     size_t payload = request->size - 2;
@@ -478,8 +494,8 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
             color = highlight_path_color(highlight_result[i]);
         } else {
             for (size_t j = 0; j < highlight_shown_count; ++j) {
-                if (highlight_shown[j].start == pending[i].start && highlight_shown[j].kind == kinds[i])
-                    color = highlight_shown[j].color;
+                if (highlight_shown[j].start == pending[i].start && highlight_shown[j].kind == kinds[i] &&
+                    highlight_same_word(j, names[i])) color = highlight_shown[j].color;
             }
         }
         if (color) memset(colors + pending[i].start, color, (size_t)(pending[i].end - pending[i].start));
@@ -487,6 +503,8 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
             highlight_shown[i].start = pending[i].start;
             highlight_shown[i].kind = kinds[i];
             highlight_shown[i].color = color;
+            highlight_shown[i].length = strlen(names[i]);
+            snprintf(highlight_shown[i].text, sizeof highlight_shown[i].text, "%s", names[i]);
         }
     }
     if (resolved) highlight_shown_count = request->count;

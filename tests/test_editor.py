@@ -288,6 +288,21 @@ class EditorTests(unittest.TestCase):
                     self.assertNotIn(b'\x1b[96m', session.transcript)
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_starts_a_different_word_unresolved(self):
+        # A word that replaces another at the same place, as after recalling history, must not borrow
+        # the old word's color.
+        extra = ("BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='external=92,missing=91'\n"
+                 "history -s 'ls'\nbinit_complete editor highlighting on\n")
+        for mode, recall in (('emacs', b'\x10'), ('vi', b'\x1b[A'), ('emacs', b'\x15ls'), ('vi', b'\x15ls')):
+            with self.subTest(mode=mode, recall=recall), Session(extra=extra, framework=True, mode=mode) as session:
+                session.send('binit-no-such-cmd')
+                session.wait(lambda: b'\x1b[91mbinit-no-such-cmd' in session.transcript)
+                session.transcript.clear()
+                session.send(recall)
+                session.wait(lambda: b'\x1b[92mls' in session.transcript)
+                self.assertNotIn(b'\x1b[91ml', session.transcript)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_interrupt_right_after_a_lookup_answer_keeps_the_shell(self):
         # Ctrl-C runs Readline's signal handling inside its key loop; a hook removed there would be called
         # as a null pointer when the loop resumes.

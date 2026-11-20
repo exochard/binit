@@ -245,6 +245,8 @@ scalar once the worker exits successfully with a nonempty result.
 A different working directory or active generation
 invalidates it. Taking an unfinished request cancels it and returns failure.
 The first Readline input also cancels pending work, without consuming the key.
+A start right after a cancellation waits up to 50 ms for the cancelled
+request to stop, so a quickly typed command still gets a new request.
 
 `builtin binit_complete prompt-worker wait MS` waits up to `MS` milliseconds,
 at most 1000, and succeeds once a result is ready to take. Pending terminal

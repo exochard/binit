@@ -159,6 +159,13 @@ class EditorTests(unittest.TestCase):
                 session.wait(lambda: b"\rUSAGE:" in session.transcript)
                 self.assertIn(b"\rUSAGE:2", session.transcript)
                 session.transcript.clear()
+            # A request cancelled just before the next start, as when a command is typed quickly, still
+            # lets that start run once its group has stopped.
+            session.send(f"{start} 'sleep .4; printf old'; r=; binit_complete prompt-worker take r; "
+                         f"{start} 'printf new'; s=$?; binit_complete prompt-worker wait 500; "
+                         "binit_complete prompt-worker take r; printf 'NEXT:%s:%s\\n' \"$s\" \"$r\"\n")
+            session.wait(lambda: b"\rNEXT:" in session.transcript)
+            self.assertIn(b"\rNEXT:0:new", session.transcript)
         # Typed input ends the wait early.
         with Session() as session:
             session.send(f"{start} 'sleep 2'; s=$EPOCHREALTIME; binit_complete prompt-worker wait 1000; "

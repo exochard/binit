@@ -216,11 +216,54 @@ int binit_path_worker_take(char *result, size_t size)
     return -1;
 }
 
+#define STOP_WAIT_MS 50
+
+static struct timespec deadline_after(long milliseconds)
+{
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += milliseconds / 1000;
+    deadline.tv_nsec += (milliseconds % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec += 1;
+        deadline.tv_nsec -= 1000000000L;
+    }
+    return deadline;
+}
+
+static long milliseconds_left(const struct timespec *deadline)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (deadline->tv_sec - now.tv_sec) * 1000L + (deadline->tv_nsec - now.tv_nsec) / 1000000L;
+}
+
+/* Polls the request until it ends or the deadline passes. Terminal input ends the wait only when
+   input is given, and a signal always ends it. */
+static void await_connection(const struct timespec *deadline, int input)
+{
+    collect();
+    while (connection >= 0 && !interrupt_state && !terminating_signal) {
+        long left = milliseconds_left(deadline);
+        if (left <= 0) break;
+        struct pollfd watched[2] = {{connection, POLLIN, 0}, {input, POLLIN, 0}};
+        if (poll(watched, input >= 0 ? 2 : 1, (int)left) < 0 && errno != EINTR) break;
+        if (input >= 0 && watched[1].revents) break;
+        if (watched[0].revents) collect();
+        if (input >= 0 && cancelled) break;
+    }
+}
+
 static int start(WORD_LIST *arguments)
 {
     if (!interactive_shell || !rl_getc_function || !arguments || !arguments->next ||
         arguments->word->word[0] != '/' || arguments->next->word->word[0] != '/') return EXECUTION_FAILURE;
     collect();
+    // A request cancelled moments ago, as by a quickly typed command, is still stopping its group.
+    if (connection >= 0 && cancelled) {
+        struct timespec deadline = deadline_after(STOP_WAIT_MS);
+        await_connection(&deadline, -1);
+    }
     if (connection >= 0 || ready) return EXECUTION_FAILURE;
     binit_prompt_worker_close();
     char *argv[ARGUMENT_LIMIT + 1u] = {arguments->word->word, "__prompt-worker"};
@@ -268,25 +311,8 @@ static int await(const char *text)
     errno = 0;
     long milliseconds = strtol(text, &end, 10);
     if (!*text || *end || errno || strspn(text, "0123456789") != strlen(text) || milliseconds > 1000) return EX_USAGE;
-    struct timespec now, deadline;
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
-    deadline.tv_sec += milliseconds / 1000;
-    deadline.tv_nsec += (milliseconds % 1000) * 1000000L;
-    if (deadline.tv_nsec >= 1000000000L) {
-        deadline.tv_sec += 1;
-        deadline.tv_nsec -= 1000000000L;
-    }
-    int input = fileno(rl_instream ? rl_instream : stdin);
-    collect();
-    while (connection >= 0 && !cancelled && !interrupt_state && !terminating_signal) {
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        long left = (deadline.tv_sec - now.tv_sec) * 1000L + (deadline.tv_nsec - now.tv_nsec) / 1000000L;
-        if (left <= 0) break;
-        struct pollfd watched[2] = {{connection, POLLIN, 0}, {input, POLLIN, 0}};
-        if (poll(watched, 2, (int)left) < 0 && errno != EINTR) break;
-        if (watched[1].revents) break;
-        if (watched[0].revents) collect();
-    }
+    struct timespec deadline = deadline_after(milliseconds);
+    if (!cancelled) await_connection(&deadline, fileno(rl_instream ? rl_instream : stdin));
     return ready ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
 }
 

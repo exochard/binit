@@ -46,9 +46,9 @@ called the lookup a second time when typing paused. In Binit sixteen of the
 seventeen keys appeared within 10 ms. One space took 95 ms on every run, and
 that cost is still being traced.
 
-This run is a demonstration on one machine, Ryzen 7 7800X3D with GNU Bash
-5.3.20. The scored benchmark uses a 200 ms provider over Emacs and vi modes and
-three history sizes. There the slowest 1 in 20 keys took 2.0 ms in Binit,
+This run is a demonstration on one machine, a Ryzen 7 9800X3D with GNU Bash
+5.3.20. The scored benchmark ran on a second machine, a Ryzen 7 7800X3D, with a
+200 ms provider over Emacs and vi modes and three history sizes. There the slowest 1 in 20 keys took 2.0 ms in Binit,
 200.1 ms with plain Readline and 224.8 ms with ble.sh. The
 [publication scoreboard](publication-scoreboard.md) describes that method.
 

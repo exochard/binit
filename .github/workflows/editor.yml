@@ -23,7 +23,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config patch bison curl libncurses-dev python3-venv shellcheck
+          sudo apt-get install -y build-essential cmake pkg-config patch bison curl libncurses-dev python3-venv shellcheck zsh
           rustup update stable
           rustup default stable
           rustup component add clippy rustfmt

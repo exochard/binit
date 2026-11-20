@@ -30,7 +30,7 @@ jobs:
       BINIT_READLINE_INCLUDE: ${{ github.workspace }}/.cache/ci/bash-${{ matrix.bash.version }}/bash-${{ matrix.bash.source }}/lib
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ci/target
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Prepare evidence directory
@@ -97,7 +97,7 @@ jobs:
           if [[ -f "$CARGO_TARGET_DIR/native-check/Testing/Temporary/LastTest.log" ]]; then cp "$CARGO_TARGET_DIR/native-check/Testing/Temporary/LastTest.log" .cache/ci/evidence/ctest.log; fi
       - name: Retain evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: check-${{ matrix.os }}-bash-${{ matrix.bash.version }}-native-${{ matrix.native }}-${{ matrix.compiler }}
           path: .cache/ci/evidence/
@@ -125,7 +125,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/ci/target
       BINIT_TEST_BINARY: ${{ github.workspace }}/.cache/ci/target/release/binit
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Prepare evidence directory
@@ -160,7 +160,7 @@ jobs:
           sudo unshare --net -- runuser -u "$(id -un)" -- env PATH="$PATH" BINIT_BASH="$BINIT_BASH" BINIT_TEST_BINARY="$BINIT_TEST_BINARY" "$PWD/.venv/bin/python3" scripts/check_plugins.py --fzf .cache/ci/plugins/fzf --bash-completion .cache/ci/plugins/bash-completion/bash_completion --nvm .cache/ci/plugins/nvm/nvm.sh --output .cache/ci/evidence/plugin-compatibility.json 2>&1 | tee .cache/ci/evidence/ecosystem.log
       - name: Retain ecosystem evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ecosystem-${{ matrix.os }}-bash-${{ matrix.bash.version }}
           path: .cache/ci/evidence/
@@ -176,7 +176,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install tools
@@ -199,7 +199,7 @@ jobs:
           } 2>&1 | tee .cache/ci/abi/check.log
       - name: Retain ABI evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-abi-${{ matrix.os }}
           path: .cache/ci/abi/check.log
@@ -213,7 +213,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Prepare evidence directory
@@ -236,7 +236,7 @@ jobs:
           } 2>&1 | tee .cache/ci/sanitizers/check.log
       - name: Retain sanitizer evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: isolated-native-sanitizers-${{ matrix.os }}
           path: .cache/ci/sanitizers/check.log

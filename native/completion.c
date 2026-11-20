@@ -985,7 +985,7 @@ static void paint_menu(struct context *ctx)
     // `?` is shown only where it works: once a query has text, `?` is part of the query.
     bool help = !(ctx->filtering && ctx->menu.query[0]);
     if (ctx->delete_pending) {
-        snprintf(state, sizeof state, "Delete entry? y delete  esc cancel");
+        snprintf(state, sizeof state, "delete entry? y delete  esc cancel");
     } else {
         int written = snprintf(state + used, sizeof state - (size_t)used, "%zu/%zu%s",
                                selected, ctx->menu.count, help ? "   ?" : "");

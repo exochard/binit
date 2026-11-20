@@ -56,7 +56,7 @@ class HistoryContractTests(unittest.TestCase):
             session.send(b'\x12delete-witness\x1b')
             session.pump(.12)
             session.send(b'x')
-            session.wait(lambda: 'Delete entry?' in session.text)
+            session.wait(lambda: 'delete entry?' in session.text)
             session.send(b'y')
             session.pump(.12)
             self.assertEqual(session.capture()[1], '')

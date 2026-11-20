@@ -48,7 +48,14 @@ class CheckedShellTests(unittest.TestCase):
             rc = root / 'rc'
             rc.write_text("PS1='BENCH> '\n")
             shell = CheckedShell('/bin/bash', rc, root, environment(root))
-            with patch.object(shell, 'until', side_effect=RuntimeError('no interrupt prompt')):
+
+            # Like the real wait, give up only after the timeout; an instant failure would type
+            # `exit` while Bash is still handling the interrupt, and Bash 5.3 discards it.
+            def no_interrupt_prompt(predicate, seconds=10):
+                time.sleep(seconds)
+                raise RuntimeError('no interrupt prompt')
+
+            with patch.object(shell, 'until', side_effect=no_interrupt_prompt):
                 shell.close()
             self.assertEqual(shell.exit_status, 0)
             self.assertFalse(shell.forced_exit)

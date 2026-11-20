@@ -85,6 +85,20 @@ command, and an unterminated quote is shown as a string to the end of the line.
 Initial command aliases are rendered without colors because their expansion may
 change the parse context. Syntax highlighting is experimental.
 
+Set `BINIT_HIGHLIGHT_EXTENDED=1` for alias, function and builtin styles,
+literal command and path checks, options, parameter expansions, substitution
+and redirection delimiters, bracket pairing, and recognized Git subcommands.
+An initial alias in this mode colors only the alias name. Name and path checks
+run after the next idle interval, for up to 24 literal tokens and at most
+one second per request. Input cancels the request. Results are style codes
+for the matching tokens, with no shell evaluation.
+
+The extended mode defaults to `0`. `BINIT_HIGHLIGHT_STYLES` defaults to an
+empty override list. Set terminal styles with a value such as
+`alias=96,path=4;32,bracket=7;35` and run
+`binit_complete editor highlighting on` to apply the settings. All syntax
+styles use the 4,096-byte input ceiling.
+
 The default native build contains no syntax grammar and enabling highlighting
 reports an error. To build the experiment, acquire the pinned grammar and
 prepare its static tree-sitter runtime before the offline build. Preparation

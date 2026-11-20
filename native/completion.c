@@ -115,6 +115,7 @@ static bool keys_shown;
 static size_t history_matches;
 static bool poll_installed;
 static bool poll_running;
+static bool poll_removal_deferred;
 static bool poll_explicit;
 static long last_poll;
 static rl_hook_func_t *previous_event_hook;
@@ -132,6 +133,7 @@ static char suggestion_preview_directory[4097];
 static bool suggestion_preview_enabled;
 static bool suggestion_poll;
 static bool highlighting_enabled;
+static bool highlighting_poll;
 static bool suggestion_visible, ghost_on_blank_row;
 static int ghost_column;
 static bool redisplay_running;
@@ -246,27 +248,245 @@ static void move_to(int *row, int to_row, int to_column)
 }
 
 #ifdef BINIT_HIGHLIGHT
+static bool highlighting_extended;
+static bool highlight_custom_styles;
+extern int expand_aliases;
+extern int find_reserved_word(char *);
+
+static const struct {
+    const char *name;
+    const char *sgr;
+} highlight_styles[HL_COLOR_COUNT] = {
+    [HL_PLAIN] = {"plain", "0"},
+    [HL_COMMENT] = {"comment", "2"},
+    [HL_STRING] = {"string", "32"},
+    [HL_COMMAND] = {"command", "36"},
+    [HL_VARIABLE] = {"variable", "33"},
+    [HL_KEYWORD] = {"keyword", "35"},
+    [HL_ALIAS] = {"alias", "96"},
+    [HL_FUNCTION] = {"function", "95"},
+    [HL_BUILTIN] = {"builtin", "1;36"},
+    [HL_EXTERNAL] = {"external", "36"},
+    [HL_MISSING] = {"missing", "31"},
+    [HL_PATH] = {"path", "4;32"},
+    [HL_MISSING_PATH] = {"missing-path", "4;31"},
+    [HL_OPTION] = {"option", "34"},
+    [HL_EXPANSION] = {"expansion", "93"},
+    [HL_SUBSTITUTION] = {"substitution", "95"},
+    [HL_REDIRECTION] = {"redirection", "94"},
+    [HL_BRACKET] = {"bracket", "7;35"},
+    [HL_GIT] = {"git", "1;34"},
+};
+static char highlight_overrides[HL_COLOR_COUNT][24];
+
+#define HIGHLIGHT_FRAME_LIMIT 16384u
+struct highlight_request {
+    size_t size, count;
+    char frame[HIGHLIGHT_FRAME_LIMIT + 2u];
+    char directory[BINIT_HIGHLIGHT_LIMIT + 1u];
+};
+static struct highlight_request highlight_wanted, highlight_pending, highlight_resolved;
+static char highlight_result[BINIT_HIGHLIGHT_TOKENS];
+
+static bool highlight_options(void)
+{
+    const char *extended = get_string_value("BINIT_HIGHLIGHT_EXTENDED");
+    if (extended && *extended && strcmp(extended, "0") != 0 && strcmp(extended, "1") != 0) {
+        fputs("binit: highlighting: invalid BINIT_HIGHLIGHT_EXTENDED\n", stderr);
+        return false;
+    }
+    char styles[HL_COLOR_COUNT][sizeof highlight_overrides[0]] = {{0}};
+    const char *p = get_string_value("BINIT_HIGHLIGHT_STYLES");
+    bool custom = p && *p;
+    while (p && *p) {
+        const char *separator = strchr(p, ',');
+        const char *end = separator ? separator : p + strlen(p);
+        const char *value = memchr(p, '=', (size_t)(end - p));
+        if (!value) goto bad_style;
+        size_t color = 0, name_size = (size_t)(value - p);
+        while (color < HL_COLOR_COUNT &&
+               (strlen(highlight_styles[color].name) != name_size ||
+                memcmp(p, highlight_styles[color].name, name_size) != 0)) ++color;
+        ++value;
+        size_t size = (size_t)(end - value);
+        if (color == HL_COLOR_COUNT || !size || size >= sizeof styles[color] ||
+            styles[color][0] || *value == ';' || end[-1] == ';') goto bad_style;
+        for (const char *ch = value; ch < end; ++ch) {
+            if ((*ch < '0' || *ch > '9') && (*ch != ';' || ch[-1] == ';')) goto bad_style;
+        }
+        memcpy(styles[color], value, size);
+        if (separator && !separator[1]) goto bad_style;
+        p = separator ? separator + 1 : NULL;
+    }
+    memcpy(highlight_overrides, styles, sizeof styles);
+    highlighting_extended = extended && strcmp(extended, "1") == 0;
+    highlight_custom_styles = custom;
+    return true;
+bad_style:
+    fputs("binit: highlighting: invalid BINIT_HIGHLIGHT_STYLES\n", stderr);
+    return false;
+}
+
+static void highlight_work_reset(void)
+{
+    binit_path_worker_close();
+    highlight_wanted.size = highlight_pending.size = highlight_resolved.size = 0;
+    if (highlighting_poll && !suggestion_poll && !poll_explicit) remove_poll_hook();
+    highlighting_poll = false;
+}
+
+static bool same_highlight_request(const struct highlight_request *a, const struct highlight_request *b)
+{
+    return a->size && a->size == b->size && memcmp(a->frame, b->frame, a->size) == 0 &&
+           strcmp(a->directory, b->directory) == 0;
+}
+
+static bool highlight_field(struct highlight_request *request, char kind, const char *text)
+{
+    size_t remaining = sizeof request->frame - request->size;
+    size_t length = strnlen(text, remaining);
+    if (length == remaining || length + 1u + (kind != 0) > remaining) return false;
+    if (kind) request->frame[request->size++] = kind;
+    memcpy(request->frame + request->size, text, length + 1u);
+    request->size += length + 1u;
+    return true;
+}
+
+static bool highlight_literal(struct binit_highlight_token scope, char *name, bool *quoted)
+{
+    const char *start = rl_line_buffer + scope.start, *end = rl_line_buffer + scope.end;
+    char quote = (*start == '\'' || *start == '"') ? *start++ : '\0';
+    *quoted = quote != '\0';
+    if (quote && (start == end || *--end != quote)) return false;
+    if (start == end || (quote && *start == '~')) return false;
+    if (*start == '~' && start[1] != '/') return false;
+    char *out = name;
+    for (const char *p = start; p < end; ++p) {
+        if (quote == '"' && strchr("$\"\\`", *p)) return false;
+        if (quote == '\'' && *p == '\'') return false;
+        if (!quote && *p == '\\' && p + 1 < end) {
+            *quoted = true;
+            ++p;
+        } else if (!quote && strchr(" \t\r\n'\"`\\$*?[]{}<>()|&;!", *p)) {
+            return false;
+        }
+        *out++ = *p;
+    }
+    *out = '\0';
+    return !(*quoted && *name == '~');
+}
+
+static uint8_t highlight_command(char *name, bool quoted)
+{
+    if (!quoted && find_reserved_word(name) >= 0) return HL_KEYWORD;
+    if (!quoted && expand_aliases && find_alias(name)) return HL_ALIAS;
+    if (find_function(name)) return HL_FUNCTION;
+    struct builtin *previous_builtin = current_builtin;
+    sh_builtin_func_t *builtin = find_shell_builtin(name);
+    current_builtin = previous_builtin;
+    return builtin ? HL_BUILTIN : HL_COMMAND;
+}
+
+static uint8_t highlight_path_color(char result)
+{
+    switch (result) {
+        case 'e': return HL_EXTERNAL;
+        case 'm': return HL_MISSING;
+        case 'p': return HL_PATH;
+        case 'n': return HL_MISSING_PATH;
+        default: return HL_PLAIN;
+    }
+}
+
+static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens *tokens)
+{
+    struct highlight_request *request = &highlight_wanted;
+    const char *directory = get_string_value("PWD"), *path = get_string_value("PATH"),
+               *home = get_string_value("HOME");
+    bool usable = directory && strnlen(directory, sizeof request->directory) < sizeof request->directory;
+    struct binit_highlight_token pending[BINIT_HIGHLIGHT_TOKENS];
+    request->count = 0;
+    request->size = 2;
+    if (!usable || !highlight_field(request, 0, path ? "1" : "0") ||
+        !highlight_field(request, 0, path ? path : "") ||
+        !highlight_field(request, 0, home ? home : "")) usable = false;
+    for (size_t i = 0; i < tokens->count; ++i) {
+        struct binit_highlight_token scope = tokens->items[i];
+        char name[BINIT_HIGHLIGHT_LIMIT + 1u];
+        bool quoted;
+        if (!highlight_literal(scope, name, &quoted)) continue;
+        bool command = scope.role == HL_COMMAND_NAME;
+        uint8_t color = command ? highlight_command(name, quoted) : HL_PLAIN;
+        if (color != HL_COMMAND && command) {
+            if (i == 0 && color == HL_ALIAS && alias_context_unknown(rl_line_buffer)) {
+                memset(colors, HL_PLAIN, (size_t)rl_end);
+                request->size = 0;
+            }
+            memset(colors + scope.start, color, (size_t)(scope.end - scope.start));
+            if (!request->size) return;
+        } else if (usable && highlight_field(request, command ? 'c' : 'p', name)) {
+            pending[request->count++] = scope;
+        }
+    }
+    if (!request->count) {
+        request->size = 0;
+        return;
+    }
+    size_t payload = request->size - 2;
+    request->frame[0] = (char)(payload & 255u);
+    request->frame[1] = (char)(payload >> 8u);
+    memcpy(request->directory, directory, strlen(directory) + 1u);
+    if (!same_highlight_request(request, &highlight_resolved)) {
+        const char *manager = get_string_value("__binit_manager");
+        if (manager && manager[0] == '/' && !highlighting_poll) {
+            highlighting_poll = true;
+            install_poll_hook();
+        }
+        return;
+    }
+    for (size_t i = 0; i < request->count; ++i) {
+        uint8_t color = highlight_path_color(highlight_result[i]);
+        if (color) memset(colors + pending[i].start, color, (size_t)(pending[i].end - pending[i].start));
+    }
+}
+
 /* The input is rewritten as one run that the terminal wraps, as Readline wrote it: moving between
    rows would end the terminal's soft wrap, and a copied command would then contain line breaks. */
 static bool paint_colors(const struct binit_layout *layout, int columns, int *row)
 {
-    uint8_t colors[4096];
-    if (alias_context_unknown(rl_line_buffer)) memset(colors, 0, (size_t)rl_end);
+    uint8_t colors[BINIT_HIGHLIGHT_LIMIT];
+    if ((size_t)rl_end > sizeof colors) return false;
+    if (highlighting_extended) {
+        struct binit_highlight_tokens tokens;
+        if (!binit_highlight_extended(rl_line_buffer, (size_t)rl_end, (size_t)rl_point, colors, &tokens)) return false;
+        if (tokens.count) highlight_live(colors, &tokens);
+    } else if (alias_context_unknown(rl_line_buffer)) memset(colors, 0, (size_t)rl_end);
     else if (!binit_highlight(rl_line_buffer, (size_t)rl_end, colors)) return false;
-    static const char *styles[] = {"0", "2", "32", "36", "33", "35"};
     move_to(row, 0, layout->column[0]);
     unsigned int color = 0;
+    bool styled_plain = highlight_overrides[HL_PLAIN][0] != '\0';
+    if (styled_plain) fprintf(rl_outstream, "\033[%sm", highlight_overrides[HL_PLAIN]);
     for (int r = 0; r < layout->rows; ++r) {
         size_t end = r + 1 < layout->rows ? layout->offset[r + 1] : (size_t)rl_end;
-        for (size_t i = layout->offset[r]; i < end; ++i) {
-            if (colors[i] != color) {color = colors[i]; fprintf(rl_outstream, "\033[%sm", styles[color]);}
-            fputc((unsigned char)rl_line_buffer[i], rl_outstream);
+        for (size_t i = layout->offset[r]; i < end;) {
+            if (colors[i] != color) {
+                if ((color || styled_plain) && (colors[i] || styled_plain) &&
+                    (highlighting_extended || highlight_custom_styles)) fputs("\033[0m", rl_outstream);
+                color = colors[i];
+                const char *style = highlight_overrides[color][0] ? highlight_overrides[color] : highlight_styles[color].sgr;
+                fprintf(rl_outstream, "\033[%sm", style);
+            }
+            size_t next = i + 1u;
+            while (next < end && colors[next] == color) ++next;
+            fwrite(rl_line_buffer + i, 1, next - i, rl_outstream);
+            i = next;
         }
         if (r + 1 == layout->rows || end == (size_t)rl_end) break;
         // Readline pads a row with spaces when a wide character moves to the next one.
         int used = layout->column[r] + binit_cells(rl_line_buffer + layout->offset[r], end - layout->offset[r]);
-        if (used < columns && color) {fputs("\033[0m", rl_outstream); color = 0;}
+        if (used < columns && (color || styled_plain)) {fputs("\033[0m", rl_outstream); color = 0;}
         for (; used < columns; ++used) fputc(' ', rl_outstream);
+        if (styled_plain && !color) fprintf(rl_outstream, "\033[%sm", highlight_overrides[HL_PLAIN]);
     }
     fputs("\033[0m", rl_outstream);
     // Text that ends at the right margin leaves the cursor on the last cell of the full row.
@@ -359,11 +579,18 @@ static void suggestion_redisplay(void)
 {
     // rl_redisplay runs pending signals when it finishes, so a resize can force a nested update here.
     if (redisplay_running) {prepare_resize(); rl_redisplay(); return;}
+    if (poll_removal_deferred && !poll_running) remove_poll_hook();
     prepare_redisplay();
     redisplay_running = true;
     if (previous_redisplay && previous_redisplay != suggestion_redisplay) previous_redisplay();
     else rl_redisplay();
     redisplay_running = false;
+#ifdef BINIT_HIGHLIGHT
+    if (highlighting_extended) {
+        highlight_wanted.size = 0;
+        if (!rl_end) highlight_work_reset();
+    }
+#endif
     if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level || get_current_prompt_level() != 1 || !rl_outstream) return;
     struct binit_layout layout;
     int rows, columns;
@@ -464,7 +691,7 @@ static void disable_suggestions(void)
 {
     suggestions_enabled = false;
     suggestion_visible = false;
-    if (suggestion_poll && !poll_explicit) remove_poll_hook();
+    if (suggestion_poll && !poll_explicit && !highlighting_poll) remove_poll_hook();
     suggestion_poll = false;
     suggestion_preview_enabled = false;
     suggestion_preview_line[0] = suggestion_preview_value[0] = '\0';
@@ -543,7 +770,7 @@ static void suggestion_update_poll(void)
 {
     bool needed = suggestions_enabled && suggestion_preview_enabled && binit_worker_has_provider();
     if (needed) install_poll_hook();
-    if (!needed && suggestion_poll && !poll_explicit) remove_poll_hook();
+    if (!needed && suggestion_poll && !poll_explicit && !highlighting_poll) remove_poll_hook();
     suggestion_poll = needed;
 }
 
@@ -1794,13 +2021,58 @@ static void refresh_completion_suggestion(void)
         suggestion_redisplay();
 }
 
+#ifdef BINIT_HIGHLIGHT
+static void refresh_highlighting(void)
+{
+    if (!highlighting_poll || active) return;
+    if (highlight_pending.size) {
+        char result[BINIT_HIGHLIGHT_TOKENS];
+        int status = binit_path_worker_take(result, highlight_pending.count);
+        if (!status) return;
+        if (same_highlight_request(&highlight_wanted, &highlight_pending)) {
+            highlight_resolved = highlight_pending;
+            if (status < 0) memset(highlight_result, '?', highlight_pending.count);
+            else {
+                memcpy(highlight_result, result, highlight_pending.count);
+                if (rl_redisplay_function == suggestion_redisplay) suggestion_redisplay();
+            }
+        }
+        highlight_pending.size = 0;
+    }
+    if (!highlight_wanted.size || same_highlight_request(&highlight_wanted, &highlight_resolved)) {
+        if (!suggestion_poll && !poll_explicit) remove_poll_hook();
+        highlighting_poll = false;
+        return;
+    }
+    const char *manager = get_string_value("__binit_manager");
+    if (binit_path_worker_start(manager, highlight_wanted.frame, highlight_wanted.size) < 0) {
+        highlight_resolved = highlight_wanted;
+        memset(highlight_result, '?', highlight_wanted.count);
+    } else {
+        highlight_pending = highlight_wanted;
+    }
+}
+#endif
+
 static int poll_hook(void)
 {
+    /* The polling reader can return from its interrupted select without calling
+       the signal hook that Bash normally reaches through rl_getc. */
+    if ((interrupt_state || terminating_signal) && rl_signal_event_hook) {
+        binit_prompt_worker_input();
+        poll_running = false;
+        (*rl_signal_event_hook)();
+    }
     bool input = pump_ready_input();
     if (poll_running) return 0;
     poll_running = true;
     if (previous_event_hook && previous_event_hook != poll_hook) previous_event_hook();
-    if (!input) refresh_completion_suggestion();
+    if (!input) {
+#ifdef BINIT_HIGHLIGHT
+        refresh_highlighting();
+#endif
+        refresh_completion_suggestion();
+    }
     poll_running = false;
     if (!poll_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
         get_current_prompt_level() != 1 || rl_end != 0) return 0;
@@ -1817,6 +2089,7 @@ static int poll_hook(void)
 
 static void install_poll_hook(void)
 {
+    poll_removal_deferred = false;
     if (!poll_installed) {
         previous_event_hook = rl_event_hook;
         rl_event_hook = poll_hook;
@@ -1834,6 +2107,12 @@ static int enable_poll(void)
 
 static void remove_poll_hook(void)
 {
+    /* A Readline key read must leave its event loop with a key in hand. */
+    if (poll_running && rl_event_hook == poll_hook && !previous_event_hook) {
+        poll_removal_deferred = true;
+        return;
+    }
+    poll_removal_deferred = false;
     if (poll_installed && rl_event_hook == poll_hook) rl_event_hook = previous_event_hook;
     poll_installed = false;
     last_poll = 0;
@@ -1978,12 +2257,16 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
             if (strcmp(setting->word->word, "on") == 0) {
                 const char *term = get_string_value("TERM");
                 if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
+                if (!highlight_options()) return EXECUTION_FAILURE;
+                highlight_work_reset();
                 if (!highlighting_enabled && !suggestions_enabled && !history_enabled) {previous_redisplay = rl_redisplay_function; rl_redisplay_function = suggestion_redisplay;}
                 highlighting_enabled = true;
                 return EXECUTION_SUCCESS;
             }
             if (strcmp(setting->word->word, "off") == 0) {
                 highlighting_enabled = false;
+                highlighting_extended = false;
+                highlight_work_reset();
                 binit_highlight_clear();
                 if (!suggestions_enabled && !history_enabled) {if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay; previous_redisplay = NULL;}
                 return EXECUTION_SUCCESS;
@@ -2002,7 +2285,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
     if (strcmp(action, "poll") == 0) return enable_poll();
     if (strcmp(action, "poll-off") == 0) {
         poll_explicit = false;
-        if (!suggestion_poll) remove_poll_hook();
+        if (!suggestion_poll && !highlighting_poll) remove_poll_hook();
         return EXECUTION_SUCCESS;
     }
     if (strcmp(action, "off") == 0) {disable_menu(); return EXECUTION_SUCCESS;}
@@ -2040,6 +2323,8 @@ EXPORT void binit_complete_builtin_unload(char *name)
     poll_explicit = false;
 #ifdef BINIT_HIGHLIGHT
     highlighting_enabled = false;
+    highlighting_extended = highlighting_poll = false;
+    highlight_work_reset();
     binit_highlight_clear();
     if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
     previous_redisplay = NULL;

@@ -29,6 +29,10 @@ static char *directory, *generation;
 static struct stat cwd;
 static rl_getc_func_t *previous_getc;
 static int prompt_getc(FILE *stream);
+static int path_connection = -1;
+static bool path_cancelled;
+static char path_data[25];
+static size_t path_used;
 
 static const char *value(const char *name)
 {
@@ -36,14 +40,20 @@ static const char *value(const char *name)
     return text ? text : "";
 }
 
-static void remove_input_hook(void)
+static void update_input_hook(void)
 {
-    if (rl_getc_function == prompt_getc) rl_getc_function = previous_getc;
+    if ((connection >= 0 && !cancelled) || (path_connection >= 0 && !path_cancelled)) {
+        if (rl_getc_function != prompt_getc) {
+            previous_getc = rl_getc_function;
+            rl_getc_function = prompt_getc;
+        }
+    } else if (rl_getc_function == prompt_getc) {
+        rl_getc_function = previous_getc;
+    }
 }
 
 void binit_prompt_worker_close(void)
 {
-    remove_input_hook();
     if (connection >= 0) close(connection);
     connection = -1;
     ready = cancelled = false;
@@ -51,6 +61,7 @@ void binit_prompt_worker_close(void)
     free(directory);
     free(generation);
     directory = generation = NULL;
+    update_input_hook();
 }
 
 static void collect(void)
@@ -65,7 +76,7 @@ static void collect(void)
             connection = -1;
             data[used] = '\0';
             ready = !cancelled && used && !memchr(data, '\0', used);
-            remove_input_hook();
+            update_input_hook();
         } else if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             break;
         } else {
@@ -78,14 +89,19 @@ static void collect(void)
  * exits so another prompt cannot overlap the group it is still reaping. */
 void binit_prompt_worker_input(void)
 {
-    if (connection < 0 || cancelled) return;
     int saved_errno = errno;
-    collect();
-    if (connection >= 0) {
-        (void)shutdown(connection, SHUT_WR);
-        cancelled = true;
+    if (connection >= 0 && !cancelled) {
+        collect();
+        if (connection >= 0) {
+            (void)shutdown(connection, SHUT_WR);
+            cancelled = true;
+        }
     }
-    remove_input_hook();
+    if (path_connection >= 0 && !path_cancelled) {
+        (void)shutdown(path_connection, SHUT_WR);
+        path_cancelled = true;
+    }
+    update_input_hook();
     errno = saved_errno;
 }
 
@@ -148,6 +164,55 @@ fail:
     return -1;
 }
 
+void binit_path_worker_close(void)
+{
+    if (path_connection >= 0) close(path_connection);
+    path_connection = -1;
+    path_used = 0;
+    path_cancelled = false;
+    update_input_hook();
+}
+
+int binit_path_worker_start(const char *manager, const char *request, size_t size)
+{
+    if (!manager || manager[0] != '/' || path_connection >= 0 || !rl_getc_function)
+        return -1;
+    char *argv[] = {(char *)manager, "__highlight-worker", NULL};
+    char *empty_environment[] = {NULL};
+    path_connection = launch(argv, empty_environment);
+    if (path_connection < 0) return -1;
+    if (send(path_connection, request, size, MSG_NOSIGNAL) != (ssize_t)size) {
+        binit_path_worker_close();
+        return -1;
+    }
+    update_input_hook();
+    return 0;
+}
+
+/* Returns 0 while the supervisor is still running, or -1 for an unusable result. */
+int binit_path_worker_take(char *result, size_t size)
+{
+    if (path_connection < 0 || size >= sizeof(path_data)) return -1;
+    for (;;) {
+        ssize_t count = read(path_connection, path_data + path_used, sizeof(path_data) - path_used);
+        if (count > 0) {
+            path_used += (size_t)count;
+            if (path_used >= sizeof(path_data)) break;
+        } else if (count == 0) {
+            bool valid = !path_cancelled && path_used == size;
+            if (valid) memcpy(result, path_data, size);
+            binit_path_worker_close();
+            return valid ? 1 : -1;
+        } else if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return 0;
+        } else {
+            break;
+        }
+    }
+    binit_path_worker_close();
+    return -1;
+}
+
 static int start(WORD_LIST *arguments)
 {
     if (!interactive_shell || !rl_getc_function || !arguments || !arguments->next ||
@@ -188,8 +253,7 @@ static int start(WORD_LIST *arguments)
         binit_prompt_worker_close();
         return EXECUTION_FAILURE;
     }
-    if (rl_getc_function != prompt_getc) previous_getc = rl_getc_function;
-    rl_getc_function = prompt_getc;
+    update_input_hook();
     return EXECUTION_SUCCESS;
 }
 

@@ -6,6 +6,7 @@ import signal
 import struct
 import sys
 import termios
+import textwrap
 import unittest
 
 from test_completion import MODULE, Session, terminal
@@ -156,6 +157,96 @@ class EditorTests(unittest.TestCase):
             session.wait(lambda: '\x1b[36m' in bytes(session.transcript).decode(errors='replace'))
             self.assertEqual(session.capture()[1], line)
             self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_styles_shell_tokens_and_git_arguments(self):
+        extra = (
+            "BINIT_HIGHLIGHT_EXTENDED=1\n"
+            "BINIT_HIGHLIGHT_STYLES='alias=91,function=92,builtin=93,option=94,"
+            "git=95,redirection=96,substitution=97,expansion=33;4'\n"
+            "alias entry='if true; then'\n"
+            "operation() { :; }\n"
+            "binit_complete editor highlighting on\n"
+        )
+        with Session(extra=extra) as session:
+            for line, painted in (
+                ('entry', b'\x1b[91mentry'),
+                ('operation', b'\x1b[92moperation'),
+                ('echo', b'\x1b[93mecho'),
+                ('git -C . status --short', b'\x1b[95mstatus'),
+                ('printf foo > ./missing', b'\x1b[96m>'),
+                ('echo "$(echo hi) ${TERM:-none}"', b'\x1b[97m$('),
+            ):
+                with self.subTest(line=line):
+                    session.transcript.clear()
+                    session.send(line)
+                    session.wait(lambda: painted in session.transcript)
+                    self.assertEqual(session.capture()[1], line)
+                    session.send(b'\x03')
+                    session.pump(.06)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_resolves_external_commands_and_literal_paths_on_idle(self):
+        extra = (
+            "BINIT_HIGHLIGHT_EXTENDED=1\n"
+            "BINIT_HIGHLIGHT_STYLES='external=92,missing=91,path=94,missing-path=95'\n"
+            "binit_complete editor highlighting on\n"
+        )
+        for mode in ('emacs', 'vi'):
+            for line, painted in (
+                    ('ls', b'\x1b[92mls'),
+                    ('binit-no-such-command-781', b'\x1b[91mbinit-no-such-command-781'),
+                    ('echo ./present ./absent', b'\x1b[95m./absent')):
+                with self.subTest(line=line, mode=mode), Session(extra=extra, framework=True, mode=mode) as session:
+                    (session.directory / 'present').touch()
+                    session.send(line)
+                    session.wait(lambda: painted in session.transcript)
+                    if 'present' in line:
+                        self.assertIn(b'\x1b[94m./present', session.transcript)
+                    self.assertEqual(session.capture()[1], line)
+                    session.send(b'\x03')
+                    session.wait(lambda: session.screen.cursor.x == len(PROMPT) and
+                                 session.screen.display[session.screen.cursor.y].rstrip() == PROMPT.rstrip())
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_cancels_path_lookup_on_typing(self):
+        fixture = textwrap.dedent("""
+            from pathlib import Path
+            import socket
+            connection = socket.socket(fileno=0)
+            connection.settimeout(4)
+            source = connection.makefile("rb")
+            size = int.from_bytes(source.read(2), "little")
+            source.read(size)
+            Path("lookup-started").touch()
+            if not source.read(1):
+                Path("lookup-cancelled").touch()
+        """)
+        extra = ('__binit_manager="$PWD/path-worker"\nBINIT_HIGHLIGHT_EXTENDED=1\n'
+                 'binit_complete editor highlighting on\n')
+        for mode in ('emacs', 'vi'):
+            for key, expected in ((b'd', 'echo ./food'), (b'\x03', '')):
+                with self.subTest(mode=mode, key=key), Session(extra=extra, mode=mode) as session:
+                    worker = session.directory / 'path-worker'
+                    worker.write_text(f'#!{sys.executable}\n' + fixture)
+                    worker.chmod(0o700)
+                    session.send('echo ./foo')
+                    session.wait(lambda: (session.directory / 'lookup-started').exists())
+                    session.send(key)
+                    session.wait(lambda: (session.directory / 'lookup-cancelled').exists())
+                    self.assertEqual(session.capture()[1], expected)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_matches_brackets_and_preserves_long_lines(self):
+        extra = "BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='bracket=7;95'\nbinit_complete editor highlighting on\n"
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode, rows=60, columns=100) as session:
+                settle(session)
+                line = "echo '" + "x" * 3960 + "]' && [[ -n x ]]"
+                session.send(line)
+                session.wait(lambda: b'\x1b[7;95m[[' in session.transcript)
+                self.assertIn(b'\x1b[7;95m]]', session.transcript)
+                self.assertEqual(session.capture()[1], line)
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_alias_command_is_left_uncolored(self):

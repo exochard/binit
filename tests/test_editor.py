@@ -138,6 +138,35 @@ class EditorTests(unittest.TestCase):
                 session.pump(.7)
                 self.assertFalse((session.directory / "late").exists())
 
+    def test_prompt_worker_wait_is_bounded_and_keeps_a_slow_worker(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        start = f"binit_complete prompt-worker start {manager} /bin/bash -c"
+        with Session() as session:
+            session.send(f"{start} 'printf fast'; binit_complete prompt-worker wait 500; s=$?; r=; "
+                         "binit_complete prompt-worker take r; printf 'FAST:%s:%s\\n' \"$s\" \"$r\"\n")
+            session.wait(lambda: b"\rFAST:" in session.transcript)
+            self.assertIn(b"\rFAST:0:fast", session.transcript)
+            # A timed-out wait leaves the worker running for a later prompt.
+            session.send(f"{start} 'sleep .4; printf slow'; binit_complete prompt-worker wait 50; printf 'SLOW:%s\\n' $?\n")
+            session.wait(lambda: b"\rSLOW:" in session.transcript)
+            self.assertIn(b"\rSLOW:1", session.transcript)
+            session.pump(.6)
+            session.send("r=; binit_complete prompt-worker take r; printf 'LATE:%s\\n' \"$r\"\n")
+            session.wait(lambda: b"\rLATE:" in session.transcript)
+            self.assertIn(b"\rLATE:slow", session.transcript)
+            for argument in ("abc", "1001", "", "5x"):
+                session.send(f"binit_complete prompt-worker wait '{argument}'; printf 'USAGE:%s\\n' $?\n")
+                session.wait(lambda: b"\rUSAGE:" in session.transcript)
+                self.assertIn(b"\rUSAGE:2", session.transcript)
+                session.transcript.clear()
+        # Typed input ends the wait early.
+        with Session() as session:
+            session.send(f"{start} 'sleep 2'; s=$EPOCHREALTIME; binit_complete prompt-worker wait 1000; "
+                         "e=$EPOCHREALTIME; printf 'WAITED:%s\\n' $(( (${e/./} - ${s/./}) / 1000 ))\nx")
+            session.wait(lambda: b"\rWAITED:" in session.transcript)
+            waited = int(bytes(session.transcript).split(b"\rWAITED:")[1].split(b"\r")[0])
+            self.assertLess(waited, 500)
+
     def test_prompt_worker_rejects_output_over_its_limit(self):
         executable = shlex.quote(sys.executable)
         manager = shlex.quote(str(terminal.BINARY.resolve()))

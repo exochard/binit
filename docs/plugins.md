@@ -246,6 +246,11 @@ A different working directory or active generation
 invalidates it. Taking an unfinished request cancels it and returns failure.
 The first Readline input also cancels pending work, without consuming the key.
 
+`builtin binit_complete prompt-worker wait MS` waits up to `MS` milliseconds,
+at most 1000, and succeeds once a result is ready to take. Pending terminal
+input or a signal ends the wait early. A worker that is still running when
+the wait ends keeps its slot, so a later prompt can take its result.
+
 A request has a one-second deadline and a 512-byte output limit. Stdin and
 stderr go to `/dev/null`. The worker and its children cannot open network
 sockets or leave their process group. Binit stops that group when the request

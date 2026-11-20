@@ -2,13 +2,16 @@
 #include <config.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include "builtins.h"
 #include "general.h"
@@ -257,6 +260,36 @@ static int start(WORD_LIST *arguments)
     return EXECUTION_SUCCESS;
 }
 
+/* Waits up to the given milliseconds for the running worker to finish. Pending input or a signal ends
+ * the wait early. The worker keeps running on timeout so a later prompt can still take its result. */
+static int await(const char *text)
+{
+    char *end = NULL;
+    errno = 0;
+    long milliseconds = strtol(text, &end, 10);
+    if (!*text || *end || errno || strspn(text, "0123456789") != strlen(text) || milliseconds > 1000) return EX_USAGE;
+    struct timespec now, deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += milliseconds / 1000;
+    deadline.tv_nsec += (milliseconds % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec += 1;
+        deadline.tv_nsec -= 1000000000L;
+    }
+    int input = fileno(rl_instream ? rl_instream : stdin);
+    collect();
+    while (connection >= 0 && !cancelled && !interrupt_state && !terminating_signal) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long left = (deadline.tv_sec - now.tv_sec) * 1000L + (deadline.tv_nsec - now.tv_nsec) / 1000000L;
+        if (left <= 0) break;
+        struct pollfd watched[2] = {{connection, POLLIN, 0}, {input, POLLIN, 0}};
+        if (poll(watched, 2, (int)left) < 0 && errno != EINTR) break;
+        if (watched[1].revents) break;
+        if (watched[0].revents) collect();
+    }
+    return ready ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
+}
+
 static int take(const char *name)
 {
     SHELL_VAR *target = legal_identifier(name) ? find_variable_noref(name) : NULL;
@@ -283,5 +316,6 @@ int binit_prompt_worker(WORD_LIST *arguments)
     if (strcmp(action, "available") == 0 && !options) return EXECUTION_SUCCESS;
     if (strcmp(action, "start") == 0) return start(options);
     if (strcmp(action, "take") == 0 && options && !options->next) return take(options->word->word);
+    if (strcmp(action, "wait") == 0 && options && !options->next) return await(options->word->word);
     return EX_USAGE;
 }

@@ -108,6 +108,23 @@ class EditorTests(unittest.TestCase):
             session.pump(.65)
             self.assertFalse((session.directory / 'preview-finished').exists())
 
+    def test_prompt_worker_has_no_terminal_and_results_go_only_to_binit_names(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        start = f"binit_complete prompt-worker start {manager} /bin/sh -c"
+        probe = shlex.quote("if (: > /dev/tty) 2>/dev/null; then printf tty; else printf none; fi")
+        with Session() as session:
+            # A worker cannot reach the user's terminal, so it cannot write escapes to it or inject keys.
+            session.send(f"{start} {probe}; binit_complete prompt-worker wait 500; __binit_r=; "
+                         "binit_complete prompt-worker take __binit_r; printf 'TTY:%s\\n' \"$__binit_r\"\n")
+            session.wait(lambda: b"\rTTY:" in session.transcript)
+            self.assertIn(b"\rTTY:none", session.transcript)
+            # A result never lands in a variable the shell interprets, and the refused take frees the slot.
+            session.send(f"saved=$PS1; {start} 'printf x'; binit_complete prompt-worker wait 500; "
+                         "binit_complete prompt-worker take PS1; s=$?; [[ $PS1 == \"$saved\" ]] && same=1; "
+                         f"{start} 'printf y'; t=$?; printf 'NAME:%s:%s:%s\\n' \"$s\" \"$same\" \"$t\"\n")
+            session.wait(lambda: b"\rNAME:" in session.transcript)
+            self.assertIn(b"\rNAME:2:1:0", session.transcript)
+
     def test_prompt_worker_cannot_open_a_network_socket(self):
         executable = shlex.quote(sys.executable)
         manager = shlex.quote(str(terminal.BINARY.resolve()))
@@ -123,7 +140,7 @@ class EditorTests(unittest.TestCase):
         )
         with Session(extra=f"binit_complete prompt-worker start {manager} {executable} -c {program}\n") as session:
             session.pump(.3)
-            session.send("result=; binit_complete prompt-worker take result; printf 'WORKER:%s\\n' \"$result\"\n")
+            session.send("__binit_result=; binit_complete prompt-worker take __binit_result; result=$__binit_result; printf 'WORKER:%s\\n' \"$result\"\n")
             session.wait(lambda: b"\rWORKER:" in session.transcript)
             self.assertIn(b"\rWORKER:offline", session.transcript)
 
@@ -143,8 +160,8 @@ class EditorTests(unittest.TestCase):
         manager = shlex.quote(str(terminal.BINARY.resolve()))
         start = f"binit_complete prompt-worker start {manager} /bin/bash -c"
         with Session() as session:
-            session.send(f"{start} 'printf fast'; binit_complete prompt-worker wait 500; s=$?; r=; "
-                         "binit_complete prompt-worker take r; printf 'FAST:%s:%s\\n' \"$s\" \"$r\"\n")
+            session.send(f"{start} 'printf fast'; binit_complete prompt-worker wait 500; s=$?; __binit_r=; "
+                         "binit_complete prompt-worker take __binit_r; r=$__binit_r; printf 'FAST:%s:%s\\n' \"$s\" \"$r\"\n")
             session.wait(lambda: b"\rFAST:" in session.transcript)
             self.assertIn(b"\rFAST:0:fast", session.transcript)
             # A timed-out wait leaves the worker running for a later prompt.
@@ -152,7 +169,7 @@ class EditorTests(unittest.TestCase):
             session.wait(lambda: b"\rSLOW:" in session.transcript)
             self.assertIn(b"\rSLOW:1", session.transcript)
             session.pump(.6)
-            session.send("r=; binit_complete prompt-worker take r; printf 'LATE:%s\\n' \"$r\"\n")
+            session.send("__binit_r=; binit_complete prompt-worker take __binit_r; r=$__binit_r; printf 'LATE:%s\\n' \"$r\"\n")
             session.wait(lambda: b"\rLATE:" in session.transcript)
             self.assertIn(b"\rLATE:slow", session.transcript)
             for argument in ("abc", "1001", "", "5x"):
@@ -162,9 +179,9 @@ class EditorTests(unittest.TestCase):
                 session.transcript.clear()
             # A request cancelled just before the next start, as when a command is typed quickly, still
             # lets that start run once its group has stopped.
-            session.send(f"{start} 'sleep .4; printf old'; r=; binit_complete prompt-worker take r; "
+            session.send(f"{start} 'sleep .4; printf old'; __binit_r=; binit_complete prompt-worker take __binit_r; "
                          f"{start} 'printf new'; s=$?; binit_complete prompt-worker wait 500; "
-                         "binit_complete prompt-worker take r; printf 'NEXT:%s:%s\\n' \"$s\" \"$r\"\n")
+                         "binit_complete prompt-worker take __binit_r; printf 'NEXT:%s:%s\\n' \"$s\" \"$__binit_r\"\n")
             session.wait(lambda: b"\rNEXT:" in session.transcript)
             self.assertIn(b"\rNEXT:0:new", session.transcript)
             # The terminal settings a command sees are the same after a wait.
@@ -201,7 +218,7 @@ class EditorTests(unittest.TestCase):
         program = shlex.quote("print('x' * 513, end='')")
         with Session(extra=f"binit_complete prompt-worker start {manager} {executable} -c {program}\n") as session:
             session.pump(.3)
-            session.send("result=empty; binit_complete prompt-worker take result; printf 'WORKER:%s\\n' \"$result\"\n")
+            session.send("__binit_result=empty; binit_complete prompt-worker take __binit_result; result=$__binit_result; printf 'WORKER:%s\\n' \"$result\"\n")
             session.wait(lambda: b"\rWORKER:" in session.transcript)
             self.assertIn(b"\rWORKER:empty", session.transcript)
 

@@ -233,15 +233,26 @@ The runtime prepends one dispatcher to the existing `PROMPT_COMMAND`. It returns
 
 ### Prompt workers
 
-The native module exposes one worker slot for a plugin's prompt hook.
-Check availability with `builtin binit_complete prompt-worker available`.
+The native module exposes one worker slot per shell, shared by every
+plugin's prompt hook. Check availability with
+`builtin binit_complete prompt-worker available`.
 `builtin binit_complete prompt-worker start MANAGER PROGRAM [ARG...]`
 starts an absolute program through the Binit manager with the current
 directory and a filtered copy of the exported environment. Use the manager
-path supplied by Binit. The worker should be reviewed local code.
+path supplied by Binit. Start fails when the arguments and environment exceed
+64 KiB or 32 arguments.
+
+The worker is trusted local code. The limits below stop a slow or stuck
+worker. A hostile worker can escape them, for example by killing its own
+supervisor. A worker that runs other programs on data it did not choose, such as
+Git in a repository the user just entered, must keep that data from running
+commands; the Git prompt, for example, never runs a repository's own content
+filter.
 
 `builtin binit_complete prompt-worker take NAME` sets an existing writable
-scalar once the worker exits successfully with a nonempty result.
+scalar whose name starts with `__binit_` once the worker exits successfully
+with a nonempty result. Any other name is a usage error that also ends the
+request, so worker output never reaches a variable the shell interprets.
 A different working directory or active generation
 invalidates it. Taking an unfinished request cancels it and returns failure.
 The first Readline input also cancels pending work, without consuming the key.
@@ -254,9 +265,10 @@ input or a signal ends the wait early. A worker that is still running when
 the wait ends keeps its slot, so a later prompt can take its result.
 
 A request has a one-second deadline and a 512-byte output limit. Stdin and
-stderr go to `/dev/null`. The worker and its children cannot open network
-sockets or leave their process group. Binit stops that group when the request
-ends. Worker output is passed as data and never evaluated. Use
+stderr go to `/dev/null`. The worker runs in its own session without a
+controlling terminal, so `/dev/tty` fails, it cannot push input into the
+shell's terminal, and Ctrl-C and other terminal signals do not reach it. The worker and its children cannot open network sockets or leave
+their process group. Binit stops that group when the request ends. Worker output is passed as data and never evaluated. Use
 `binit_segment` to render it through the prompt-text filter and length limit.
 
 ## Project data

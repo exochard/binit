@@ -150,7 +150,8 @@ static int launch(char *const arguments[], char *const environment[])
         sigemptyset(&mask);
         sigemptyset(&defaults);
         sigaddset(&defaults, SIGCHLD);
-        error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP |
+        // A new session has no controlling terminal: /dev/tty fails, TIOCSTI is refused and terminal signals stay out.
+        error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID |
                                          POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
         if (!error) error = posix_spawnattr_setsigmask(&attributes, &mask);
         if (!error) error = posix_spawnattr_setsigdefault(&attributes, &defaults);
@@ -246,7 +247,8 @@ static long milliseconds_left(const struct timespec *deadline)
    while a command runs. */
 static bool hold_input(int input, struct termios *saved)
 {
-    if (input < 0 || !isatty(input) || tcgetattr(input, saved) != 0 || !(saved->c_lflag & ICANON)) return false;
+    if (input < 0 || !isatty(input) || tcgetpgrp(input) != getpgrp() || tcgetattr(input, saved) != 0 ||
+        !(saved->c_lflag & ICANON)) return false;
     struct termios held = *saved;
     held.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
     held.c_cc[VMIN] = 1;
@@ -338,13 +340,19 @@ static int await(const char *text)
     return ready ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
 }
 
+/* Worker output only ever lands in a plugin's own variable, never one the shell interprets such as PS1
+   or PATH. A refused take still ends the request, so the slot is free for the next start. */
 static int take(const char *name)
 {
-    SHELL_VAR *target = legal_identifier(name) ? find_variable_noref(name) : NULL;
-    if (!target || readonly_p(target) || noassign_p(target) || nameref_p(target) ||
-        integer_p(target) || array_p(target) || assoc_p(target) || specialvar_p(target)) return EXECUTION_FAILURE;
+    bool named = strncmp(name, "__binit_", 8) == 0 && legal_identifier(name);
+    SHELL_VAR *target = named ? find_variable_noref(name) : NULL;
     binit_prompt_worker_input();
     collect();
+    if (!target || readonly_p(target) || noassign_p(target) || nameref_p(target) ||
+        integer_p(target) || array_p(target) || assoc_p(target) || specialvar_p(target)) {
+        if (connection < 0) binit_prompt_worker_close();
+        return named ? EXECUTION_FAILURE : EX_USAGE;
+    }
     if (connection >= 0) return EXECUTION_FAILURE;
     int status = EXECUTION_FAILURE;
     struct stat current;

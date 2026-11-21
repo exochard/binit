@@ -425,6 +425,28 @@ static uint8_t highlight_command(char *name, bool quoted)
     return builtin ? HL_BUILTIN : HL_COMMAND;
 }
 
+static bool simple_alias(const alias_t *alias)
+{
+    const char command_chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-";
+    const char value_chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./- =";
+    for (int depth = 0; alias && depth < 8; ++depth) {
+        size_t length = strnlen(alias->value, 257);
+        if (!length || length > 256 || (alias->flags & AL_EXPANDNEXT) ||
+            strspn(alias->value, value_chars) != length) return false;
+        const char *head = alias->value + strspn(alias->value, " ");
+        size_t size = strcspn(head, " ");
+        if (!size || strspn(head, command_chars) != size) return false;
+        char name[257];
+        memcpy(name, head, size);
+        name[size] = '\0';
+        if (find_reserved_word(name) >= 0) return false;
+        const alias_t *next = find_alias(name);
+        if (!next || next == alias) return true;
+        alias = next;
+    }
+    return false;
+}
+
 static uint8_t highlight_path_color(char result)
 {
     switch (result) {
@@ -458,7 +480,7 @@ static void highlight_live(uint8_t *colors, const struct binit_highlight_tokens 
         bool command = scope.role == HL_COMMAND_NAME;
         uint8_t color = command ? highlight_command(name, quoted) : HL_PLAIN;
         if (color != HL_COMMAND && command) {
-            if (i == 0 && color == HL_ALIAS && alias_context_unknown(rl_line_buffer)) {
+            if (i == 0 && color == HL_ALIAS && !simple_alias(find_alias(name))) {
                 memset(colors, HL_PLAIN, (size_t)rl_end);
                 request->size = 0;
             }

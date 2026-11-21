@@ -424,6 +424,28 @@ class EditorTests(unittest.TestCase):
             self.assertNotIn('\x1b[36m', bytes(session.transcript).decode(errors='replace'))
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_keeps_literal_paths_after_simple_aliases(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        extra = (f'__binit_manager={manager}\n'
+                 "alias ls='eza --color=auto --git'\nalias ll='ls -lah'\n"
+                 "alias branch='if true; then'\nalias complex='branch'\n"
+                 "BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='alias=93,path=92,option=94'\n"
+                 "binit_complete editor highlighting on\n")
+        for mode in ('emacs', 'vi'):
+            for alias, simple in (('ls', True), ('ll', True), ('complex', False)):
+                with self.subTest(mode=mode, alias=alias), Session(extra=extra, mode=mode) as session:
+                    (session.directory / 'fixture').touch()
+                    session.send(f'{alias} --all ./fixture')
+                    session.wait(lambda: b'\x1b[93m' + alias.encode() in session.transcript)
+                    if simple:
+                        session.wait(lambda: b'\x1b[92m./fixture' in session.transcript)
+                        self.assertIn(b'\x1b[94m--all', session.transcript)
+                    else:
+                        session.pump(.2)
+                        self.assertNotIn(b'\x1b[92m./fixture', session.transcript)
+                        self.assertNotIn(b'\x1b[94m--all', session.transcript)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_suggestions_continue_after_highlighting_is_disabled(self):
         with Session(extra="history -s 'echo sample-suggestion'\nbinit_complete editor highlighting on\nbinit_complete editor suggestions on\nbinit_complete editor highlighting off\n") as session:
             session.send('echo sam')

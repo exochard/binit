@@ -88,7 +88,8 @@ change the parse context. Syntax highlighting is experimental.
 Set `BINIT_HIGHLIGHT_EXTENDED=1` for alias, function and builtin styles,
 literal command and path checks, options, parameter expansions, substitution
 and redirection delimiters, bracket pairing, and recognized Git subcommands.
-An initial alias in this mode colors only the alias name. Name and path checks
+An initial alias to a simple command keeps its argument colors. When the alias
+contains shell syntax, only the alias name is colored. Name and path checks
 run after the next idle interval, for up to 24 literal tokens and at most
 one second per request. Input cancels the request. Results are style codes
 for the matching tokens, with no shell evaluation.

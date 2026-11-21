@@ -1,6 +1,9 @@
 name: Build release archives
 
 on:
+  push:
+    branches:
+      - 'release-[0-9]*'
   workflow_dispatch:
 
 permissions:

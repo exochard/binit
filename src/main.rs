@@ -144,7 +144,7 @@ fn read_regular_limit(path: &Path, limit: u64) -> Result<Vec<u8>> {
 }
 
 fn snapshot_limit(file: &str, lock: &Lock) -> u64 {
-    if file == "completion.so" {
+    if matches!(file, "completion.so" | "completion-5.2.so") {
         return MAX_MODULE_BYTES;
     }
     let program = file
@@ -594,6 +594,11 @@ fn install_generation(
         quote(state.to_str().ok_or("state path must be UTF-8")?),
         quote(executable.to_str().ok_or("binary path must be UTF-8")?)
     );
+    init.push_str(if cfg!(binit_dual_native) {
+        "__binit_native_layout=dual\n"
+    } else {
+        "__binit_native_layout=single\n"
+    });
     if !bin.is_empty() {
         let directory = state.join("generations");
         if directory
@@ -636,6 +641,7 @@ fn install_generation(
     init.push_str("__binit_activate_shell\n");
     packages.insert("init.bash".into(), init.into_bytes());
     let (runtime, deferred) = lazy_runtime::split(include_str!("../runtime/core.bash"))?;
+    let runtime = runtime + include_str!("../runtime/completion-module.bash");
     packages.insert("runtime.bash".into(), runtime.into_bytes());
     for (name, text) in deferred {
         packages.insert(name, text.into_bytes());
@@ -644,6 +650,11 @@ fn install_generation(
     packages.insert(
         "completion.so".into(),
         include_bytes!(concat!(env!("OUT_DIR"), "/completion.so")).to_vec(),
+    );
+    #[cfg(binit_dual_native)]
+    packages.insert(
+        "completion-5.2.so".into(),
+        include_bytes!(concat!(env!("OUT_DIR"), "/completion-5.2.so")).to_vec(),
     );
     let lock = Lock {
         schema: 2,
@@ -1138,6 +1149,7 @@ mod size_limits {
             files: BTreeMap::new(),
         };
         assert_eq!(snapshot_limit("completion.so", &lock), MAX_MODULE_BYTES);
+        assert_eq!(snapshot_limit("completion-5.2.so", &lock), MAX_MODULE_BYTES);
         assert_eq!(snapshot_limit("plugins/x/completion.so", &lock), MAX_BYTES);
     }
 }

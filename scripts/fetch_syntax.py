@@ -132,10 +132,13 @@ def verify_runtime(prefix):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('destination', type=Path)
+    parser.add_argument('destination', type=Path, nargs='?')
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--runtime-prefix', type=Path)
     args = parser.parse_args()
-    (verify if args.verify else fetch)(args.destination)
+    if not (args.destination or args.runtime_prefix):
+        parser.error('specify a grammar destination or --runtime-prefix')
+    if args.destination:
+        (verify if args.verify else fetch)(args.destination)
     if args.runtime_prefix:
         (verify_runtime if args.verify else runtime)(args.runtime_prefix)

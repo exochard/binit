@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1
+
+- Include native editor modules for Bash 5.2 with Readline 8.2 and Bash 5.3
+  with Readline 8.3.
+- Build Linux archives on AlmaLinux 9 for glibc 2.34 or newer. Add an ARM64
+  archive alongside x86_64.
+- Show full names in the completion menu for Git branches and other
+  non-filename candidates.
+- Print the version with `binit --version` or `binit -V`. Keep completion
+  commands quiet when Bash has no completion specification for the command.
+
 ## 0.1.0 - 2026-11-20
 
 The first release, for Linux x86_64 with glibc 2.39 or newer and GNU Bash 5.2

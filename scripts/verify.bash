@@ -34,13 +34,27 @@ shellcheck -S warning runtime/*.bash plugins/*/plugin.bash examples/plugins/*/pl
 for script in runtime/*.bash plugins/*/plugin.bash examples/plugins/*/plugin.bash scripts/*.bash benchmarks/scripts/*.bash engines/bash/*.bash; do "$BINIT_BASH" -O extglob -n "$script"; done
 cargo clippy --locked --offline "${verify_features[@]}" --all-targets -- -D warnings
 cargo test --locked --offline "${verify_features[@]}" -- --test-threads=2
-cargo build --release --locked --offline "${verify_features[@]}"
-export BINIT_TEST_BINARY="$CARGO_TARGET_DIR/release/binit"
+if [[ -n ${BINIT_TEST_BINARY-} ]]; then
+    if [[ $BINIT_TEST_BINARY != /* || ! -x $BINIT_TEST_BINARY ]]; then
+        printf 'BINIT_TEST_BINARY must be an absolute executable path\n' >&2
+        exit 2
+    fi
+else
+    cargo build --release --locked --offline "${verify_features[@]}"
+    BINIT_TEST_BINARY="$CARGO_TARGET_DIR/release/binit"
+fi
+export BINIT_TEST_BINARY
+sha256sum -- "$BINIT_TEST_BINARY" > "$BINIT_VERIFY_EVIDENCE/test-binary.sha256"
 if [[ ${BINIT_NATIVE:-1} == 1 ]]; then
     cmake -S native -B "$CARGO_TARGET_DIR/native-check" -DCMAKE_BUILD_TYPE=Debug -DBASH_INCLUDE_DIR="${BINIT_BASH_INCLUDE:-/usr/include/bash}" -DREADLINE_INCLUDE_DIR="${BINIT_READLINE_INCLUDE:-/usr/include}"
     cmake --build "$CARGO_TARGET_DIR/native-check" --parallel 2
     ctest --test-dir "$CARGO_TARGET_DIR/native-check" --output-on-failure
-    export BINIT_TEST_MODULE="$CARGO_TARGET_DIR/native-check/binit_complete.so"
+    export BINIT_TEST_MODULE=${BINIT_TEST_MODULE:-"$CARGO_TARGET_DIR/native-check/binit_complete.so"}
+    if [[ $BINIT_TEST_MODULE != /* || ! -r $BINIT_TEST_MODULE ]]; then
+        printf 'BINIT_TEST_MODULE must be an absolute readable file path\n' >&2
+        exit 2
+    fi
+    sha256sum -- "$BINIT_TEST_MODULE" > "$BINIT_VERIFY_EVIDENCE/test-module.sha256"
     python3 -m unittest discover -s tests -p 'test_*.py'
 else
     printf 'Native-disabled configuration: Python unit suites and wait fallback; native PTY suites belong to native-enabled jobs.\n'

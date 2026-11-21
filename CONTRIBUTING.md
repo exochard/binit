@@ -55,8 +55,11 @@ default interpreter for `binit run`. When building the native module, set
 supported combination.
 
 Use an absolute `CARGO_TARGET_DIR` for each interpreter/compiler configuration.
-Verification exports `BINIT_TEST_BINARY` and `BINIT_TEST_MODULE` from that
-directory and writes tool identities to `verification/environment.json` there.
+Verification defaults `BINIT_TEST_BINARY` and `BINIT_TEST_MODULE` to the built
+files there. Set both to absolute artifact paths to exercise a packaged
+binary and its embedded module in the Python and terminal suites. Rust tests
+still build from the checkout. Verification records the tool and artifact
+identities in `verification/`.
 `BINIT_NATIVE=0 bash scripts/verify.bash` qualifies the native-disabled build:
 Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
 Native completion and post-prompt PTY checks run in native-enabled jobs.

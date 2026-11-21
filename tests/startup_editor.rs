@@ -40,11 +40,22 @@ fn startup_plugins_can_activate_native_editor_features() {
         .output()
         .unwrap();
     assert!(init.status.success());
+    if !cfg!(binit_dual_native) {
+        let generation = fs::read_to_string(state.join("current")).unwrap();
+        fs::write(
+            state
+                .join("generations")
+                .join(generation.trim())
+                .join("completion-5.2.so"),
+            b"file outside the generation inventory",
+        )
+        .unwrap();
+    }
     let bash = std::env::var_os("BINIT_BASH").unwrap_or_else(|| "/bin/bash".into());
     let output = Command::new(bash)
         .args(["--noprofile", "--norc", "-ic"])
         .arg(format!(
-            "{}\nbinit profile\n",
+            "readonly module=/dev/null\n{}\nbinit profile\n",
             String::from_utf8(init.stdout).unwrap()
         ))
         .env_remove("BASH_ENV")

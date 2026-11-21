@@ -81,6 +81,7 @@ pub(super) fn command(bash: &Path, home: &Path, work: &Path, path: &str) -> std:
 pub(super) fn probe(
     subject: &Subject,
     state: &Path,
+    lock: &crate::Lock,
     native: bool,
     directory: &Path,
 ) -> Result<RuntimeIdentity> {
@@ -95,10 +96,7 @@ pub(super) fn probe(
     private_dir(&home)?;
     let mut command = command(&bash_invocation, &home, directory, &path);
     let module = if native {
-        state
-            .join("generations")
-            .join(&subject.generation)
-            .join("completion.so")
+        state.join("generations").join(&subject.generation)
     } else {
         PathBuf::new()
     };
@@ -107,10 +105,19 @@ pub(super) fn probe(
             "--noprofile",
             "--norc",
             "-c",
-            include_str!("../../runtime/check-identity.bash"),
+            concat!(
+                include_str!("../../runtime/completion-module.bash"),
+                "\n",
+                include_str!("../../runtime/check-identity.bash")
+            ),
             "binit-check-identity",
         ])
-        .arg(&module);
+        .arg(&module)
+        .arg(if lock.files.contains_key("completion-5.2.so") {
+            "dual"
+        } else {
+            "single"
+        });
     let output = crate::process::run(&mut command, Duration::from_secs(5))?;
     if !output.status.success()
         || output.timed_out

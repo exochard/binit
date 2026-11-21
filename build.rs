@@ -24,11 +24,14 @@ fn main() {
         "CC",
         "BINIT_BASH_INCLUDE",
         "BINIT_READLINE_INCLUDE",
+        "BINIT_BASH_52_INCLUDE",
+        "BINIT_READLINE_82_INCLUDE",
         "BINIT_SYNTAX_SOURCE",
         "BINIT_SYNTAX_RUNTIME",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
+    println!("cargo:rustc-check-cfg=cfg(binit_dual_native)");
     if env::var_os("CARGO_FEATURE_COMPLETION_MENU").is_none() {
         return;
     }
@@ -36,27 +39,48 @@ fn main() {
     let headers = env::var_os("BINIT_BASH_INCLUDE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/usr/include/bash"));
+    let readline = env::var_os("BINIT_READLINE_INCLUDE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/include"));
+    let bash_52 = env::var_os("BINIT_BASH_52_INCLUDE").map(PathBuf::from);
+    let readline_82 = env::var_os("BINIT_READLINE_82_INCLUDE").map(PathBuf::from);
+    let companion = match (bash_52, readline_82) {
+        (Some(bash), Some(readline)) => Some((bash, readline)),
+        (None, None) => None,
+        _ => panic!("set BINIT_BASH_52_INCLUDE and BINIT_READLINE_82_INCLUDE together"),
+    };
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let mut primary = module_command(&headers, &readline);
+    let mut secondary = companion.as_ref().map(|(bash, readline)| {
+        primary.arg("-DBINIT_EXPECTED_BASH=53");
+        let mut command = module_command(bash, readline);
+        command.arg("-DBINIT_EXPECTED_BASH=52");
+        command
+    });
+    if let Some((source_args, archives)) = syntax_inputs(&out) {
+        for command in std::iter::once(&mut primary).chain(secondary.iter_mut()) {
+            command.args(&source_args).args(&archives);
+        }
+    }
+    build_module(&mut primary, out.join("completion.so"));
+    if let Some(mut command) = secondary {
+        build_module(&mut command, out.join("completion-5.2.so"));
+        println!("cargo:rustc-cfg=binit_dual_native");
+    }
+}
+
+fn module_command(headers: &std::path::Path, readline: &std::path::Path) -> Command {
     assert!(
         headers.join("config.h").is_file(),
         "Bash development headers are required for the completion menu. Set BINIT_BASH_INCLUDE or build with --no-default-features."
     );
-    println!(
-        "cargo:rerun-if-changed={}",
-        headers.join("config.h").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        headers.join("version.h").display()
-    );
-    println!("cargo:rerun-if-changed=/usr/include/readline/readline.h");
-    let readline = env::var_os("BINIT_READLINE_INCLUDE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/include"));
+    for file in ["config.h", "version.h"] {
+        println!("cargo:rerun-if-changed={}", headers.join(file).display());
+    }
     println!(
         "cargo:rerun-if-changed={}",
         readline.join("readline/readline.h").display()
     );
-    let output = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("completion.so");
     let mut command = Command::new(env::var_os("CC").unwrap_or_else(|| "cc".into()));
     command
         .args([
@@ -78,9 +102,9 @@ fn main() {
         ])
         // Bash's own headers keep pre-C23 declarations; as system headers their warnings do not fail -Werror.
         .arg("-isystem")
-        .arg(&headers)
+        .arg(headers)
         .arg("-isystem")
-        .arg(&readline)
+        .arg(readline)
         .arg("-isystem")
         .arg(headers.join("include"))
         .arg("-isystem")
@@ -92,72 +116,77 @@ fn main() {
             "native/layout.c",
             "native/worker.c",
         ]);
-    if let Some(source) = env::var_os("BINIT_SYNTAX_SOURCE") {
-        let source = PathBuf::from(source);
-        let runtime = PathBuf::from(
-            env::var_os("BINIT_SYNTAX_RUNTIME")
-                .expect("set BINIT_SYNTAX_RUNTIME to the prepared pinned runtime"),
-        );
-        let status = Command::new("python3")
-            .args(["scripts/fetch_syntax.py", "--verify"])
-            .arg(&source)
-            .arg("--runtime-prefix")
-            .arg(&runtime)
-            .status()
-            .expect("python3 is required to verify syntax source");
-        assert!(status.success(), "pinned syntax source verification failed");
-        for file in [
-            "src/parser.c",
-            "src/scanner.c",
-            "src/tree_sitter/parser.h",
-            "src/tree_sitter/array.h",
-            "src/tree_sitter/alloc.h",
-            "LICENSE",
-        ] {
-            println!("cargo:rerun-if-changed={}", source.join(file).display());
-        }
-        command
-            .arg("-DBINIT_HIGHLIGHT=1")
-            .arg("native/highlight.c")
-            .arg(format!(
-                "-I{}",
-                runtime.join("source/lib/include").display()
-            ));
-        for file in [
-            "source.tar.gz",
-            "runtime.json",
-            "source/lib/include/tree_sitter/api.h",
-            "lib/libtree-sitter.a",
-        ] {
-            println!("cargo:rerun-if-changed={}", runtime.join(file).display());
-        }
-        for unit in ["parser", "scanner"] {
-            let object =
-                PathBuf::from(env::var_os("OUT_DIR").unwrap()).join(format!("syntax-{unit}.o"));
-            let status = Command::new(env::var_os("CC").unwrap_or_else(|| "cc".into()))
-                .args(["-std=c11", "-O2", "-fPIC", "-w", "-c"])
-                .arg(format!("-I{}", source.join("src").display()))
-                .arg(source.join(format!("src/{unit}.c")))
-                .arg("-o")
-                .arg(&object)
-                .status()
-                .expect("could not compile pinned syntax grammar");
-            assert!(
-                status.success(),
-                "could not compile pinned syntax grammar: {unit}"
-            );
-            command.arg(object);
-        }
-        command.arg(runtime.join("lib/libtree-sitter.a"));
+    command
+}
+
+fn syntax_inputs(out: &std::path::Path) -> Option<(Vec<String>, Vec<PathBuf>)> {
+    let source = PathBuf::from(env::var_os("BINIT_SYNTAX_SOURCE")?);
+    let runtime = PathBuf::from(
+        env::var_os("BINIT_SYNTAX_RUNTIME")
+            .expect("set BINIT_SYNTAX_RUNTIME to the prepared pinned runtime"),
+    );
+    let status = Command::new("python3")
+        .args(["scripts/fetch_syntax.py", "--verify"])
+        .arg(&source)
+        .arg("--runtime-prefix")
+        .arg(&runtime)
+        .status()
+        .expect("python3 is required to verify syntax source");
+    assert!(status.success(), "pinned syntax source verification failed");
+    for file in [
+        "src/parser.c",
+        "src/scanner.c",
+        "src/tree_sitter/parser.h",
+        "src/tree_sitter/array.h",
+        "src/tree_sitter/alloc.h",
+        "LICENSE",
+    ] {
+        println!("cargo:rerun-if-changed={}", source.join(file).display());
     }
+    let sources = vec![
+        "-DBINIT_HIGHLIGHT=1".into(),
+        "native/highlight.c".into(),
+        format!("-I{}", runtime.join("source/lib/include").display()),
+    ];
+    for file in [
+        "source.tar.gz",
+        "runtime.json",
+        "source/lib/include/tree_sitter/api.h",
+        "lib/libtree-sitter.a",
+    ] {
+        println!("cargo:rerun-if-changed={}", runtime.join(file).display());
+    }
+    let mut archives = Vec::new();
+    for unit in ["parser", "scanner"] {
+        let object = out.join(format!("syntax-{unit}.o"));
+        let status = Command::new(env::var_os("CC").unwrap_or_else(|| "cc".into()))
+            .args(["-std=c11", "-O2", "-fPIC", "-w", "-c"])
+            .arg(format!("-I{}", source.join("src").display()))
+            .arg(source.join(format!("src/{unit}.c")))
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("could not compile pinned syntax grammar");
+        assert!(
+            status.success(),
+            "could not compile pinned syntax grammar: {unit}"
+        );
+        archives.push(object);
+    }
+    archives.push(runtime.join("lib/libtree-sitter.a"));
+    Some((sources, archives))
+}
+
+fn build_module(command: &mut Command, output: PathBuf) {
     let result = command
         .args(["-ldl", "-o"])
-        .arg(output)
+        .arg(&output)
         .output()
         .expect("could not run the C compiler; set CC or install a compiler");
     assert!(
         result.status.success(),
-        "native completion build failed:\n{}",
+        "native completion build failed ({}):\n{}",
+        output.display(),
         String::from_utf8_lossy(&result.stderr)
     );
 }

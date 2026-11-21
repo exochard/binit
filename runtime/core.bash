@@ -569,9 +569,7 @@ __binit_has_completion() {
 
 __binit_load_completion() {
     if __binit_has_completion; then return 0; fi
-    [[ -f $__binit_generation_dir/completion.so ]] || return 1
-    bind -q complete >/dev/null 2>&1 || :
-    builtin enable -f "$__binit_generation_dir/completion.so" binit_complete
+    __binit_enable_completion "$__binit_generation_dir" "${__binit_native_layout-single}"
 }
 
 __binit_provider_forget() {

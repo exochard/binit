@@ -24,11 +24,10 @@ a timer, an event or a watched file. Binit tracks the functions, aliases,
 completions and prompt segments a plugin adds, so `binit profile` can report
 what each one costs and `binit unload` can remove what it owns.
 
-The `binit` executable embeds a native module for Bash 5.3 with Readline 8.3.
-It draws the completion menu, history search and suggestions inside Bash and
-can run a slow completion in a separate process that typing cancels. Other
-supported Bash versions keep Readline's ordinary completion. Your system shell
-and login shell stay as they are; installation is per user.
+The release embeds modules for Bash 5.2 with Readline 8.2 and Bash 5.3 with
+Readline 8.3. The selected module draws completion and history in Bash and can
+run a slow completion in a separate process that typing cancels. Other
+combinations use Readline's ordinary completion. Installation is per user.
 
 ## Start here
 

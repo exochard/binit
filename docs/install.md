@@ -2,15 +2,14 @@
 
 ## Install the release
 
-Binit 0.1 supports Linux glibc x86_64 and needs glibc 2.39 or newer. Download
-`binit-0.1.0-linux-x86_64.tar.gz` and `SHA256SUMS` from
-https://github.com/exochard/binit/releases/download/v0.1.0/, then verify,
-extract and install:
+Binit 0.1.1 requires Linux, glibc 2.34 or newer, and GNU Bash 5.2 or later.
+Download the archive for `x86_64` or `aarch64` and `SHA256SUMS` from the
+[release](https://github.com/exochard/binit/releases/tag/v0.1.1).
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf binit-0.1.0-linux-x86_64.tar.gz
-cd binit-0.1.0-linux-x86_64
+tar -xzf "binit-0.1.1-linux-$(uname -m).tar.gz"
+cd "binit-0.1.1-linux-$(uname -m)"
 python3 -I install.py --binary "$PWD/bin/binit"
 ```
 
@@ -71,10 +70,8 @@ preserved and reported instead of being overwritten or deleted.
 
 ## Supported builds
 
-The native module is compiled into the manager for a particular Bash/Readline
-combination. Mismatched shells reject that module and use the supported
-fallback. Build with matching headers to enable native completion for another
-supported Bash version; CONTRIBUTING.md describes those inputs.
-
-Binit 0.1 supports Linux glibc x86_64. CI runs Bash 5.2 and 5.3 with and
-without the native module.
+The archives include modules for Bash 5.2 with Readline 8.2 and Bash 5.3 with
+Readline 8.3. A shell with a different combination uses ordinary Readline
+completion. Build with matching headers to enable the native editor for
+another supported combination. See [Contributing](../CONTRIBUTING.md) for the
+build inputs.

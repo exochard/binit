@@ -28,6 +28,12 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <readline/keymaps.h>
+#ifdef BINIT_EXPECTED_BASH
+#if DEFAULT_COMPAT_LEVEL != BINIT_EXPECTED_BASH || \
+    RL_READLINE_VERSION != (0x0800 + BINIT_EXPECTED_BASH % 10)
+#error "Release module requires the matching Bash and Readline headers"
+#endif
+#endif
 #include "menu.h"
 #include "effects.h"
 #include "layout.h"

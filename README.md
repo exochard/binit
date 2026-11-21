@@ -20,14 +20,14 @@ the verdict rules. Every number comes from the timing archive attached to each
 
 ## Install
 
-Binit 0.1 runs on Linux x86_64 with glibc 2.39 or newer and GNU Bash 5.2 or
-later. Download the archive and `SHA256SUMS` from the
+Binit 0.1.1 runs on Linux with glibc 2.34 or newer and GNU Bash 5.2 or
+later. Download the archive for your architecture and `SHA256SUMS` from the
 [latest release](https://github.com/exochard/binit/releases/latest), then:
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf binit-0.1.0-linux-x86_64.tar.gz
-cd binit-0.1.0-linux-x86_64
+tar -xzf "binit-0.1.1-linux-$(uname -m).tar.gz"
+cd "binit-0.1.1-linux-$(uname -m)"
 python3 -I install.py --binary "$PWD/bin/binit"
 ```
 
@@ -68,6 +68,8 @@ newest matching history entry appears as a dim suggestion; Right, Ctrl-F or
 End accepts it. Ctrl-R searches history and Enter inserts the match without
 running it. Ctrl-Backspace deletes the previous word.
 
+<img alt="The completion menu shows full Git branch names. Filtering for sta selects feature/startup-cache, and git switch changes to that branch." src="docs/images/demo-branch-switch.gif" width="800">
+
 A completion that takes long can run in a separate process: typing cancels it
 and the line stays responsive. [Why a slow completion freezes your
 prompt](docs/slow-completions.md) explains the mechanism and its limits, and
@@ -75,8 +77,8 @@ prompt](docs/slow-completions.md) explains the mechanism and its limits, and
 register one. `binit completion off` returns the
 current shell to Readline's ordinary completion.
 
-The built-in editor module targets Bash 5.3 with Readline 8.3. Other supported
-Bash versions keep Readline's completion and the rest of Binit.
+The release embeds modules for Bash 5.2 with Readline 8.2 and Bash 5.3 with
+Readline 8.3. Other supported combinations use Readline's ordinary completion.
 [Editing](docs/editor.md) and [history](docs/history.md) list every key.
 
 ## Update and recover

@@ -537,7 +537,8 @@ impl Receipt {
         }
         self.inputs_current(subject)?;
         let context = self.context.as_ref().ok_or("missing check context")?;
-        if runtime::probe(subject, state, context.runtime.native, run)? != context.runtime {
+        let lock = verify_generation(state, &subject.generation)?;
+        if runtime::probe(subject, state, &lock, context.runtime.native, run)? != context.runtime {
             return Err("candidate runtime identity changed; run checks again".into());
         }
         Ok(())
@@ -581,7 +582,7 @@ pub(super) fn run(
         }
         input_snapshot(&root.join("inputs"), &inputs)?;
         private_dir(&root.join("samples"))?;
-        let runtime = runtime::probe(subject, state, native, root)?;
+        let runtime = runtime::probe(subject, state, &lock, native, root)?;
         receipt.context = Some(Context {
             binding: inputs.binding.clone(),
             runtime: runtime.clone(),
@@ -629,8 +630,8 @@ pub(super) fn run(
             }
         }
         receipt.inputs_current(subject)?;
-        verify_generation(state, &subject.generation)?;
-        if runtime::probe(subject, state, native, root)? != runtime {
+        let lock = verify_generation(state, &subject.generation)?;
+        if runtime::probe(subject, state, &lock, native, root)? != runtime {
             return Err("runtime changed during checks".into());
         }
         receipt.complete = true;

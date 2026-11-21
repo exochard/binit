@@ -84,10 +84,12 @@ static bool enabled;
 static int terminal_support;
 extern struct builtin binit_complete_struct;
 static int native_complete(int, int);
-static int wait_hook(void);
+static void install_pre_input_hook(void);
+static void remove_unused_pre_input_hook(void);
 extern int running_trap;
 static rl_hook_func_t *previous_pre_input;
-static bool wait_installed;
+static bool pre_input_installed;
+static bool wait_enabled;
 static bool history_enabled, history_owns_suggestions, history_dismissed, history_live;
 static enum binit_match history_method;
 static bool history_context_enabled, history_delete_enabled;
@@ -102,8 +104,7 @@ struct history_context_entry {
 static struct history_context_entry history_context[1000];
 static const HIST_ENTRY *history_last_entry;
 static char *history_last_directory;
-static rl_hook_func_t *previous_history_input;
-static bool history_input_installed;
+static bool history_input_enabled;
 static bool history_painted, colors_painted;
 static bool history_deprep_active, history_deprep_running, history_deprep_detached;
 static rl_voidfunc_t *history_previous_deprep, *history_base_deprep;
@@ -150,6 +151,7 @@ static void delete_history_line(const struct context *);
 static const struct history_context_entry *history_context_for(const char *);
 static void install_poll_hook(void);
 static void remove_poll_hook(void);
+static void detach_poll_hook(void);
 
 #ifdef BINIT_HIGHLIGHT
 static bool alias_context_unknown(const char *line)
@@ -1424,31 +1426,20 @@ static void history_record(const char *status, const char *cwd)
     }
 }
 
-static int history_input_hook(void)
+static void record_prompt_history(void)
 {
-    if (previous_history_input) previous_history_input();
-    if (!history_input_installed || !interactive_shell || executing_builtin || running_trap ||
-        parse_and_execute_level || get_current_prompt_level() != 1) return 0;
+    if (!history_input_enabled) return;
     const char *cwd = get_string_value("PWD");
     const char *status = get_string_value("BINIT_LAST_STATUS");
     if (cwd && status && *status && strlen(status) <= 3 && strspn(status, "0123456789") == strlen(status))
         history_record(status, cwd);
-    return 0;
 }
 
 static void history_input_hook_update(bool enable)
 {
-    rl_hook_func_t **hook = wait_installed && rl_pre_input_hook == wait_hook ?
-        &previous_pre_input : &rl_pre_input_hook;
-    if (enable && !history_input_installed) {
-        previous_history_input = *hook;
-        *hook = history_input_hook;
-        history_input_installed = true;
-    } else if (!enable && history_input_installed) {
-        if (*hook == history_input_hook) *hook = previous_history_input;
-        history_input_installed = false;
-        previous_history_input = NULL;
-    }
+    history_input_enabled = enable;
+    if (enable) install_pre_input_hook();
+    else remove_unused_pre_input_hook();
 }
 
 static bool parse_history_scope(const char *name, enum history_scope *scope)
@@ -2062,32 +2053,51 @@ static void run_wait_dispatch(const char *command, bool always_redraw)
     }
 }
 
-static int wait_hook(void)
+static int pre_input_hook(void)
 {
-    if (previous_pre_input && previous_pre_input != wait_hook) previous_pre_input();
-    if (!wait_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
+    if (previous_pre_input && previous_pre_input != pre_input_hook) previous_pre_input();
+    if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
         get_current_prompt_level() != 1) return 0;
+    // Ctrl-C can leave key-read flags set after Bash has unwound the previous input loop.
+    if (poll_removal_deferred && !poll_running) detach_poll_hook();
+    else remove_unused_pre_input_hook();
+    record_prompt_history();
+    if (!wait_enabled) return 0;
     SHELL_VAR *pending = find_variable("__binit_wait_pending");
     if (!pending || !value_cell(pending) || strcmp(value_cell(pending), "1") != 0) return 0;
     run_wait_dispatch("__binit_wait_dispatch", true);
     return 0;
 }
 
+static void install_pre_input_hook(void)
+{
+    if (!pre_input_installed) {
+        previous_pre_input = rl_pre_input_hook;
+        rl_pre_input_hook = pre_input_hook;
+        pre_input_installed = true;
+    }
+}
+
+static void remove_unused_pre_input_hook(void)
+{
+    // A later hook may still call ours. Keep the predecessor until we own the slot again.
+    if (wait_enabled || history_input_enabled || poll_removal_deferred || rl_pre_input_hook != pre_input_hook) return;
+    rl_pre_input_hook = previous_pre_input;
+    pre_input_installed = false;
+    previous_pre_input = NULL;
+}
+
 static int enable_wait(void)
 {
-    if (!wait_installed) {
-        previous_pre_input = rl_pre_input_hook;
-        rl_pre_input_hook = wait_hook;
-        wait_installed = true;
-    }
+    wait_enabled = true;
+    install_pre_input_hook();
     return EXECUTION_SUCCESS;
 }
 
 static void remove_wait_hook(void)
 {
-    if (wait_installed && rl_pre_input_hook == wait_hook) rl_pre_input_hook = previous_pre_input;
-    wait_installed = false;
-    previous_pre_input = NULL;
+    wait_enabled = false;
+    remove_unused_pre_input_hook();
 }
 
 /* Readline 8.3 before its patch 1 (still the copy bundled with Bash 5.3) reports "nothing to read" when
@@ -2178,7 +2188,7 @@ static int poll_hook(void)
         (*rl_signal_event_hook)();
     }
     bool input = pump_ready_input();
-    if (poll_running) return 0;
+    if (poll_running || poll_removal_deferred) return 0;
     poll_running = true;
     if (previous_event_hook && previous_event_hook != poll_hook) previous_event_hook();
     if (!input) {
@@ -2188,8 +2198,8 @@ static int poll_hook(void)
         refresh_completion_suggestion();
     }
     poll_running = false;
-    if (!poll_installed || !interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
-        get_current_prompt_level() != 1 || rl_end != 0) return 0;
+    if (!poll_installed || poll_removal_deferred || !interactive_shell || executing_builtin || running_trap ||
+        parse_and_execute_level || get_current_prompt_level() != 1 || rl_end != 0) return 0;
     SHELL_VAR *pending = find_variable("__binit_dispatch_pending");
     if (!pending || !value_cell(pending) || strcmp(value_cell(pending), "1") != 0) return 0;
     int saved_errno = errno;
@@ -2204,6 +2214,7 @@ static int poll_hook(void)
 static void install_poll_hook(void)
 {
     poll_removal_deferred = false;
+    remove_unused_pre_input_hook();
     if (!poll_installed) {
         previous_event_hook = rl_event_hook;
         rl_event_hook = poll_hook;
@@ -2219,25 +2230,32 @@ static int enable_poll(void)
     return EXECUTION_SUCCESS;
 }
 
+static void detach_poll_hook(void)
+{
+    poll_removal_deferred = false;
+    remove_unused_pre_input_hook();
+    if (poll_installed && rl_event_hook == poll_hook) rl_event_hook = previous_event_hook;
+    poll_installed = false;
+    last_poll = 0;
+    previous_event_hook = NULL;
+}
+
 static void remove_poll_hook(void)
 {
     /* Readline's key loop checks the hook, handles pending signals, then calls the hook without checking
        again, and a key read must leave that loop with a key in hand. While the hook runs, a key is read
-       or dispatched, or a signal is pending or handled (Ctrl-C repaints the line), removal waits for the
-       next repaint outside all of them. Readline brackets every key read with READCMD, MOREINPUT or
-       DISPATCHING; SIGHANDLER alone is not enough, since its SIGWINCH handler clears that bit. */
+       or dispatched, or a signal is pending or handled (Ctrl-C repaints the line), removal waits for a
+       safe repaint or the next prompt's pre-input hook. Readline brackets each key read with READCMD,
+       MOREINPUT or DISPATCHING. Its SIGWINCH handler can clear SIGHANDLER before the read ends. */
     bool in_key_loop = poll_running ||
         RL_ISSTATE(RL_STATE_READCMD | RL_STATE_MOREINPUT | RL_STATE_DISPATCHING | RL_STATE_SIGHANDLER) ||
         rl_pending_signal() || (&_rl_handling_signal && _rl_handling_signal);
     if (in_key_loop && rl_event_hook == poll_hook && !previous_event_hook) {
         poll_removal_deferred = true;
+        install_pre_input_hook();
         return;
     }
-    poll_removal_deferred = false;
-    if (poll_installed && rl_event_hook == poll_hook) rl_event_hook = previous_event_hook;
-    poll_installed = false;
-    last_poll = 0;
-    previous_event_hook = NULL;
+    detach_poll_hook();
 }
 
 static void disable_menu(void)

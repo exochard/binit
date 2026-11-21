@@ -550,6 +550,47 @@ class EditorTests(unittest.TestCase):
             session.send('binit_redisplay_test count\n')
             session.wait(lambda: bool(re.search(r'EVENT_COUNT:[1-9][0-9]*', session.text)))
 
+    def test_poll_off_from_key_binding_stops_poll_only_dispatch(self):
+        fixture = MODULE.parent / 'binit_redisplay_test.so'
+        if not fixture.is_file():
+            self.skipTest('native redisplay fixture not built')
+        extra = (f"enable -f {shlex.quote(str(fixture))} binit_redisplay_test\n"
+                 "__binit_dispatch_pending=0\n"
+                 "__binit_event_dispatch() { : > .poll-marker; __binit_dispatch_pending=0; __binit_event_changed=0; }\n"
+                 "__stop_poll() { binit_complete poll-off; __binit_dispatch_pending=1; : > .poll-off; }\n"
+                 "bind -x '\"\\C-x\\C-p\": __stop_poll'\n"
+                 "binit_complete poll\n")
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                marker = session.directory / '.poll-marker'
+                session.send(b'\x18\x10')
+                session.wait((session.directory / '.poll-off').exists)
+                session.pump(.4)
+                self.assertFalse(marker.exists())
+                start = len(session.transcript)
+                session.send(b'\x03')
+                session.wait(lambda: b'READY> ' in session.transcript[start:])
+                session.send('binit_redisplay_test event-status\n')
+                session.wait(lambda: b'\rEVENT_HOOK:unset' in session.transcript)
+                session.send('binit_complete poll\n')
+                session.wait(marker.exists)
+
+    def test_contextual_history_toggles_beneath_a_foreign_pre_input_hook(self):
+        fixture = MODULE.parent / 'binit_redisplay_test.so'
+        if not fixture.is_file():
+            self.skipTest('native redisplay fixture not built')
+        extra = (f"enable -f {shlex.quote(str(fixture))} binit_redisplay_test\n"
+                 "BINIT_HISTORY_CONTEXT=1\nBINIT_SUGGESTION_STRATEGIES=history\n"
+                 "binit_complete editor history on\n"
+                 "__replace_poll() { binit_complete poll-off; binit_redisplay_test pre-input; }\n"
+                 "bind -x '\"\\C-x\\C-p\": __replace_poll'\n"
+                 "binit_complete poll\n")
+        with Session(extra=extra) as session:
+            session.send(b'\x18\x10\n')
+            session.send('binit_complete editor history off\nbinit_complete editor history on\n')
+            session.send('binit_redisplay_test pre-input-count\n')
+            session.wait(lambda: b'\rPRE_INPUT_COUNT:3\r\n' in session.transcript)
+
     def test_idle_poll_is_rate_limited(self):
         extra = ("__binit_dispatch_pending=1\n"
                  "__binit_event_dispatch() { printf x >> .poll-count; __binit_event_changed=0; }\n"

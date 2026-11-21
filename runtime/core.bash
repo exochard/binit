@@ -660,7 +660,10 @@ __binit_provider_unregister() {
 }
 
 binit() {
-    if [[ ${1-} == profile ]]; then
+    if (( $# == 0 )) || [[ ${1-} =~ ^(--version|-V|--help|-h|help)$ ]] ||
+       { (( $# == 2 )) && [[ ${2-} =~ ^(--help|-h)$ && $1 != run ]]; }; then
+        command "$__binit_manager" "$@"
+    elif [[ ${1-} == profile ]]; then
         local id
         printf '%-20s %-12s %10s %10s %8s  %s\n' PLUGIN STATE LOAD_US HOOK_US CALLS REASON
         for id in "${__binit_ids[@]}"; do

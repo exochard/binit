@@ -13,6 +13,36 @@ static unsigned char fold(unsigned char c)
     return c >= 'A' && c <= 'Z' ? (unsigned char)(c + ('a' - 'A')) : c;
 }
 
+static bool term_matches(const unsigned char *value, const unsigned char *term, size_t size, bool fuzzy)
+{
+    if (fuzzy) {
+        size_t matched = 0;
+        for (; *value; ++value)
+            if (fold(*value) == fold(term[matched]) && ++matched == size) return true;
+        return false;
+    }
+    for (; *value; ++value) {
+        size_t i = 0;
+        while (i < size && value[i] && fold(value[i]) == fold(term[i])) ++i;
+        if (i == size) return true;
+    }
+    return false;
+}
+
+bool binit_query_matches(const char *value, const char *query, enum binit_match match)
+{
+    const unsigned char *term = (const unsigned char *)query;
+    if (match == BINIT_LITERAL)
+        return !*term || term_matches((const unsigned char *)value, term, strlen(query), false);
+    while (*term) {
+        while (*term == ' ' || *term == '\t') ++term;
+        size_t size = strcspn((const char *)term, " \t");
+        if (size && !term_matches((const unsigned char *)value, term, size, match == BINIT_FUZZY)) return false;
+        term += size;
+    }
+    return true;
+}
+
 static void filter(struct binit_menu *menu)
 {
     unsigned char query[BINIT_QUERY_SIZE];
@@ -27,9 +57,10 @@ static void filter(struct binit_menu *menu)
     }
     menu->count = menu->selected = 0;
     for (size_t i = 0; i < menu->total; ++i) {
-        bool matched = length == 0;
+        bool literal = menu->match == BINIT_LITERAL;
+        bool matched = literal ? length == 0 : binit_query_matches(menu->values[i], menu->query, menu->match);
         size_t j = 0;
-        for (const unsigned char *p = (const unsigned char *)menu->values[i]; !matched && *p; ++p) {
+        for (const unsigned char *p = (const unsigned char *)menu->values[i]; literal && !matched && *p; ++p) {
             unsigned char c = fold(*p);
             while (j > 0 && c != query[j]) j = prefix[j - 1];
             if (c == query[j]) ++j;

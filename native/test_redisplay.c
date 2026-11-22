@@ -11,12 +11,20 @@
 
 static rl_voidfunc_t *previous;
 static rl_voidfunc_t *previous_deprep;
+static rl_hook_func_t *previous_pre_input;
+static int prompts;
 static int events;
 
 static int foreign_event(void)
 {
     ++events;
     return 0;
+}
+
+static int foreign_pre_input(void)
+{
+    ++prompts;
+    return previous_pre_input ? previous_pre_input() : 0;
 }
 
 static void foreign_redisplay(void)
@@ -52,6 +60,12 @@ static int test_builtin(WORD_LIST *args)
 {
     if (!args || args->next) return EX_USAGE;
     if (!strcmp(args->word->word, "event")) rl_event_hook = foreign_event;
+    else if (!strcmp(args->word->word, "event-status")) printf("EVENT_HOOK:%s\n", rl_event_hook ? "set" : "unset");
+    else if (!strcmp(args->word->word, "pre-input")) {
+        previous_pre_input = rl_pre_input_hook;
+        rl_pre_input_hook = foreign_pre_input;
+    }
+    else if (!strcmp(args->word->word, "pre-input-count")) printf("PRE_INPUT_COUNT:%d\n", prompts);
     else if (!strcmp(args->word->word, "count")) printf("EVENT_COUNT:%d\n", events);
     else if (!strcmp(args->word->word, "null-deprep")) rl_deprep_term_function = NULL;
     else if (!strcmp(args->word->word, "deprep")) {

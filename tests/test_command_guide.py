@@ -35,7 +35,7 @@ class CommandGuideTests(unittest.TestCase):
         for width in ('80', '44'):
             result = self.command(COLUMNS=width, NO_COLOR='1', BINIT_STATE='relative')
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Current shell', result.stdout)
+            self.assertIn('current shell', result.stdout)
             self.assertNotIn('\x1b', result.stdout)
             self.assertTrue(all(len(line) <= int(width) for line in result.stdout.splitlines()))
             if width == '80':
@@ -62,7 +62,7 @@ class CommandGuideTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     output = os.read(reader, 4096).replace(b'\r\n', b'\n')
                     self.assertIn(b'  update --check\n    preview pinned Git updates\n', output)
-                    self.assertEqual(b'\x1b[1mPlugins\x1b[0m' in output, not no_color)
+                    self.assertEqual(b'\x1b[1mplugins\x1b[0m' in output, not no_color)
                 finally:
                     os.close(writer)
                     os.close(reader)
@@ -75,7 +75,7 @@ class CommandGuideTests(unittest.TestCase):
                                     input=f'set -o {mode}\nbinit\nbinit --version\nbinit report --help\nexit\n',
                                     capture_output=True, text=True, env=self.env, cwd=self.root, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Current shell', result.stdout)
+            self.assertIn('current shell', result.stdout)
             self.assertIn('binit 0.', result.stdout)
             self.assertIn('usage: binit report ID', result.stdout)
 

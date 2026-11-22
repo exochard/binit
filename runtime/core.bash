@@ -640,6 +640,7 @@ __binit_provider_register() {
         __binit_completion_spec[$__binit_provider_name]=${__binit_provider_spec[$__binit_provider_name]}
     fi
     __binit_completion_disabled[$__binit_provider_name]=0
+    builtin binit_complete editor suggestions providers 2>/dev/null || :
 }
 
 __binit_provider_unregister() {
@@ -657,6 +658,7 @@ __binit_provider_unregister() {
     if [[ -n ${__binit_provider_owner[$__binit_provider_name]} ]]; then unset '__binit_completion_spec[$__binit_provider_name]'; fi
     __binit_provider_forget "$__binit_provider_name"
     unset '__binit_completion_disabled[$__binit_provider_name]'
+    builtin binit_complete editor suggestions providers 2>/dev/null || :
 }
 
 binit() {

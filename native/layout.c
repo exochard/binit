@@ -71,6 +71,21 @@ bool binit_layout(int prompt_cells, int columns, const char *line, size_t size, 
     out->offset[0] = 0;
     out->column[0] = prompt_cells;
     for (size_t offset = 0, used = 0; offset < size; offset += used) {
+        if (line[offset] == '\n' || line[offset] == '\t') {
+            /* Readline starts a row at a newline. A tab becomes spaces to the next multiple of eight and
+               continues on the next row when it reaches the margin. */
+            used = 1;
+            if (offset == point) {out->cursor = (struct binit_position){row, column}; cursor = true;}
+            int next = line[offset] == '\n' ? columns : column + 8 - column % 8;
+            if (next < columns) {
+                column = next;
+                continue;
+            }
+            if (++row >= BINIT_LAYOUT_ROWS || next - columns >= columns) return false;
+            out->offset[row] = offset + 1;
+            out->column[row] = column = next - columns;
+            continue;
+        }
         int cells = measure(line + offset, size - offset, &used);
         if (cells < 0) return false;
         if (cells > columns - column) { /* Readline pads the row and starts the character on the next */

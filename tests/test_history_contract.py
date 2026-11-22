@@ -40,6 +40,38 @@ class HistoryContractTests(unittest.TestCase):
                 session.pump(.1)
                 self.assertEqual(session.capture()[1], 'demo_cmd va')
 
+    def test_word_and_fuzzy_modes_find_noncontiguous_history(self):
+        for editing, method, query in (('emacs', 'words', 'needle printf'), ('vi', 'fuzzy', 'prtf ndle')):
+            extra = (f"BINIT_HISTORY_MATCH={method}\nhistory -s 'printf missed'\n"
+                     "history -s 'printf needle'\nbinit_complete editor history on\n")
+            with self.subTest(method=method), Session(extra=extra, mode=editing) as session:
+                session.send(b'\x12' + query.encode() + b'\r')
+                session.pump(.2)
+                self.assertEqual(session.capture()[1], 'printf needle')
+
+    def test_confirmed_history_deletion_closes_without_inserting_or_executing(self):
+        extra = ("BINIT_HISTORY_DELETE=1\nhistory -s 'touch delete-witness'\n"
+                 "binit_complete editor history on\n")
+        with Session(extra=extra) as session:
+            session.send(b'\x12delete-witness\x1b')
+            session.pump(.12)
+            session.send(b'x')
+            session.wait(lambda: 'delete entry?' in session.text)
+            session.send(b'y')
+            session.pump(.12)
+            self.assertEqual(session.capture()[1], '')
+            self.assertFalse((session.directory / 'delete-witness').exists())
+            session.send("history | grep -c '^ *[0-9]*  touch delete-witness$'\n")
+            session.wait(lambda: '\n0' in session.text)
+
+    def test_context_records_status_before_reading_the_next_command(self):
+        extra = "BINIT_HISTORY_CONTEXT=1\nbinit_complete editor history on\n"
+        with Session(extra=extra, framework=True) as session:
+            session.send("false # context-witness\n")
+            session.pump(.15)
+            session.send("binit_complete history list 'false # context-witness' session\n")
+            session.wait(lambda: b'\t1\t' in session.transcript)
+
     def test_editor_status_reports_actual_flags(self):
         with Session(framework=True) as session:
             session.send('binit editor\n')

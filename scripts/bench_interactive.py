@@ -32,6 +32,19 @@ PROMPT = b'BENCH> '
 CARET = '\u258f'
 
 
+def at_empty_prompt(screen):
+    """The cursor sits right after a fresh prompt; prompt plugins may prefix PS1 with segments."""
+    row = screen.display[screen.cursor.y].rstrip()
+    return row.endswith(PROMPT.decode().rstrip()) and screen.cursor.x == len(row) + 1
+
+
+def clear(shell):
+    """Cancel the line and wait for the new prompt. Prompt hooks can pause output longer than the
+    quiet interval, and a key sent before the prompt reaches the terminal, not the editor."""
+    shell.cancel()
+    shell.until(lambda: at_empty_prompt(shell.screen))
+
+
 def live_history_shown(display):
     """The live history list under the input, before it takes focus."""
     return any('History  Tab focus' in row or row.rstrip() == 'history' for row in display)
@@ -212,28 +225,28 @@ def benchmark(args, work):
             try:
                 timings['startup_visible'].append(shell.startup_ms)
                 timings['startup_usable'].append(shell.startup_ms + shell.settled(b':'))
-                shell.cancel()
+                clear(shell)
                 for character in b'git status ':
                     timings['typing'].append(shell.settled(bytes([character])))
                 if seven and not live_history_shown(shell.screen.display):
                     raise RuntimeError('live history was not active during typing')
-                shell.cancel()
+                clear(shell)
                 for character in b'no-history-match':
                     timings['typing_miss'].append(shell.settled(bytes([character])))
-                shell.cancel()
+                clear(shell)
                 timings['first_history'].append(shell.settled(b'\x12'))
                 if seven:
                     shell.until(lambda: history_search_shown(shell.screen.display))
                     shell.settled(b'\x1b')
                     shell.settled(b'\x1b')
-                shell.cancel()
+                clear(shell)
                 timings['builtin_loop'].append(shell.command('for ((i=0;i<10000;i++)); do :; done'))
                 timings['external_commands'].append(shell.command('for ((i=0;i<20;i++)); do /usr/bin/true; done'))
                 if seven:
                     shell.command('binit_complete editor history off; binit_complete on')
                 shell.settled(b"printf '%s' ./alpha-00.t")
                 timings['first_file_completion'].append(shell.settled(b'\t'))
-                shell.cancel()
+                clear(shell)
                 if seven:
                     before = profile(shell)
                     for identifier in PLUGINS:
@@ -244,12 +257,12 @@ def benchmark(args, work):
                     timings['first_git_completion'].append(shell.settled(b'\t'))
                     shell.until(lambda: completion_shown(shell.screen.display, 'sta'))
                     shell.settled(b'\x1b')
-                    shell.cancel()
+                    clear(shell)
                     shell.settled(b'git sta')
                     timings['warm_git_completion'].append(shell.settled(b'\t'))
                     shell.until(lambda: completion_shown(shell.screen.display, 'sta'))
                     shell.settled(b'\x1b')
-                    shell.cancel()
+                    clear(shell)
                     after = profile(shell)
                     for identifier in PLUGINS:
                         if after.get(identifier, {}).get('state') != 'loaded':

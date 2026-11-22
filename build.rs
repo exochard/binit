@@ -12,6 +12,8 @@ fn main() {
         "native/layout.c",
         "native/worker.c",
         "native/worker.h",
+        "native/prompt_worker.c",
+        "native/prompt_worker.h",
         "native/layout.h",
         "native/highlight.c",
         "native/highlight.h",
@@ -115,6 +117,7 @@ fn module_command(headers: &std::path::Path, readline: &std::path::Path) -> Comm
             "native/effects.c",
             "native/layout.c",
             "native/worker.c",
+            "native/prompt_worker.c",
         ]);
     command
 }

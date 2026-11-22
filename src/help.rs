@@ -2,7 +2,7 @@ use super::Result;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
 
-const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nPlugins\n  plugins         list plugins for the next shell\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview pinned Git updates\n  rollback        select the previous generation\n\nCurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nAll commands     binit --help\nCommand help     binit help COMMAND";
+const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nplugins\n  plugins         list plugins for the next shell\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview pinned Git updates\n  rollback        select the previous generation\n\ncurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nall commands     binit --help\ncommand help     binit help COMMAND";
 
 fn display_width(terminal: bool) -> usize {
     if terminal {
@@ -34,7 +34,7 @@ fn print_guide() {
                 line.strip_prefix("  ").and_then(|row| row.split_once("  "))
         {
             println!("  {}\n    {}", command.trim_end(), description.trim_start());
-        } else if style && matches!(line, "Plugins" | "Current shell") {
+        } else if style && matches!(line, "plugins" | "current shell") {
             println!("\x1b[1m{line}\x1b[0m");
         } else {
             println!("{line}");
@@ -50,7 +50,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help") {
         print_guide();
         println!(
-            "\nManager commands\n  add enable disable remove update plugins inspect shell apply\n  diagnose candidate prepare init status rollback trust project releases\n  run extension declare sync\n\nCurrent-shell commands\n  plugin profile report unload completions load editor completion\n  on off emit dispatch\n\nState: --state DIRECTORY, $BINIT_STATE, $XDG_DATA_HOME/binit,\n       or $HOME/.local/share/binit\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
+            "\nmanager commands\n  add enable disable remove update plugins inspect shell apply\n  diagnose candidate prepare init status rollback trust project releases\n  run extension declare sync\n\ncurrent-shell commands\n  plugin profile report unload completions load editor completion\n  on off emit dispatch\n\nstate     --state dir, $BINIT_STATE, $XDG_DATA_HOME/binit,\n          or $HOME/.local/share/binit\nrecovery  BINIT_SAFE=1 bash --rcfile path/to/init.bash -i"
         );
         return Ok(true);
     }
@@ -80,7 +80,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
         Some("report" | "unload" | "load" | "inspect" | "enable" | "disable" | "remove") => {
             println!("usage: binit {} ID", topic.unwrap());
             if matches!(topic, Some("report" | "unload" | "load")) {
-                println!("\nRequires an initialized shell.");
+                println!("\nrequires an initialized shell");
             }
             return Ok(true);
         }
@@ -97,7 +97,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
         ) => {
             println!("usage: binit {}", topic.unwrap());
             if matches!(topic, Some("profile" | "dispatch")) {
-                println!("\nRequires an initialized shell.");
+                println!("\nrequires an initialized shell");
             }
             return Ok(true);
         }

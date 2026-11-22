@@ -71,6 +71,10 @@ newest matching history entry appears as a dim suggestion; Right, Ctrl-F or
 End accepts it. Ctrl-R searches history and Enter inserts the match without
 running it. Ctrl-Backspace deletes the previous word.
 
+For a list of history matches below the line as you type, set
+`BINIT_HISTORY_MODE=live` before loading the history-search plugin.
+See [live history mode](docs/history.md) for its Tab behavior.
+
 <img alt="The completion menu shows full Git branch names. Filtering for sta selects feature/startup-cache, and git switch changes to that branch." src="docs/images/demo-branch-switch.gif" width="800">
 
 A completion that takes long can run in a separate process: typing cancels it

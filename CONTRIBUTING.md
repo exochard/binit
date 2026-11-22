@@ -63,9 +63,9 @@ identities in `verification/`.
 `BINIT_NATIVE=0 bash scripts/verify.bash` qualifies the native-disabled build:
 Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
 Native completion and post-prompt PTY checks run in native-enabled jobs.
-CI runs `scripts/verify.bash` on Ubuntu 24.04 with Bash 5.2 and 5.3, with the
-native module enabled and disabled. On GitHub the workflows start from the
-Actions tab; pull requests do not trigger them yet.
+Pull requests to `dev` run `scripts/verify.bash` on Ubuntu 24.04 x86_64 with
+Bash 5.2 and 5.3, each with the native module enabled and disabled. Start the
+full check matrix and the separate editor workflow from the Actions tab.
 
 The native menu tests use a real Bash PTY with a terminal emulator. They check
 the visible screen and command-line state, including cancellation, paste,

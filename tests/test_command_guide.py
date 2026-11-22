@@ -48,6 +48,7 @@ class CommandGuideTests(unittest.TestCase):
         self.assertEqual(left.returncode, 0, left.stderr)
         self.assertEqual(left.stdout, right.stdout)
         self.assertIn('default 4', left.stdout)
+        self.assertIn('enable|disable --plugin ID', self.command('help', 'completions').stdout)
         self.assertNotEqual(self.command('help', 'missing-command').returncode, 0)
 
     def test_guide_uses_terminal_width_and_respects_no_color(self):
@@ -69,15 +70,19 @@ class CommandGuideTests(unittest.TestCase):
 
     def test_initialized_shell_help_and_version(self):
         rc = self.root / 'rc'
+        inputrc = self.root / 'inputrc'
         rc.write_text(f'eval "$({shlex.quote(str(BINARY))} init)"\n')
         for mode in ('emacs', 'vi'):
+            inputrc.write_text(f'set editing-mode {mode}\n')
             result = subprocess.run([BASH, '--noprofile', '--rcfile', str(rc), '-i'],
-                                    input=f'set -o {mode}\nbinit\nbinit --version\nbinit report --help\nexit\n',
-                                    capture_output=True, text=True, env=self.env, cwd=self.root, timeout=15)
+                                    input='binit\nbinit --version\nbinit report --help\nbinit completions --help\nexit\n',
+                                    capture_output=True, text=True, env=dict(self.env, INPUTRC=str(inputrc)),
+                                    cwd=self.root, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('current shell', result.stdout)
             self.assertIn('binit 0.', result.stdout)
             self.assertIn('usage: binit report ID', result.stdout)
+            self.assertIn('enable|disable --plugin ID', result.stdout)
 
     def test_run_passes_help_to_script(self):
         script = self.root / 'script.bash'

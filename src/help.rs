@@ -85,7 +85,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
             return Ok(true);
         }
         Some("completions") => {
-            "usage: binit completions list|enable|disable|register|unregister [ARG...]\n\nRequires an initialized shell."
+            "usage: binit completions [list [--plugin ID]]\n       binit completions enable|disable NAME\n       binit completions enable|disable --plugin ID\n       binit completions register NAME PROGRAM [ARG...]\n       binit completions unregister NAME\n\nrequires an initialized shell"
         }
         Some("completion") => {
             "usage: binit completion [on|off|status]\n\nRequires an initialized shell."

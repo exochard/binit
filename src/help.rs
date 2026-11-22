@@ -2,7 +2,7 @@ use super::Result;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
 
-const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nplugins\n  plugins         list plugins for the next shell\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview pinned Git updates\n  rollback        select the previous generation\n\ncurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nall commands     binit --help\ncommand help     binit help COMMAND";
+const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nplugins\n  plugins         list plugins for the next shell\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview plugin updates\n  rollback        select the previous generation\n\ncurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nall commands     binit --help\ncommand help     binit help COMMAND";
 
 fn display_width(terminal: bool) -> usize {
     if terminal {
@@ -63,7 +63,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
     };
     let text = match topic {
         Some("update") => {
-            "usage: binit update [--check] [--jobs N] [ID...]\n       binit update ID [PATH]\n\n--check previews Git revisions without selecting a generation.\n--jobs fetches 1 to 8 repositories at once (default 4).\nFor a catalog plugin, ID [PATH] snapshots its local source."
+            "usage: binit update [--check] [--jobs N] [ID...]\n       binit update ID [PATH]\n\n--check previews Git revisions and lists local sources. It leaves the generation unchanged.\n--jobs fetches 1 to 8 repositories at once (default 4).\nFor a catalog plugin, ID [PATH] snapshots its local source."
         }
         Some("plugin") => {
             "usage: binit plugin SOURCE [KEY=VALUE...]\n\nRequires an initialized shell. Load modes: startup, prompt, wait,\ncommand, completion, timed, event and watch. See docs/plugins.md."

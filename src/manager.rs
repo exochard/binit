@@ -485,12 +485,12 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
     let mut targets = Vec::new();
     if ids.is_empty() {
         for (position, entry) in plan.catalog.iter().enumerate() {
-            if entry.origin.is_some() || entry.asset.is_some() {
+            if !entry.declaration.is_empty() {
                 targets.push(position);
             }
         }
         if targets.is_empty() {
-            println!("no git plugins to update");
+            println!("no declared plugins to update");
             return Ok(());
         }
     }
@@ -503,9 +503,6 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
         let entry = &plan.catalog[position];
         if entry.declaration.is_empty() {
             return Err(format!("{id} is a catalog plugin; use binit update {id} [PATH]").into());
-        }
-        if check && entry.origin.is_none() && entry.asset.is_none() {
-            return Err(format!("{id} is a local directory, not a Git plugin").into());
         }
         if !targets.contains(&position) {
             targets.push(position);
@@ -558,6 +555,20 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
             ))
         };
         let Some(origin) = &entry.origin else {
+            if check || ids.is_empty() {
+                let keys = package::line_keys(&entry.declaration).map_err(wrap)?;
+                let has_hook = |event| keys.get(event).is_some_and(|script| !script.is_empty());
+                if has_hook("atclone") && !has_hook("atpull") {
+                    say(format!(
+                        "{id}  kept prepared snapshot (atclone without atpull)"
+                    ));
+                    continue;
+                }
+                if check {
+                    say(format!("{id}  local source (refreshed by binit update)"));
+                    continue;
+                }
+            }
             let (item, files) =
                 line_package(state, &entry.declaration, Some("atpull")).map_err(wrap)?;
             unchanged_id(&item)?;

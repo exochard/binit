@@ -71,8 +71,9 @@ editor in the active generation while keeping the existing plugin snapshots.
 Open a new Bash session to use that generation. Run `command binit --version`
 to check the installed executable.
 
-`binit update` updates Git plugin revisions. After editing a local plugin,
-run `binit sync` to snapshot it and open a new Bash session to use it.
+`binit update` refreshes declared local plugins and Git revisions. Run
+`binit sync` after editing plugin declarations. Open a new Bash session
+to use the selected generation.
 `binit rollback` selects the previous plugin generation.
 
 ## Uninstall

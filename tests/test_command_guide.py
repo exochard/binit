@@ -62,7 +62,7 @@ class CommandGuideTests(unittest.TestCase):
                                                  'COLUMNS': '80', 'NO_COLOR': no_color}, timeout=15)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     output = os.read(reader, 4096).replace(b'\r\n', b'\n')
-                    self.assertIn(b'  update --check\n    preview pinned Git updates\n', output)
+                    self.assertIn(b'  update --check\n    preview plugin updates\n', output)
                     self.assertEqual(b'\x1b[1mplugins\x1b[0m' in output, not no_color)
                 finally:
                     os.close(writer)

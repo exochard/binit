@@ -19,7 +19,14 @@ Grammar: `binit plugin SOURCE [KEY=VALUE...]`. Sources are absolute local direct
 - Otherwise `id` defaults to the directory name, and `files` to the first existing of `ID.plugin.bash`, `ID.bash`, `init.bash`, `ID.sh`, `init.sh`. Sync fails and lists these names when none exists.
 - The same line twice, as when the startup file is sourced again, does nothing.
 
-`binit sync` sends the lines of the current shell to the manager, which records them under its lock (a NUL-delimited `declared` file in the state directory: each record is an argument count followed by the arguments), so another shell syncing at the same time cannot change them; it then rebuilds every line-managed plugin from them and publishes a generation. A failed sync leaves the current generation in place. Catalog plugins stay; an `id` shared with one is an error. Line-managed plugins reject `enable`, `disable` and `remove`; edit the line and sync. `binit update ID` re-snapshots a local line plugin.
+`binit sync` sends the lines of the current shell to the manager, which records them under its lock (a NUL-delimited `declared` file in the state directory: each record is an argument count followed by the arguments), so another shell syncing at the same time cannot change them; it then rebuilds every line-managed plugin from them and publishes a generation. A failed sync leaves the current generation in place. Catalog plugins stay; an `id` shared with one is an error. Line-managed plugins reject `enable`, `disable` and `remove`; edit the line and sync.
+
+`binit update` refreshes local snapshots and Git pins using the saved plugin
+lines. Pass one or more plugin IDs to select which lines to update. All
+selected changes publish together. If any source fails, new shells still use
+the previous generation. A bare update keeps local snapshots prepared with
+`atclone` alone. Add an `atpull` hook to prepare those sources on update.
+`binit update --check` lists local sources without reading or running them.
 
 At startup, a line whose exact arguments match a synced plugin activates it at once: `startup` plugins load in line order, `command` and `completion` plugins install their first-use stubs, `prompt` plugins load at the first prompt, `wait` plugins right after it is drawn. Existing functions, aliases, builtins and completion specifications still win. `load=wait` is Zinit's `wait` (turbo mode): the first prompt appears at once and the plugin loads before the next key is read, in line order with other `wait` plugins. Keys typed meanwhile are kept. `binit profile` shows `pending` until then. Without the native module (`BINIT_COMPLETION_MENU=0`, no `completion.so`) wait plugins load at the first prompt instead, like `prompt`. Output printed during a wait load lands on the prompt line; a plugin that changes `PS1` or key bindings takes effect from the next prompt or line.
 
@@ -78,8 +85,8 @@ credentials. Curl is required during acquisition.
 ## Clone and update hooks
 
 `atclone=SCRIPT` prepares a newly acquired source before selected files are
-snapshotted. `atpull=SCRIPT` runs on an accepted Git revision update, or an
-explicit local-line update. A preview never executes hooks. Unchanged syncs
+snapshotted. `atpull=SCRIPT` runs on an accepted Git revision update or a
+local snapshot refresh. A preview never executes hooks. Unchanged syncs
 do not rerun clone hooks; checksum-pinned sources do not move on update.
 
 ```bash
@@ -120,7 +127,7 @@ A source is one of `user/repo` (expands to `https://github.com/user/repo.git`), 
 `ver` is a tag, a branch or a full 40-character commit. Without it, the remote default branch is used; a remote whose HEAD points at a missing branch fails only for lines without `ver`, with "the remote has no default branch; set ver=". Sources are printable ASCII. An `https://` URL may not carry a user name, password or token (use a Git credential helper); `ssh://` and `user@host:path` keep their user, which must match `[a-z_][a-z0-9_-]{0,31}`. A rejected source that carries credentials is never echoed; the error is a fixed message.
 
 - `binit sync` clones sources it has not seen and pins each new line to the full commit its `ver` (or the default branch) resolves to. A line keeps its pinned commit while its id, source and ver stay the same; other keys can change freely, and sync does not contact the remote for them. A new id, a different ver (including removing `ver=`) or a different source resolves the current commit. Only `binit update` moves an existing pin. Spellings of one URL (`user/repo`, `https://github.com/user/repo`, a trailing `.git` or `/`, and the case of an https or ssh host) count as the same source. A full-commit `ver` must be reachable from a branch or tag of the remote.
-- `binit update [ID...]` fetches, resolves each `ver` again and publishes a generation with the new pins. Without IDs it covers every Git line plugin. A full-commit `ver` never moves, needs no fetch and is reported as `ID  pinned to commit; to track a branch again, remove ver= or set ver=BRANCH, then run binit sync`. An update that would change a plugin's ID is refused. All plugins are resolved before anything is published, so one failure leaves the current generation unchanged.
+- For a Git line, `binit update [ID...]` fetches and resolves `ver` again. A full-commit `ver` keeps its current pin without fetching. To track a branch again, remove `ver=` or set `ver=BRANCH` and run `binit sync`. An update that would change a plugin's ID is refused.
 - `binit update --check [ID...]` fetches and prints `ID  OLD12 -> NEW12  (N commits)` followed by up to 20 `git log --oneline` lines, or `ID  up to date`. It publishes nothing and changes no pin.
 - `binit inspect ID` shows the URL, `ver` and pinned commit.
 

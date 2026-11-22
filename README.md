@@ -91,15 +91,18 @@ Readline 8.3. Other supported combinations use Readline's ordinary completion.
 ## Update and recover
 
 ```bash
-binit update --check     # show what would move, change nothing
-binit update             # move Git pins to the commits their ver names
+binit update --check     # preview Git moves and list local sources
+binit update             # refresh local snapshots and Git pins
 binit rollback           # use the previous generation in new shells
 binit profile            # load and hook time per plugin
 BINIT_SAFE=1 bash        # a shell that skips Binit entirely
 ```
 
-A failed sync leaves the current generation in place. [Candidate
-checks](docs/candidate-checks.md) run your own tests against a prepared
+A failed update or sync leaves the current generation in place. New shells
+use the updated plugins. To upgrade Binit itself, install the new executable
+and run `binit apply`. See [installation](docs/install.md).
+
+[Candidate checks](docs/candidate-checks.md) run your own tests against a prepared
 generation before any new shell uses it.
 
 ## Performance

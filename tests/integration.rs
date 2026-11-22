@@ -1969,7 +1969,10 @@ fn clone_and_pull_hooks_prepare_isolated_local_sources_once() {
     assert!(!Path::new(&source).join("init.bash").exists());
     assert!(stdout(&h.shell(&line, "echo generated:$GENERATED\n")).contains("generated:clone"));
     success(h.shell(&line, "binit sync\n"));
-    success(h.binit(&["update", "generated"]));
+    let original = h.current();
+    assert!(success(h.binit(&["update", "--check"])).contains("generated  local source"));
+    assert_eq!(h.current(), original);
+    success(h.binit(&["update"]));
     assert!(stdout(&h.shell(&line, "echo generated:$GENERATED\n")).contains("generated:pull"));
     assert!(!Path::new(&source).join("init.bash").exists());
 }
@@ -3002,7 +3005,77 @@ fn update_resnapshots_a_local_line_plugin() {
     assert!(output.contains("loc  re-snapshotted"), "{output}");
     let output = h.shell(&lines, "echo \"l:$BINIT_LOCAL\"\n");
     assert!(stdout(&output).contains("l:2"), "{}", stderr(&output));
-    failure(h.binit(&["update", "--check", "loc"]), "not a Git plugin");
+}
+
+#[test]
+fn update_without_ids_refreshes_local_lines_and_preserves_rollback() {
+    let h = Home::new();
+    let first = h.src("first", "init.bash", "FIRST=old\n");
+    let second = h.src("second", "init.bash", "SECOND=old\n");
+    let generated = h.src("generated", "README", "source\n");
+    let lines = format!(
+        "binit plugin {}\nbinit plugin {}\nbinit plugin {} files=init.bash atclone={}\n",
+        sh_quote(&first),
+        sh_quote(&second),
+        sh_quote(&generated),
+        sh_quote("printf 'GENERATED=kept\\n' > init.bash"),
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let original = h.current();
+    fs::write(Path::new(&first).join("init.bash"), "FIRST=new\n").unwrap();
+    fs::write(Path::new(&second).join("init.bash"), "SECOND=new\n").unwrap();
+
+    for args in [
+        vec!["update", "--check"],
+        vec!["update", "--check", "first"],
+    ] {
+        let report = success(h.binit(&args));
+        assert!(report.contains("first  local source"), "{report}");
+        assert_eq!(h.current(), original);
+    }
+
+    let report = success(h.shell(&lines, "binit update\n"));
+    assert!(report.contains("first  re-snapshotted"), "{report}");
+    assert!(report.contains("second  re-snapshotted"), "{report}");
+    assert!(
+        report.contains("generated  kept prepared snapshot"),
+        "{report}"
+    );
+    assert_ne!(h.current(), original);
+    let status = "printf 'values:%s:%s:%s\\n' \"$FIRST\" \"$SECOND\" \"$GENERATED\"\n";
+    assert!(success(h.shell(&lines, status)).contains("values:new:new:kept"));
+    success(h.binit(&["update"]));
+    success(h.binit(&["rollback"]));
+    assert_eq!(h.current(), original);
+    assert!(success(h.shell(&lines, status)).contains("values:old:old:kept"));
+}
+
+#[test]
+fn bulk_update_publishes_git_and_local_changes_together() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "remote", "init.bash", "REMOTE=old\n");
+    let local = h.src("local", "init.bash", "LOCAL=old\n");
+    let lines = format!(
+        "binit plugin {}\nbinit plugin {}\n",
+        repo.url(),
+        sh_quote(&local)
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let original = h.current();
+    repo.commit("init.bash", "REMOTE=new\n", "update remote");
+    let file = Path::new(&local).join("init.bash");
+    let pending = file.with_extension("pending");
+    fs::rename(&file, &pending).unwrap();
+    let failed = h.binit(&["update"]);
+    assert!(stdout(&failed).is_empty(), "{}", stdout(&failed));
+    failure(failed, "none of the default files exist");
+    assert_eq!(h.current(), original);
+    let status = "printf 'values:%s:%s\\n' \"$REMOTE\" \"$LOCAL\"\n";
+    assert!(success(h.shell(&lines, status)).contains("values:old:old"));
+
+    fs::write(&file, "LOCAL=new\n").unwrap();
+    success(h.binit(&["update"]));
+    assert!(success(h.shell(&lines, status)).contains("values:new:new"));
 }
 
 // Findings from review of the Git sources.

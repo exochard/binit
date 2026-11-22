@@ -386,6 +386,105 @@ class RuntimeFeatures(unittest.TestCase):
         self.assertIn('protected\n', result.stdout)
         self.assertIn("complete -W 'user' demo", result.stdout)
 
+    def test_completion_admin_changes_owned_group_in_this_shell(self):
+        self.plugin('sample', 'complete -W owned sample pick\n', 'load=completion', 'completions=sample,pick')
+        self.plugin('separate', 'complete -W spare spare\n', 'load=completion', 'completions=spare')
+        self.sync()
+        script = '''
+            binit completions list --plugin sample
+            binit completions disable --plugin sample || exit 10
+            for name in sample pick; do complete -p "$name" >/dev/null 2>&1 && exit 11; done
+            complete -p spare || exit 12
+            binit completions enable --plugin sample || exit 13
+            complete -p sample pick || exit 14
+            binit completions disable --plugin sample || exit 15
+            binit load sample || exit 16
+            for name in sample pick; do complete -p "$name" >/dev/null 2>&1 && exit 17; done
+            binit completions list --plugin sample
+            binit completions enable --plugin sample || exit 18
+            complete -p sample pick || exit 19
+            complete -W foreign pick
+            if binit completions disable --plugin sample; then exit 20; fi
+            complete -p sample pick || exit 21
+            binit completions list --plugin sample
+            binit completions disable sample || exit 22
+            complete -p sample >/dev/null 2>&1 && exit 23
+            complete -p pick || exit 24
+        '''
+        inputrc = self.root / 'inputrc'
+        self.env['INPUTRC'] = str(inputrc)
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode):
+                inputrc.write_text(f'set editing-mode {mode}\n')
+                result = self.shell(script)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = result.stdout
+                self.assertTrue(output.startswith('pick sample enabled\nsample sample enabled\n'))
+                self.assertIn('pick sample disabled\nsample sample disabled\n', output)
+                self.assertIn('complete -F __binit_complete sample\n', output)
+                self.assertEqual(output.count("complete -W 'owned' sample\n"), 2)
+                self.assertIn("complete -W 'foreign' pick\npick sample enabled\nsample sample enabled\n", output)
+                self.assertIn('binit: completion changed: pick', result.stderr)
+                fresh = self.shell('binit completions list --plugin sample')
+                self.assertEqual(fresh.stdout, 'pick sample enabled\nsample sample enabled\n')
+
+    def test_completion_admin_restores_bindings_if_a_bulk_write_fails(self):
+        self.plugin('sample', 'complete -W owned sample pick\n', 'load=completion', 'completions=sample,pick')
+        self.sync()
+        result = self.shell('''
+            binit completions list --plugin sample >/dev/null
+            original=$(declare -f __binit_completion_write)
+            eval "${original/__binit_completion_write /real_completion_write }"
+            calls=0
+            __binit_completion_write() {
+                calls=$((calls + 1))
+                (( calls != 2 )) || return 1
+                real_completion_write "$@"
+            }
+            if binit completions disable --plugin sample; then exit 10; fi
+            [[ $calls == 3 ]] || exit 11
+            complete -p sample pick || exit 12
+            binit completions list --plugin sample
+        ''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('complete -F __binit_complete sample\n', result.stdout)
+        self.assertIn('complete -F __binit_complete pick\n', result.stdout)
+        self.assertTrue(result.stdout.endswith('pick sample enabled\nsample sample enabled\n'))
+
+    @unittest.skipIf(os.environ.get('BINIT_NATIVE') == '0', 'native module required')
+    def test_completion_admin_preserves_disabled_isolated_provider_on_refresh(self):
+        provider = self.home / 'provider'
+        provider.write_text('#!/bin/bash\nprintf "%s\\0" "$1"\n')
+        provider.chmod(0o700)
+        self.plugin('sample', '''
+            binit completions register sample "$HOME/provider" initial
+            refresh_sample() {
+                [[ ${refresh_completion-0} == 1 ]] || return 0
+                refresh_completion=0
+                binit completions register sample "$HOME/provider" refreshed && printf 'refreshed\\n'
+            }
+            binit_on prompt refresh_sample
+        ''', 'load=completion', 'completions=sample')
+        self.sync()
+        script = '''
+            binit load sample || exit 10
+            binit completions disable --plugin sample || exit 11
+            refresh_completion=1
+            complete -p sample >/dev/null 2>&1 && exit 13
+            binit completions list --plugin sample
+            binit completions enable --plugin sample || exit 14
+            complete -p sample || exit 15
+        '''
+        inputrc = self.root / 'inputrc'
+        self.env['INPUTRC'] = str(inputrc)
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode):
+                inputrc.write_text(f'set editing-mode {mode}\n')
+                result = self.shell(script)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('refreshed\nsample sample disabled\n', result.stdout)
+                self.assertIn('complete -o filenames -F __binit_provider_complete sample\n', result.stdout)
+
     def test_owned_prompt_segment_is_reported_and_removed_on_unload(self):
         self.plugin('sample', "refresh_sample() { binit_segment sample READY; }\nbinit_on prompt refresh_sample\n", 'load=startup')
         self.sync()

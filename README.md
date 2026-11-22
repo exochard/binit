@@ -25,15 +25,18 @@ later. Download the archive for your architecture and `SHA256SUMS` from the
 [latest release](https://github.com/exochard/binit/releases/latest), then:
 
 ```bash
-sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf "binit-0.1.1-linux-$(uname -m).tar.gz"
-cd "binit-0.1.1-linux-$(uname -m)"
-python3 -I install.py --binary "$PWD/bin/binit"
+archive="binit-0.1.1-linux-$(uname -m)"
+sha256sum -- "$archive.tar.gz" | grep -Fx -f - SHA256SUMS &&
+  tar -xzf "$archive.tar.gz" &&
+  (
+    cd "$archive" &&
+    python3 -I install.py --binary "$PWD/bin/binit"
+  )
 ```
 
 The installer puts `binit` in `~/.local/bin` and prints the line to add to
 `~/.bashrc`. It edits no startup file unless you pass `--rc-file`. Your system
-shell stays as it is. [Installation](docs/install.md) covers source builds and
+shell stays as it is. [Installation](docs/install.md) covers upgrades, source builds, and
 `--uninstall`.
 
 ## Declare plugins
@@ -67,6 +70,10 @@ move through it, `/` filters, Enter inserts and Esc cancels. As you type, the
 newest matching history entry appears as a dim suggestion; Right, Ctrl-F or
 End accepts it. Ctrl-R searches history and Enter inserts the match without
 running it. Ctrl-Backspace deletes the previous word.
+
+For a list of history matches below the line as you type, set
+`BINIT_HISTORY_MODE=live` before loading the history-search plugin.
+See [live history mode](docs/history.md) for its Tab behavior.
 
 <img alt="The completion menu shows full Git branch names. Filtering for sta selects feature/startup-cache, and git switch changes to that branch." src="docs/images/demo-branch-switch.gif" width="800">
 

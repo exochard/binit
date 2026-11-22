@@ -2,6 +2,8 @@ name: Check
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [dev]
 
 permissions:
   contents: read
@@ -12,14 +14,14 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["ubuntu-24.04","ubuntu-24.04-arm"]') }}
         bash:
           - version: '5.2'
             source: '5.2.15'
           - version: '5.3'
             source: '5.3'
         native: ['0', '1']
-        compiler: [gcc, clang]
+        compiler: ${{ fromJSON(github.event_name == 'pull_request' && '["gcc"]' || '["gcc","clang"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
@@ -69,7 +71,7 @@ jobs:
           set -o pipefail
           bash scripts/verify.bash 2>&1 | tee .cache/ci/evidence/verify.log
       - name: Exercise isolated parser safety experiment
-        if: matrix.bash.version == '5.3' && matrix.native == '1' && matrix.compiler == 'gcc'
+        if: github.event_name == 'workflow_dispatch' && matrix.bash.version == '5.3' && matrix.native == '1' && matrix.compiler == 'gcc'
         run: |
           set -o pipefail
           {
@@ -105,6 +107,7 @@ jobs:
           retention-days: 14
 
   ecosystem:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -168,6 +171,7 @@ jobs:
           retention-days: 14
 
   native-abi:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -206,6 +210,7 @@ jobs:
           retention-days: 14
 
   native-sanitizers:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:

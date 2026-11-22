@@ -1,6 +1,7 @@
 import re
 import codecs
 import importlib.util
+import json
 import os
 from pathlib import Path
 import select
@@ -26,7 +27,8 @@ MODULE = Path(os.environ.get("BINIT_TEST_MODULE", ROOT / "target/native-check/bi
 
 
 class Session:
-    def __init__(self, extra="", values=40, mode="emacs", rows=24, columns=80, framework=False, menu=True, replies=True):
+    def __init__(self, extra="", values=40, mode="emacs", rows=24, columns=80, framework=False, menu=True, replies=True,
+                 plugins=()):
         if not MODULE.is_file():
             raise RuntimeError("native test module missing; run bash scripts/verify.bash")
         self.temporary = tempfile.TemporaryDirectory(prefix=".scratch-menu-", dir=ROOT)
@@ -55,7 +57,9 @@ complete -F __lazy lazy_cmd
             (plugin / "plugin.toml").write_text("schema=1\nid='test'\nentry='plugin.bash'\nload='startup'\n")
             (plugin / "plugin.bash").write_text(setup + extra + "\n")
             config = self.directory / "config.toml"
-            config.write_text("schema=1\n[[plugins]]\npath='plugin'\n")
+            # Further plugins load after the setup plugin, so its settings are already in place.
+            config.write_text("schema=1\n[[plugins]]\npath='plugin'\n" +
+                              "".join(f"[[plugins]]\npath={json.dumps(str(path))}\n" for path in plugins))
             state = self.directory / "state"
             terminal.cli(state, "prepare", config)
         else:

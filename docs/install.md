@@ -7,10 +7,13 @@ Download the archive for `x86_64` or `aarch64` and `SHA256SUMS` from the
 [release](https://github.com/exochard/binit/releases/tag/v0.1.1).
 
 ```bash
-sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf "binit-0.1.1-linux-$(uname -m).tar.gz"
-cd "binit-0.1.1-linux-$(uname -m)"
-python3 -I install.py --binary "$PWD/bin/binit"
+archive="binit-0.1.1-linux-$(uname -m)"
+sha256sum -- "$archive.tar.gz" | grep -Fx -f - SHA256SUMS &&
+  tar -xzf "$archive.tar.gz" &&
+  (
+    cd "$archive" &&
+    python3 -I install.py --binary "$PWD/bin/binit"
+  )
 ```
 
 `--binary` points the installer at the archive's executable; without it the
@@ -55,6 +58,22 @@ prefix that directory, `~/.local/share/binit`, is also Binit's default state
 directory. Repeating the installation with unchanged inputs does nothing. An upgrade retains the
 previous executable as a timestamped backup. Startup-file and receipt write
 failures restore the prior installation. Backups remain available for review.
+
+## Upgrade an existing installation
+
+Download and verify the new release archive, then run its installer with the
+same prefix you used before. Include the same `--rc-file` if the installer
+manages your startup block. If you added the initialization line yourself,
+leave it in place.
+
+Run `binit apply` in an initialized Bash session to refresh the runtime and
+editor in the active generation while keeping the existing plugin snapshots.
+Open a new Bash session to use that generation. Run `command binit --version`
+to check the installed executable.
+
+`binit update` updates Git plugin revisions. After editing a local plugin,
+run `binit sync` to snapshot it and open a new Bash session to use it.
+`binit rollback` selects the previous plugin generation.
 
 ## Uninstall
 

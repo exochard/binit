@@ -62,6 +62,13 @@ covers every row and the colors are rewritten as one run, so the terminal keeps
 the line joined for selection. A suggestion that does not fit before the right
 margin is cut with an ellipsis; accepting it still inserts all of it.
 
+The autosuggestions plugin accepts an ordered
+`BINIT_SUGGESTION_STRATEGIES` list, such as `previous,history,completion`.
+Completion previews use registered isolated providers for unquoted input.
+They start during Readline idle time and cancel on pending input.
+`BINIT_SUGGESTION_ACCEPT=word` or `character` changes the forward key to
+partial acceptance. End still accepts the whole suggestion.
+
 Prompt width is measured on the last line of the prompt. Text inside `\[` and
 `\]` counts as zero width, so colors and title sequences are fine, and the
 `show-mode-in-prompt` string is included. The overlays are left to Readline when
@@ -77,6 +84,21 @@ in command position after `then`, `do`, `;`, `|` or `&&` is colored as a
 command, and an unterminated quote is shown as a string to the end of the line.
 Initial command aliases are rendered without colors because their expansion may
 change the parse context. Syntax highlighting is experimental.
+
+Set `BINIT_HIGHLIGHT_EXTENDED=1` for alias, function and builtin styles,
+literal command and path checks, options, parameter expansions, substitution
+and redirection delimiters, bracket pairing, and recognized Git subcommands.
+An initial alias to a simple command keeps its argument colors. When the alias
+contains shell syntax, only the alias name is colored. Name and path checks
+run after the next idle interval, for up to 24 literal tokens and at most
+one second per request. Input cancels the request. Results are style codes
+for the matching tokens, with no shell evaluation.
+
+The extended mode defaults to `0`. `BINIT_HIGHLIGHT_STYLES` defaults to an
+empty override list. Set terminal styles with a value such as
+`alias=96,path=4;32,bracket=7;35` and run
+`binit_complete editor highlighting on` to apply the settings. All syntax
+styles use the 4,096-byte input ceiling.
 
 The default native build contains no syntax grammar and enabling highlighting
 reports an error. To build the experiment, acquire the pinned grammar and

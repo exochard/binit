@@ -41,6 +41,23 @@ the third word of `npm run`, such as `npm run t`. It is a protocol example,
 not a replacement for complete npm command and option coverage. It requires
 Python 3 and runs no npm commands.
 
+## Manage a plugin's completions
+
+```bash
+binit completions list --plugin ID
+binit completions disable --plugin ID
+binit completions enable --plugin ID
+```
+
+The list shows each owned command with its plugin ID and state. The selector
+includes lazy stubs and isolated providers declared by the plugin. Enabling a
+stub leaves the plugin pending until completion first needs it.
+
+A plugin-wide change checks every binding first. If a command has a different
+definition, Binit reports that command and leaves the group as it was. These
+controls apply to the current shell. A fresh shell uses the generation's
+defaults.
+
 ## Input and output
 
 The provider inherits the request's working directory. Stdin is a sealed,

@@ -6,7 +6,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_path(BASH_INCLUDE_DIR config.h PATHS /usr/include/bash /usr/local/include/bash REQUIRED)
 find_path(READLINE_INCLUDE_DIR readline/readline.h REQUIRED)
-add_library(binit_complete MODULE completion.c menu.c effects.c layout.c worker.c)
+add_library(binit_complete MODULE completion.c menu.c effects.c layout.c worker.c prompt_worker.c)
 if(DEFINED ENV{BINIT_SYNTAX_SOURCE} AND NOT "$ENV{BINIT_SYNTAX_SOURCE}" STREQUAL "")
     set(SYNTAX_SOURCE "$ENV{BINIT_SYNTAX_SOURCE}")
     set(SYNTAX_RUNTIME "$ENV{BINIT_SYNTAX_RUNTIME}")

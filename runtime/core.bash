@@ -596,7 +596,8 @@ __binit_provider_register() {
         printf 'usage: binit completions register NAME PROGRAM [ARG...]\n' >&2
         return 2
     fi
-    local __binit_provider_name=$1 __binit_provider_current __binit_provider_index=0 __binit_provider_bytes=0 __binit_provider_value
+    local __binit_provider_name=$1 __binit_provider_current __binit_provider_binding
+    local __binit_provider_index=0 __binit_provider_bytes=0 __binit_provider_value
     local __binit_provider_plugin=${__binit_loading:-$__binit_callback_owner} LC_ALL=C
     shift
     local -a __binit_provider_argv=("$@")
@@ -628,10 +629,14 @@ __binit_provider_register() {
     fi
     if ! __binit_load_completion; then printf 'binit: isolated completion unavailable in this shell\n' >&2; return 1; fi
     builtin complete -o filenames -F __binit_provider_complete -- "$__binit_provider_name" || return 1
+    __binit_provider_binding=$( { builtin complete -p -- "$__binit_provider_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null ) || return 1
+    if [[ ${__binit_completion_disabled[$__binit_provider_name]-0} == 1 ]]; then
+        builtin complete -r -- "$__binit_provider_name" || return 1
+    fi
     __binit_provider_forget "$__binit_provider_name"
     __binit_provider_count[$__binit_provider_name]=${#__binit_provider_argv[@]}
     __binit_provider_owner[$__binit_provider_name]=$__binit_provider_plugin
-    __binit_provider_spec[$__binit_provider_name]=$( { builtin complete -p -- "$__binit_provider_name" 1>&"$__binit_definition_fd"; } {__binit_definition_fd}>&1 >/dev/null )
+    __binit_provider_spec[$__binit_provider_name]=$__binit_provider_binding
     for __binit_provider_value in "${__binit_provider_argv[@]}"; do
         __binit_provider_args[$__binit_provider_name:$__binit_provider_index]=$__binit_provider_value
         __binit_provider_index=$((__binit_provider_index + 1))
@@ -639,7 +644,8 @@ __binit_provider_register() {
     if [[ -n $__binit_provider_plugin ]]; then
         __binit_completion_spec[$__binit_provider_name]=${__binit_provider_spec[$__binit_provider_name]}
     fi
-    __binit_completion_disabled[$__binit_provider_name]=0
+    __binit_completion_disabled[$__binit_provider_name]=${__binit_completion_disabled[$__binit_provider_name]-0}
+    builtin binit_complete editor suggestions providers 2>/dev/null || :
 }
 
 __binit_provider_unregister() {
@@ -657,10 +663,104 @@ __binit_provider_unregister() {
     if [[ -n ${__binit_provider_owner[$__binit_provider_name]} ]]; then unset '__binit_completion_spec[$__binit_provider_name]'; fi
     __binit_provider_forget "$__binit_provider_name"
     unset '__binit_completion_disabled[$__binit_provider_name]'
+    builtin binit_complete editor suggestions providers 2>/dev/null || :
+}
+
+__binit_completion_usage() {
+    printf '%s\n' 'usage: binit completions [list [--plugin ID]]' \
+        '       binit completions enable|disable NAME' \
+        '       binit completions enable|disable --plugin ID' \
+        '       binit completions register NAME PROGRAM [ARG...]' \
+        '       binit completions unregister NAME'
+}
+
+__binit_completion_write() {
+    if [[ -n $2 ]]; then
+        builtin eval -- "builtin $2"
+    else
+        builtin complete -r -- "$1"
+    fi
+}
+
+__binit_completion_admin() {
+    local __binit_admin_action=${1-list} __binit_admin_name __binit_admin_spec __binit_admin_state __binit_admin_index
+    local -a __binit_admin_names=() __binit_admin_changed=()
+    local -A __binit_admin_before=() __binit_admin_after=()
+    case $__binit_admin_action:$# in
+        register:*) __binit_provider_register "${@:2}"; return ;;
+        unregister:*) __binit_provider_unregister "${@:2}"; return ;;
+        --help:1|-h:1) __binit_completion_usage; return ;;
+        list:0|list:1)
+            __binit_admin_names=("${!__binit_completion_owner[@]}")
+            for __binit_admin_name in "${!__binit_provider_count[@]}"; do
+                [[ -v __binit_completion_owner[$__binit_admin_name] ]] || __binit_admin_names+=("$__binit_admin_name")
+            done
+            ;;
+        list:3|enable:3|disable:3)
+            if [[ $2 != --plugin || ! $3 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ ]]; then __binit_completion_usage >&2; return 2; fi
+            if [[ ! -v __binit_state[$3] ]]; then printf 'binit: unknown plugin: %s\n' "$3" >&2; return 1; fi
+            for __binit_admin_name in "${!__binit_completion_owner[@]}"; do
+                [[ ${__binit_completion_owner[$__binit_admin_name]} != "$3" ]] || __binit_admin_names+=("$__binit_admin_name")
+            done
+            ;;
+        enable:2|disable:2)
+            if [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ( ! -v __binit_completion_owner[$2] && ! -v __binit_provider_count[$2] ) ]]; then
+                __binit_completion_usage >&2
+                return 2
+            fi
+            __binit_admin_names=("$2")
+            ;;
+        *) __binit_completion_usage >&2; return 2 ;;
+    esac
+
+    if [[ $__binit_admin_action == list ]]; then
+        for __binit_admin_name in "${__binit_admin_names[@]}"; do
+            __binit_admin_state=enabled
+            [[ ${__binit_completion_disabled[$__binit_admin_name]-0} == 0 ]] || __binit_admin_state=disabled
+            printf '%s %s %s\n' "$__binit_admin_name" "${__binit_completion_owner[$__binit_admin_name]--}" "$__binit_admin_state"
+        done | LC_ALL=C command sort
+        return
+    fi
+
+    # Check the full set before changing bindings. The disabled flags commit together.
+    for __binit_admin_name in "${__binit_admin_names[@]}"; do
+        __binit_admin_spec=${__binit_provider_spec[$__binit_admin_name]-${__binit_completion_spec[$__binit_admin_name]-}}
+        __binit_admin_before[$__binit_admin_name]=$( { builtin complete -p -- "$__binit_admin_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_admin_before[$__binit_admin_name]=''
+        if [[ -n ${__binit_admin_before[$__binit_admin_name]} && ${__binit_admin_before[$__binit_admin_name]} != "$__binit_admin_spec" ]]; then
+            printf 'binit: completion changed: %s\n' "$__binit_admin_name" >&2
+            return 1
+        fi
+        if [[ $__binit_admin_action == enable ]]; then
+            if [[ -z $__binit_admin_spec ]]; then printf 'binit: no owned completion: %s\n' "$__binit_admin_name" >&2; return 1; fi
+            __binit_admin_after[$__binit_admin_name]=$__binit_admin_spec
+        else
+            __binit_admin_after[$__binit_admin_name]=''
+        fi
+    done
+    for __binit_admin_name in "${__binit_admin_names[@]}"; do
+        [[ ${__binit_admin_before[$__binit_admin_name]} != "${__binit_admin_after[$__binit_admin_name]}" ]] || continue
+        if ! __binit_completion_write "$__binit_admin_name" "${__binit_admin_after[$__binit_admin_name]}"; then
+            for ((__binit_admin_index=${#__binit_admin_changed[@]} - 1; __binit_admin_index >= 0; __binit_admin_index--)); do
+                __binit_admin_name=${__binit_admin_changed[__binit_admin_index]}
+                __binit_completion_write "$__binit_admin_name" "${__binit_admin_before[$__binit_admin_name]}" ||
+                    printf 'binit: completion restore failed: %s\n' "$__binit_admin_name" >&2
+            done
+            return 1
+        fi
+        __binit_admin_changed+=("$__binit_admin_name")
+    done
+    __binit_admin_state=0
+    [[ $__binit_admin_action != disable ]] || __binit_admin_state=1
+    for __binit_admin_name in "${__binit_admin_names[@]}"; do
+        __binit_completion_disabled[$__binit_admin_name]=$__binit_admin_state
+    done
 }
 
 binit() {
-    if [[ ${1-} == profile ]]; then
+    if (( $# == 0 )) || [[ ${1-} =~ ^(--version|-V|--help|-h|help)$ ]] ||
+       { (( $# == 2 )) && [[ ${2-} =~ ^(--help|-h)$ && $1 != run ]]; }; then
+        command "$__binit_manager" "$@"
+    elif [[ ${1-} == profile ]]; then
         local id
         printf '%-20s %-12s %10s %10s %8s  %s\n' PLUGIN STATE LOAD_US HOOK_US CALLS REASON
         for id in "${__binit_ids[@]}"; do
@@ -708,37 +808,7 @@ binit() {
         if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then printf 'usage: binit unload ID\n' >&2; return 2; fi
         __binit_unload "$2"
     elif [[ ${1-} == completions ]]; then
-        local __binit_admin_name __binit_admin_current __binit_admin_spec __binit_admin_action=${2-list}
-        if [[ $__binit_admin_action == register ]]; then __binit_provider_register "${@:3}"; return "$?"; fi
-        if [[ $__binit_admin_action == unregister ]]; then __binit_provider_unregister "${@:3}"; return "$?"; fi
-        if [[ $__binit_admin_action == list && $# -le 2 ]]; then
-            for __binit_admin_name in "${!__binit_completion_owner[@]}"; do
-                printf '%s %s %s\n' "$__binit_admin_name" "${__binit_completion_owner[$__binit_admin_name]}" "$([[ ${__binit_completion_disabled[$__binit_admin_name]-0} == 1 ]] && printf disabled || printf enabled)"
-            done
-            for __binit_admin_name in "${!__binit_provider_count[@]}"; do
-                [[ -v __binit_completion_owner[$__binit_admin_name] ]] && continue
-                printf '%s - %s\n' "$__binit_admin_name" "$([[ ${__binit_completion_disabled[$__binit_admin_name]-0} == 1 ]] && printf disabled || printf enabled)"
-            done
-            return 0
-        fi
-        if (( $# != 3 )) || [[ ! $__binit_admin_action =~ ^(enable|disable)$ || ! $3 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ( ! -v __binit_completion_owner[$3] && ! -v __binit_provider_count[$3] ) ]]; then printf 'usage: binit completions list|enable|disable|register|unregister [NAME] [PROGRAM ARG...]\n' >&2; return 2; fi
-        __binit_admin_name=$3
-        __binit_admin_spec=${__binit_provider_spec[$__binit_admin_name]-${__binit_completion_spec[$__binit_admin_name]-}}
-        __binit_admin_current=$( { builtin complete -p -- "$__binit_admin_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_admin_current=''
-        if [[ $__binit_admin_action == disable ]]; then
-            if [[ -n $__binit_admin_current && $__binit_admin_current != "$__binit_admin_spec" ]]; then printf 'binit: completion changed: %s\n' "$__binit_admin_name" >&2; return 1; fi
-            [[ -z $__binit_admin_current ]] || builtin complete -r -- "$__binit_admin_name" || return 1
-            __binit_completion_disabled[$__binit_admin_name]=1
-        else
-            if [[ -n $__binit_admin_current ]]; then
-                [[ $__binit_admin_current == "$__binit_admin_spec" ]] || { printf 'binit: completion changed: %s\n' "$__binit_admin_name" >&2; return 1; }
-            elif [[ -n $__binit_admin_spec ]]; then
-                builtin eval -- "builtin $__binit_admin_spec" || return 1
-            else
-                printf 'binit: no owned completion: %s\n' "$__binit_admin_name" >&2; return 1
-            fi
-            __binit_completion_disabled[$__binit_admin_name]=0
-        fi
+        __binit_completion_admin "${@:2}"
     elif [[ ${1-} == load ]]; then
         if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then
             printf 'usage: binit load ID\n' >&2

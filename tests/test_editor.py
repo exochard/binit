@@ -1,12 +1,16 @@
 import fcntl
 import os
 import re
+import shlex
 import signal
 import struct
+import sys
 import termios
+import textwrap
+import time
 import unittest
 
-from test_completion import MODULE, Session
+from test_completion import MODULE, Session, terminal
 
 PROMPT = 'READY> '
 WRAPPED = 'echo ' + 'a' * 28 + '; ls -l | cat'
@@ -38,6 +42,197 @@ def foreground(session, offset, prompt_cells=len(PROMPT)):
 
 
 class EditorTests(unittest.TestCase):
+    def test_word_and_character_suggestions_keep_end_for_full_acceptance(self):
+        for mode, unit, expected in (('emacs', 'word', 'echo naïve'), ('vi', 'character', 'echo n')):
+            extra = (f"BINIT_SUGGESTION_ACCEPT={unit}\nhistory -s 'echo naïve example'\n"
+                     "binit_complete editor suggestions on\n")
+            with self.subTest(unit=unit), Session(extra=extra, mode=mode) as session:
+                session.send('echo ')
+                session.wait(lambda: 'naïve example' in session.text)
+                session.send(b'\x06')
+                self.assertEqual(session.capture()[1], expected)
+                session.send(b'\x1b[F')
+                self.assertEqual(session.capture()[1], 'echo naïve example')
+
+    def test_previous_command_strategy_prefers_the_matching_predecessor(self):
+        extra = ("BINIT_SUGGESTION_STRATEGIES=previous,history\n"
+                 "history -s 'echo context'\nhistory -s 'git cherry-pick'\n"
+                 "history -s 'echo unrelated'\nhistory -s 'git checkout'\n"
+                 "history -s 'echo context'\nbinit_complete editor suggestions on\n")
+        with Session(extra=extra) as session:
+            session.send('git ch')
+            session.wait(lambda: 'git cherry-pick' in session.text)
+            session.send(b'\x06')
+            self.assertEqual(session.capture()[1], 'git cherry-pick')
+
+    def test_completion_suggestion_uses_only_an_isolated_registered_provider(self):
+        python = shlex.quote(sys.executable)
+        provider = shlex.quote("import sys; sys.stdout.buffer.write(b'answer\\0')")
+        extra = "BINIT_SUGGESTION_STRATEGIES=completion\nbinit_complete editor suggestions on\n"
+        with Session(extra=extra, framework=True) as session:
+            session.send(f"binit completions register suggest_demo {python} -c {provider}\n")
+            session.pump(.15)
+            session.send('suggest_demo an')
+            session.wait(lambda: 'suggest_demo answer' in session.text)
+            session.send(b'\x06')
+            self.assertEqual(session.capture()[1], 'suggest_demo answer')
+
+    def test_suggestion_ignore_and_style_apply_under_the_input_limit(self):
+        extra = ("BINIT_SUGGESTION_LIMIT=6\nBINIT_SUGGESTION_IGNORE='echo secret*'\n"
+                 "BINIT_SUGGESTION_STYLE=underline\nhistory -s 'echo safe'\n"
+                 "history -s 'echo secret'\nbinit_complete editor suggestions on\n")
+        with Session(extra=extra) as session:
+            session.send('echo ')
+            session.wait(lambda: 'echo safe' in session.text)
+            self.assertIn(b'\x1b[4m', session.transcript)
+            session.send('sec')
+            session.pump(.12)
+            self.assertNotIn('echo secret', session.text)
+
+    def test_completion_suggestion_is_cancelled_by_typing(self):
+        python = shlex.quote(sys.executable)
+        provider = shlex.quote(
+            "import sys, time\nfrom pathlib import Path\n"
+            "if sys.stdin.buffer.read().split(b'\\0')[1].endswith(b' an'):\n"
+            "    Path('preview-started').touch()\n    time.sleep(.6)\n"
+            "    Path('preview-finished').touch()\n    sys.stdout.buffer.write(b'answer\\0')\n"
+        )
+        extra = "BINIT_SUGGESTION_STRATEGIES=completion\nbinit_complete editor suggestions on\n"
+        with Session(extra=extra, framework=True) as session:
+            session.send(f"binit completions register suggest_demo {python} -c {provider}\n")
+            session.pump(.15)
+            session.send('suggest_demo an')
+            session.wait(lambda: (session.directory / 'preview-started').exists())
+            session.send('x')
+            self.assertEqual(session.capture()[1], 'suggest_demo anx')
+            session.pump(.65)
+            self.assertFalse((session.directory / 'preview-finished').exists())
+
+    def test_prompt_worker_has_no_terminal_and_results_go_only_to_binit_names(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        start = f"binit_complete prompt-worker start {manager} /bin/sh -c"
+        probe = shlex.quote("if (: > /dev/tty) 2>/dev/null; then printf tty; else printf none; fi")
+        with Session() as session:
+            # A worker cannot reach the user's terminal, so it cannot write escapes to it or inject keys.
+            session.send(f"{start} {probe}; binit_complete prompt-worker wait 500; __binit_r=; "
+                         "binit_complete prompt-worker take __binit_r; printf 'TTY:%s\\n' \"$__binit_r\"\n")
+            session.wait(lambda: b"\rTTY:" in session.transcript)
+            self.assertIn(b"\rTTY:none", session.transcript)
+            # A result never lands in a variable the shell interprets, and the refused take frees the slot.
+            session.send(f"saved=$PS1; {start} 'printf x'; binit_complete prompt-worker wait 500; "
+                         "binit_complete prompt-worker take PS1; s=$?; [[ $PS1 == \"$saved\" ]] && same=1; "
+                         f"{start} 'printf y'; t=$?; printf 'NAME:%s:%s:%s\\n' \"$s\" \"$same\" \"$t\"\n")
+            session.wait(lambda: b"\rNAME:" in session.transcript)
+            self.assertIn(b"\rNAME:2:1:0", session.transcript)
+
+    def test_prompt_worker_cannot_open_a_network_socket(self):
+        executable = shlex.quote(sys.executable)
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        program = shlex.quote(
+            "import socket\n"
+            "try:\n"
+            "    sock = socket.socket()\n"
+            "except PermissionError:\n"
+            "    print('offline', end='')\n"
+            "else:\n"
+            "    sock.close()\n"
+            "    print('online', end='')\n"
+        )
+        with Session(extra=f"binit_complete prompt-worker start {manager} {executable} -c {program}\n") as session:
+            session.pump(.3)
+            session.send("__binit_result=; binit_complete prompt-worker take __binit_result; result=$__binit_result; printf 'WORKER:%s\\n' \"$result\"\n")
+            session.wait(lambda: b"\rWORKER:" in session.transcript)
+            self.assertIn(b"\rWORKER:offline", session.transcript)
+
+    def test_prompt_worker_is_cancelled_by_input_in_both_editing_modes(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        worker = "touch started; (sleep .6; touch late) & wait"
+        command = f"binit_complete prompt-worker start {manager} /bin/bash -c {shlex.quote(worker)}"
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode), Session(extra=command + "\n", mode=mode) as session:
+                session.wait(lambda: (session.directory / "started").exists(), seconds=.5)
+                session.send("witness")
+                self.assertEqual(session.capture()[1], "witness")
+                session.pump(.7)
+                self.assertFalse((session.directory / "late").exists())
+
+    def test_prompt_worker_wait_is_bounded_and_keeps_a_slow_worker(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        start = f"binit_complete prompt-worker start {manager} /bin/bash -c"
+        with Session() as session:
+            session.send(f"{start} 'printf fast'; binit_complete prompt-worker wait 500; s=$?; __binit_r=; "
+                         "binit_complete prompt-worker take __binit_r; r=$__binit_r; printf 'FAST:%s:%s\\n' \"$s\" \"$r\"\n")
+            session.wait(lambda: b"\rFAST:" in session.transcript)
+            self.assertIn(b"\rFAST:0:fast", session.transcript)
+            # A timed-out wait leaves the worker running for a later prompt.
+            session.send(f"{start} 'sleep .4; printf slow'; binit_complete prompt-worker wait 50; printf 'SLOW:%s\\n' $?\n")
+            session.wait(lambda: b"\rSLOW:" in session.transcript)
+            self.assertIn(b"\rSLOW:1", session.transcript)
+            session.pump(.6)
+            session.send("__binit_r=; binit_complete prompt-worker take __binit_r; r=$__binit_r; printf 'LATE:%s\\n' \"$r\"\n")
+            session.wait(lambda: b"\rLATE:" in session.transcript)
+            self.assertIn(b"\rLATE:slow", session.transcript)
+            for argument in ("abc", "1001", "", "5x"):
+                session.send(f"binit_complete prompt-worker wait '{argument}'; printf 'USAGE:%s\\n' $?\n")
+                session.wait(lambda: b"\rUSAGE:" in session.transcript)
+                self.assertIn(b"\rUSAGE:2", session.transcript)
+                session.transcript.clear()
+            # A request cancelled just before the next start, as when a command is typed quickly, still
+            # lets that start run once its group has stopped.
+            session.send(f"{start} 'sleep .4; printf old'; __binit_r=; binit_complete prompt-worker take __binit_r; "
+                         f"{start} 'printf new'; s=$?; binit_complete prompt-worker wait 500; "
+                         "binit_complete prompt-worker take __binit_r; printf 'NEXT:%s:%s\\n' \"$s\" \"$__binit_r\"\n")
+            session.wait(lambda: b"\rNEXT:" in session.transcript)
+            self.assertIn(b"\rNEXT:0:new", session.transcript)
+            # The terminal settings a command sees are the same after a wait.
+            session.send(f"a=$(stty -g); {start} 'sleep .3'; binit_complete prompt-worker wait 100; "
+                         "b=$(stty -g); [[ $a == \"$b\" ]] && printf 'TTY:same\\n' || printf 'TTY:changed\\n'\n")
+            session.wait(lambda: b"\rTTY:" in session.transcript)
+            self.assertIn(b"\rTTY:same", session.transcript)
+        # A key typed during a prompt hook's wait ends it and reaches Readline unchanged, including keys the
+        # terminal would otherwise consume while it is still in canonical mode.
+        hook = (f"__hook() {{ {start} 'sleep 2'; binit_complete prompt-worker wait 1000; }}\n"
+                "history -s 'echo typed-ahead-witness'\n")
+        for mode in ("emacs", "vi"):
+            for key, shown in ((b"x", "READY> x"), (b"\x12", "(reverse-i-search)")):
+                with self.subTest(mode=mode, key=key), Session(extra=hook, mode=mode) as session:
+                    settle(session)
+                    session.send("PROMPT_COMMAND=__hook\n")
+                    session.pump(.3)
+                    started = time.monotonic()
+                    session.send(key)
+                    session.wait(lambda: shown in session.text, seconds=3)
+                    self.assertLess(time.monotonic() - started, .6)
+                    self.assertNotIn("^R", session.text)
+        # Return typed during the wait reaches Readline as Ctrl-M, as it does at an idle prompt.
+        distinct = "bind -m emacs '\"\\C-j\": \"ctrl-j\"'; bind -m vi-insert '\"\\C-j\": \"ctrl-j\"'\n"
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode, key=b"\r"), Session(extra=hook + distinct, mode=mode) as session:
+                settle(session)
+                session.send("PROMPT_COMMAND=__hook\r")
+                session.pump(.3)
+                prompts = session.text.count("READY>")
+                session.send(b"\r")
+                session.wait(lambda: session.text.count("READY>") > prompts, seconds=3)
+                self.assertNotIn("ctrl-j", session.text)
+        # Typed input ends the wait early.
+        with Session() as session:
+            session.send(f"{start} 'sleep 2'; s=$EPOCHREALTIME; binit_complete prompt-worker wait 1000; "
+                         "e=$EPOCHREALTIME; printf 'WAITED:%s\\n' $(( (${e/./} - ${s/./}) / 1000 ))\nx")
+            session.wait(lambda: b"\rWAITED:" in session.transcript)
+            waited = int(bytes(session.transcript).split(b"\rWAITED:")[1].split(b"\r")[0])
+            self.assertLess(waited, 500)
+
+    def test_prompt_worker_rejects_output_over_its_limit(self):
+        executable = shlex.quote(sys.executable)
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        program = shlex.quote("print('x' * 513, end='')")
+        with Session(extra=f"binit_complete prompt-worker start {manager} {executable} -c {program}\n") as session:
+            session.pump(.3)
+            session.send("__binit_result=empty; binit_complete prompt-worker take __binit_result; result=$__binit_result; printf 'WORKER:%s\\n' \"$result\"\n")
+            session.wait(lambda: b"\rWORKER:" in session.transcript)
+            self.assertIn(b"\rWORKER:empty", session.transcript)
+
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_highlighting_never_executes_input_and_preserves_line(self):
         with Session(extra='binit_complete editor highlighting on\n') as session:
@@ -49,6 +244,175 @@ class EditorTests(unittest.TestCase):
             self.assertFalse(marker.exists())
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_styles_shell_tokens_and_git_arguments(self):
+        extra = (
+            "BINIT_HIGHLIGHT_EXTENDED=1\n"
+            "BINIT_HIGHLIGHT_STYLES='alias=91,function=92,builtin=93,option=94,"
+            "git=95,redirection=96,substitution=97,expansion=33;4'\n"
+            "alias entry='if true; then'\n"
+            "operation() { :; }\n"
+            "binit_complete editor highlighting on\n"
+        )
+        with Session(extra=extra) as session:
+            for line, painted in (
+                ('entry', b'\x1b[91mentry'),
+                ('operation', b'\x1b[92moperation'),
+                ('echo', b'\x1b[93mecho'),
+                ('git -C . status --short', b'\x1b[95mstatus'),
+                ('printf foo > ./missing', b'\x1b[96m>'),
+                ('echo "$(echo hi) ${TERM:-none}"', b'\x1b[97m$('),
+            ):
+                with self.subTest(line=line):
+                    session.transcript.clear()
+                    session.send(line)
+                    session.wait(lambda: painted in session.transcript)
+                    self.assertEqual(session.capture()[1], line)
+                    session.send(b'\x03')
+                    session.pump(.06)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_resolves_external_commands_and_literal_paths_on_idle(self):
+        extra = (
+            "BINIT_HIGHLIGHT_EXTENDED=1\n"
+            "BINIT_HIGHLIGHT_STYLES='external=92,missing=91,path=94,missing-path=95'\n"
+            "binit_complete editor highlighting on\n"
+        )
+        for mode in ('emacs', 'vi'):
+            for line, painted in (
+                    ('ls', b'\x1b[92mls'),
+                    ('binit-no-such-command-781', b'\x1b[91mbinit-no-such-command-781'),
+                    ('echo ./present ./absent', b'\x1b[95m./absent')):
+                with self.subTest(line=line, mode=mode), Session(extra=extra, framework=True, mode=mode) as session:
+                    (session.directory / 'present').touch()
+                    session.send(line)
+                    session.wait(lambda: painted in session.transcript)
+                    if 'present' in line:
+                        self.assertIn(b'\x1b[94m./present', session.transcript)
+                    self.assertEqual(session.capture()[1], line)
+                    session.send(b'\x03')
+                    session.wait(lambda: session.screen.cursor.x == len(PROMPT) and
+                                 session.screen.display[session.screen.cursor.y].rstrip() == PROMPT.rstrip())
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_keeps_a_word_color_while_it_is_typed(self):
+        # Each key repaints a word with its last resolved color until its own lookup answers, so a
+        # missing command stays red as it grows and a word that becomes valid changes color once.
+        extra = (
+            "BINIT_HIGHLIGHT_EXTENDED=1\n"
+            "BINIT_HIGHLIGHT_STYLES='command=96,external=92,missing=91'\n"
+            "binit_complete editor highlighting on\n"
+        )
+        for mode in ('emacs', 'vi'):
+            for typed, more, painted in (('binit-no-such', '-command-783', b'\x1b[91mbinit-no-such-command-783'),
+                                         ('sha256su', 'm', b'\x1b[92msha256sum')):
+                with self.subTest(mode=mode, word=typed + more), Session(extra=extra, framework=True, mode=mode) as session:
+                    session.send(typed)
+                    session.wait(lambda: b'\x1b[91m' + typed.encode() in session.transcript)
+                    session.transcript.clear()
+                    for key in more:
+                        session.send(key)
+                        session.pump(.03)
+                    session.wait(lambda: painted in session.transcript)
+                    self.assertNotIn(b'\x1b[96m', session.transcript)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_starts_a_different_word_unresolved(self):
+        # A word that replaces another at the same place, as after recalling history, must not borrow
+        # the old word's color.
+        extra = ("BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='external=92,missing=91'\n"
+                 "history -s 'ls'\nbinit_complete editor highlighting on\n")
+        for mode, recall in (('emacs', b'\x10'), ('vi', b'\x1b[A'), ('emacs', b'\x15ls'), ('vi', b'\x15ls')):
+            with self.subTest(mode=mode, recall=recall), Session(extra=extra, framework=True, mode=mode) as session:
+                session.send('binit-no-such-cmd')
+                session.wait(lambda: b'\x1b[91mbinit-no-such-cmd' in session.transcript)
+                session.transcript.clear()
+                session.send(recall)
+                session.wait(lambda: b'\x1b[92mls' in session.transcript)
+                self.assertNotIn(b'\x1b[91ml', session.transcript)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_interrupt_right_after_a_lookup_answer_keeps_the_shell(self):
+        # Ctrl-C runs Readline's signal handling inside its key loop; a hook removed there would be called
+        # as a null pointer when the loop resumes.
+        extra = ("BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='missing=91,missing-path=95'\n"
+                 "binit_complete editor highlighting on\n")
+        for mode in ('emacs', 'vi'):
+            for line, painted in (('binit-no-such-cmd', b'\x1b[91mbinit-no-such-cmd'),
+                                  ('echo ./absent', b'\x1b[95m./absent')):
+                with self.subTest(mode=mode, line=line), Session(extra=extra, framework=True, mode=mode) as session:
+                    settle(session)
+                    session.send(line)
+                    session.wait(lambda: painted in session.transcript)
+                    session.send(b'\x03')
+                    session.pump(.2)
+                    session.send("echo still-$((40 + 2))\n")
+                    session.wait(lambda: 'still-42' in session.text)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_answers_within_a_few_frames(self):
+        # Readline's idle hook runs every 0.1 s; a pending lookup polls faster, so the provisional
+        # color of a new word is replaced almost at once.
+        extra = ("BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='missing=91'\n"
+                 "binit_complete editor highlighting on\n")
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, framework=True, mode=mode) as session:
+                settle(session)
+                delays = []
+                for attempt in range(5):
+                    word = f'binit-no-such-{attempt}'
+                    session.transcript.clear()
+                    started = time.monotonic()
+                    session.send(word)
+                    # A tight loop: Session.wait checks every 20 ms and keeps reading after a match.
+                    while b'\x1b[91m' + word.encode() not in session.transcript and time.monotonic() - started < 2:
+                        session.pump(.002)
+                    delays.append(time.monotonic() - started)
+                    session.send(b'\x03')
+                    session.wait(lambda: session.screen.cursor.x == len(PROMPT) and
+                                 session.screen.display[session.screen.cursor.y].rstrip() == PROMPT.rstrip())
+                self.assertLess(sorted(delays)[2], .06, delays)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_cancels_path_lookup_on_typing(self):
+        fixture = textwrap.dedent("""
+            from pathlib import Path
+            import socket
+            connection = socket.socket(fileno=0)
+            connection.settimeout(4)
+            source = connection.makefile("rb")
+            size = int.from_bytes(source.read(2), "little")
+            source.read(size)
+            Path("lookup-started").touch()
+            if not source.read(1):
+                Path("lookup-cancelled").touch()
+        """)
+        extra = ('__binit_manager="$PWD/path-worker"\nBINIT_HIGHLIGHT_EXTENDED=1\n'
+                 'binit_complete editor highlighting on\n')
+        for mode in ('emacs', 'vi'):
+            for key, expected in ((b'd', 'echo ./food'), (b'\x03', '')):
+                with self.subTest(mode=mode, key=key), Session(extra=extra, mode=mode) as session:
+                    worker = session.directory / 'path-worker'
+                    worker.write_text(f'#!{sys.executable}\n' + fixture)
+                    worker.chmod(0o700)
+                    session.send('echo ./foo')
+                    session.wait(lambda: (session.directory / 'lookup-started').exists())
+                    session.send(key)
+                    session.wait(lambda: (session.directory / 'lookup-cancelled').exists())
+                    self.assertEqual(session.capture()[1], expected)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_matches_brackets_and_preserves_long_lines(self):
+        extra = "BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='bracket=7;95'\nbinit_complete editor highlighting on\n"
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode, rows=60, columns=100) as session:
+                settle(session)
+                line = "echo '" + "x" * 3960 + "]' && [[ -n x ]]"
+                session.send(line)
+                session.wait(lambda: b'\x1b[7;95m[[' in session.transcript)
+                self.assertIn(b'\x1b[7;95m]]', session.transcript)
+                self.assertEqual(session.capture()[1], line)
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_alias_command_is_left_uncolored(self):
         with Session(extra="alias magic='if true; then'\nbinit_complete editor highlighting on\n") as session:
             session.send('magi')
@@ -58,6 +422,28 @@ class EditorTests(unittest.TestCase):
             session.pump(.2)
             self.assertEqual(session.capture()[1], 'magic')
             self.assertNotIn('\x1b[36m', bytes(session.transcript).decode(errors='replace'))
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_extended_highlighting_keeps_literal_paths_after_simple_aliases(self):
+        manager = shlex.quote(str(terminal.BINARY.resolve()))
+        extra = (f'__binit_manager={manager}\n'
+                 "alias ls='eza --color=auto --git'\nalias ll='ls -lah'\n"
+                 "alias branch='if true; then'\nalias complex='branch'\n"
+                 "BINIT_HIGHLIGHT_EXTENDED=1\nBINIT_HIGHLIGHT_STYLES='alias=93,path=92,option=94'\n"
+                 "binit_complete editor highlighting on\n")
+        for mode in ('emacs', 'vi'):
+            for alias, simple in (('ls', True), ('ll', True), ('complex', False)):
+                with self.subTest(mode=mode, alias=alias), Session(extra=extra, mode=mode) as session:
+                    (session.directory / 'fixture').touch()
+                    session.send(f'{alias} --all ./fixture')
+                    session.wait(lambda: b'\x1b[93m' + alias.encode() in session.transcript)
+                    if simple:
+                        session.wait(lambda: b'\x1b[92m./fixture' in session.transcript)
+                        self.assertIn(b'\x1b[94m--all', session.transcript)
+                    else:
+                        session.pump(.2)
+                        self.assertNotIn(b'\x1b[92m./fixture', session.transcript)
+                        self.assertNotIn(b'\x1b[94m--all', session.transcript)
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_suggestions_continue_after_highlighting_is_disabled(self):
@@ -185,6 +571,47 @@ class EditorTests(unittest.TestCase):
             session.pump(.4)
             session.send('binit_redisplay_test count\n')
             session.wait(lambda: bool(re.search(r'EVENT_COUNT:[1-9][0-9]*', session.text)))
+
+    def test_poll_off_from_key_binding_stops_poll_only_dispatch(self):
+        fixture = MODULE.parent / 'binit_redisplay_test.so'
+        if not fixture.is_file():
+            self.skipTest('native redisplay fixture not built')
+        extra = (f"enable -f {shlex.quote(str(fixture))} binit_redisplay_test\n"
+                 "__binit_dispatch_pending=0\n"
+                 "__binit_event_dispatch() { : > .poll-marker; __binit_dispatch_pending=0; __binit_event_changed=0; }\n"
+                 "__stop_poll() { binit_complete poll-off; __binit_dispatch_pending=1; : > .poll-off; }\n"
+                 "bind -x '\"\\C-x\\C-p\": __stop_poll'\n"
+                 "binit_complete poll\n")
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                marker = session.directory / '.poll-marker'
+                session.send(b'\x18\x10')
+                session.wait((session.directory / '.poll-off').exists)
+                session.pump(.4)
+                self.assertFalse(marker.exists())
+                start = len(session.transcript)
+                session.send(b'\x03')
+                session.wait(lambda: b'READY> ' in session.transcript[start:])
+                session.send('binit_redisplay_test event-status\n')
+                session.wait(lambda: b'\rEVENT_HOOK:unset' in session.transcript)
+                session.send('binit_complete poll\n')
+                session.wait(marker.exists)
+
+    def test_contextual_history_toggles_beneath_a_foreign_pre_input_hook(self):
+        fixture = MODULE.parent / 'binit_redisplay_test.so'
+        if not fixture.is_file():
+            self.skipTest('native redisplay fixture not built')
+        extra = (f"enable -f {shlex.quote(str(fixture))} binit_redisplay_test\n"
+                 "BINIT_HISTORY_CONTEXT=1\nBINIT_SUGGESTION_STRATEGIES=history\n"
+                 "binit_complete editor history on\n"
+                 "__replace_poll() { binit_complete poll-off; binit_redisplay_test pre-input; }\n"
+                 "bind -x '\"\\C-x\\C-p\": __replace_poll'\n"
+                 "binit_complete poll\n")
+        with Session(extra=extra) as session:
+            session.send(b'\x18\x10\n')
+            session.send('binit_complete editor history off\nbinit_complete editor history on\n')
+            session.send('binit_redisplay_test pre-input-count\n')
+            session.wait(lambda: b'\rPRE_INPUT_COUNT:3\r\n' in session.transcript)
 
     def test_idle_poll_is_rate_limited(self):
         extra = ("__binit_dispatch_pending=1\n"
@@ -341,6 +768,36 @@ class EditorTests(unittest.TestCase):
                 # end the terminal's soft wrap and copying the command would insert a line break.
                 plain = re.sub(r'\x1b\[[0-9;]*m', '', bytes(session.transcript).decode(errors='replace'))
                 self.assertTrue(plain[plain.rindex('echo '):].startswith(WRAPPED), plain[-200:])
+
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
+    def test_pasted_lines_are_colored_where_readline_draws_them(self):
+        # Readline starts a row at each newline and pads a tab with spaces to the next multiple of eight,
+        # continuing on the next row when the tab crosses the margin.
+        full = 'echo ' + 'c' * 34 + ';'
+        cases = (
+            (40, '\n'.join(('echo one', '\tls | cat', full, 'echo four')),
+             ['READY> echo one', '        ls | cat', full, '', 'echo four'],
+             [(0, 7), (1, 8), (1, 13), (2, 0), (4, 0)], (4, 9)),
+            (42, 'true\n' + full + '\tls',
+             ['READY> true', full, '      ls'], [(0, 7), (1, 0), (2, 6)], (2, 8)),
+        )
+        for mode in ('emacs', 'vi'):
+            for columns, pasted, rows, commands, cursor in cases:
+                with self.subTest(mode=mode, columns=columns), Session(
+                        extra='binit_complete editor highlighting on\n', mode=mode, columns=columns) as session:
+                    settle(session)
+                    start = prompt_row(session)
+                    session.send(b'\x1b[200~' + pasted.encode() + b'\x1b[201~')
+                    row, column = commands[-1]
+                    session.wait(lambda: session.screen.buffer[start + row][column].fg != 'default')
+                    color = session.screen.buffer[start][7].fg
+                    self.assertNotEqual(color, 'default')
+                    for row, column in commands:
+                        self.assertEqual(session.screen.buffer[start + row][column].fg, color, (row, column))
+                    shown = [line.rstrip() for line in session.screen.display[start:start + len(rows)]]
+                    self.assertEqual(shown, rows)
+                    self.assertEqual((session.screen.cursor.y - start, session.screen.cursor.x), cursor)
+                    self.assertEqual(session.capture()[1], pasted)
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_multiline_prompt_is_highlighted(self):

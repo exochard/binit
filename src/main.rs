@@ -14,6 +14,7 @@ mod diagnose;
 mod engine;
 mod extensions;
 mod git;
+mod help;
 mod hooks;
 mod init_stamp;
 mod lazy_runtime;
@@ -98,6 +99,12 @@ struct Project {
     label: String,
     #[serde(default)]
     env: BTreeMap<String, String>,
+    #[serde(default)]
+    path_prepend: Vec<String>,
+    #[serde(default)]
+    python_venv: Option<String>,
+    #[serde(default)]
+    node_bin: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -814,6 +821,27 @@ fn validate_project(project: &Project) -> Result<()> {
     {
         return Err("invalid project label or too many variables".into());
     }
+    if project.path_prepend.len() > 16
+        || (project.python_venv.is_some() && project.env.contains_key("VIRTUAL_ENV"))
+    {
+        return Err("too many path entries or VIRTUAL_ENV conflicts with python_venv".into());
+    }
+    for name in project
+        .path_prepend
+        .iter()
+        .chain(project.python_venv.iter())
+    {
+        if name.is_empty()
+            || name.len() > 4096
+            || name.contains(':')
+            || name.chars().any(char::is_control)
+            || Path::new(name)
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
+        {
+            return Err("project helper paths must stay relative to the profile directory".into());
+        }
+    }
     for (key, value) in &project.env {
         let safe_key = !key.is_empty()
             && key.len() <= 64
@@ -909,10 +937,40 @@ fn trust(state: &Path, directory: &Path, reviewed: Option<&str>) -> Result<()> {
     for (key, value) in &project.env {
         println!("env    {key}={}", value.escape_default());
     }
+    for directory in &project.path_prepend {
+        println!("path   {}", directory.escape_default());
+    }
+    if let Some(venv) = &project.python_venv {
+        println!("venv   {}", venv.escape_default());
+    }
+    if project.node_bin {
+        println!("node   node_modules/.bin");
+    }
     Ok(())
 }
-fn project(state: &Path, directory: &Path) -> Result<()> {
-    let (path, bytes, project) = read_project(directory)?;
+
+fn project_helper_directory(root: &Path, path: &Path) -> Result<String> {
+    let path = fs::canonicalize(root.join(path))?;
+    if !path.is_dir() || !path.starts_with(root) {
+        return Err("project helper directory leaves the trusted profile directory".into());
+    }
+    let name = path.to_str().ok_or("project helper path must be UTF-8")?;
+    if name.contains(':') || name.chars().any(char::is_control) {
+        return Err("project helper path contains a colon or control character".into());
+    }
+    Ok(name.to_owned())
+}
+
+fn project(state: &Path, directory: &Path, framed: bool) -> Result<()> {
+    let directory = fs::canonicalize(directory)?;
+    let root = directory.as_path();
+    let mut out = std::io::stdout().lock();
+    if framed {
+        let file = root.join(PROJECT_FILE);
+        let name = file.to_str().ok_or("project path must be UTF-8")?;
+        write!(out, ":profile\0{name}\0")?;
+    }
+    let (path, bytes, project) = read_project(root)?;
     let name = path.to_str().ok_or("project path must be UTF-8")?;
     private_dir(state)?;
     private_dir(&state.join("trust"))?;
@@ -924,10 +982,41 @@ fn project(state: &Path, directory: &Path) -> Result<()> {
     if record.path != name || record.sha256 != hash(&bytes) {
         return Err("project content changed since it was trusted".into());
     }
-    let mut out = std::io::stdout().lock();
+    if !framed
+        && (!project.path_prepend.is_empty() || project.python_venv.is_some() || project.node_bin)
+    {
+        return Err("project helpers require --framed".into());
+    }
+    let mut directories = Vec::new();
+    for name in &project.path_prepend {
+        directories.push(project_helper_directory(root, Path::new(name))?);
+    }
+    let venv = project
+        .python_venv
+        .as_ref()
+        .map(|name| {
+            let root_path = Path::new(name);
+            let environment = project_helper_directory(root, root_path)?;
+            directories.push(project_helper_directory(root, &root_path.join("bin"))?);
+            Ok::<_, Box<dyn std::error::Error>>(environment)
+        })
+        .transpose()?;
+    let node = Path::new("node_modules/.bin");
+    if project.node_bin && root.join(node).try_exists()? {
+        directories.push(project_helper_directory(root, node)?);
+    }
     write!(out, ":label\0{}\0", project.label)?;
     for (key, value) in project.env {
         write!(out, "{key}\0{value}\0")?;
+    }
+    if let Some(venv) = venv {
+        write!(out, "VIRTUAL_ENV\0{venv}\0")?;
+    }
+    for name in directories {
+        write!(out, ":path\0{name}\0")?;
+    }
+    if framed {
+        out.write_all(b":end\0ok\0")?;
     }
     Ok(())
 }
@@ -954,11 +1043,23 @@ fn default_state() -> Result<PathBuf> {
 
 fn run() -> Result<()> {
     let raw_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if help::handle(&raw_args)? {
+        return Ok(());
+    }
     if raw_args
         .first()
         .is_some_and(|arg| arg == "__completion-worker")
     {
         return completion_worker::run(&raw_args[1..]);
+    }
+    if raw_args.first().is_some_and(|arg| arg == "__prompt-worker") {
+        return process::run_prompt_worker(&raw_args[1..]);
+    }
+    if raw_args.len() == 1 && raw_args[0] == "__highlight-worker" {
+        return process::run_highlight_worker();
+    }
+    if raw_args.len() == 1 && raw_args[0] == "__highlight-paths" {
+        return process::resolve_highlight_paths();
     }
     if raw_args.first().is_some_and(|arg| arg == "run") {
         return engine::run(&raw_args[1..]);
@@ -971,12 +1072,6 @@ fn run() -> Result<()> {
         && (flag == "--version" || flag == "-V")
     {
         println!("binit {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-    if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!(
-            "usage: binit COMMAND [ARG] [--state DIRECTORY]\n       binit --version\n       binit run [--engine BASH] [--] SCRIPT [ARG...]\n\nstate: --state DIRECTORY, else $BINIT_STATE, else $XDG_DATA_HOME/binit,\n       else $HOME/.local/share/binit\n\n  run SCRIPT [ARG...]    Run a script with an explicitly selected Bash\n  releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]  Discover release assets\n  sync [--jobs N]   Build the plugin lines declared in the shell startup file\n  declare          Store plugin lines read from standard input (used at the first prompt)\n  add PATH [--disabled]   Install a local package or declaration\n  enable ID              Enable a plugin for the next shell\n  disable ID             Disable a plugin for the next shell\n  remove ID              Remove a plugin from the next shell\n  update ID [PATH]        Snapshot reviewed source changes\n  update [--check] [--jobs N] [ID...]  Move Git plugins to the commit their ver names\n  extension ID [ARG...]  Run a verified optional manager extension\n  plugins                List installed and disabled plugins\n  inspect ID             Show source, dependencies and entry digest\n  shell                  Open Bash with the verified plan\n  apply                  Refresh the runtime using pinned plugins\n  diagnose PLAN [--json] [--no-trace]  Check and diagnose reviewed fixtures\n  candidate prepare CONFIG  Prepare a generation without selecting it\n  candidate check PLAN       Check the candidate with reviewed fixtures\n  candidate select [--base GEN --generation GEN --receipt SHA256]  Select a candidate with passing current evidence\n  candidate status [--json]  Inspect the prepared candidate\n  prepare CONFIG   Snapshot local plugins and activate a loading plan\n  init             Verify the plan and print its Bash source command\n  status           Verify and list the active plugins\n  rollback         Activate the previous verified plan for new shells\n  trust DIRECTORY [--sha256 HEX]  Approve .binit-project.toml content and show it\n  project DIRECTORY  Emit trusted project data (NUL-delimited)\n\nInside an initialized shell: binit plugin SOURCE [KEY=VALUE...] (load=startup|prompt|wait|command|completion), binit sync, binit profile, binit load ID, binit completion [on|off|status]\nRecovery: BINIT_SAFE=1 bash --rcfile PATH/TO/init.bash -i"
-        );
         return Ok(());
     }
     if args.first().is_some_and(|s| s == "releases") {
@@ -1100,7 +1195,8 @@ fn run() -> Result<()> {
         ("trust", 4) if args[2] == "--sha256" => {
             trust(&state, Path::new(&args[1]), Some(&args[3]))?
         }
-        ("project", 2) => project(&state, Path::new(&args[1]))?,
+        ("project", 2) => project(&state, Path::new(&args[1]), false)?,
+        ("project", 3) if args[2] == "--framed" => project(&state, Path::new(&args[1]), true)?,
         _ => return Err("unknown command or argument count; see binit --help".into()),
     }
     Ok(())

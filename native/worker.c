@@ -20,6 +20,7 @@
 #include "shell.h"
 #include "variables.h"
 #include "array.h"
+#include "assoc.h"
 #include "unwind_prot.h"
 #include "quit.h"
 #include <readline/readline.h>
@@ -106,6 +107,33 @@ static bool completion_context(struct request *request)
     return true;
 }
 
+static bool preview_context(struct request *request)
+{
+    char *copy = strdup(request->line);
+    if (!copy) return false;
+    char *words[64];
+    size_t count = 0;
+    char *save = NULL;
+    for (char *word = strtok_r(copy, " ", &save); word; word = strtok_r(NULL, " ", &save)) {
+        if (count >= 63) {free(copy); return false;}
+        words[count++] = word;
+    }
+    if (rl_end > 0 && request->line[rl_end - 1] == ' ') words[count++] = "";
+    if (count < 2) {free(copy); return false;}
+    request->context = malloc(CONTEXT_LIMIT);
+    char position[24], number[24], current[24];
+    snprintf(position, sizeof position, "%d", rl_point);
+    snprintf(number, sizeof number, "%zu", count);
+    snprintf(current, sizeof current, "%zu", count - 1);
+    const char *fields[] = {"binit-completion-v1", request->line, position, current, "9", "9",
+                             get_string_value("COMP_WORDBREAKS"), number};
+    bool ok = request->context != NULL;
+    for (size_t i = 0; ok && i < sizeof fields / sizeof *fields; ++i) ok = context_field(request, fields[i]);
+    for (size_t i = 0; ok && i < count; ++i) ok = context_field(request, words[i]);
+    free(copy);
+    return ok;
+}
+
 static bool pending_input(void)
 {
     struct pollfd input = {.fd = fileno(rl_instream), .events = POLLIN};
@@ -123,15 +151,17 @@ static bool same_context(const struct request *request, int point, const struct 
         directory->st_dev == current.st_dev && directory->st_ino == current.st_ino && !pending_input();
 }
 
-int binit_worker_request(WORD_LIST *arguments)
+static int worker_request(WORD_LIST *arguments, char *preview)
 {
     if (busy || !arguments || !arguments->next || arguments->word->word[0] != '/' ||
         arguments->next->word->word[0] != '/' || !rl_instream || !rl_line_buffer ||
-        !(rl_readline_state & RL_STATE_COMPLETING) || !isatty(fileno(rl_instream))) return EXECUTION_FAILURE;
+        (!preview && !(rl_readline_state & RL_STATE_COMPLETING)) || !isatty(fileno(rl_instream))) return EXECUTION_FAILURE;
     SHELL_VAR *replies = find_variable_noref("COMPREPLY");
-    if (!replies || !array_p(replies) || readonly_p(replies) || noassign_p(replies) || integer_p(replies))
-        return EXECUTION_FAILURE;
-    array_flush(array_cell(replies));
+    if (!preview) {
+        if (!replies || !array_p(replies) || readonly_p(replies) || noassign_p(replies) || integer_p(replies))
+            return EXECUTION_FAILURE;
+        array_flush(array_cell(replies));
+    }
     if (pending_input()) return EXECUTION_FAILURE;
     struct request request = {.pid = 0, .input = -1, .output = -1};
     sigset_t blocked;
@@ -153,7 +183,8 @@ int binit_worker_request(WORD_LIST *arguments)
     request.data = malloc(OUTPUT_LIMIT + 1u);
     if (!request.line || !request.generation || !request.data) goto done;
     size_t count = 0, context = strlen(request.line) + strlen(request.generation);
-    if (!completion_context(&request) || context > CONTEXT_LIMIT - request.context_size) goto done;
+    if (!(preview ? preview_context(&request) : completion_context(&request)) ||
+        context > CONTEXT_LIMIT - request.context_size) goto done;
     context += request.context_size;
     for (WORD_LIST *word = arguments; word; word = word->next) {
         size_t length = strlen(word->word->word) + 1;
@@ -275,6 +306,20 @@ int binit_worker_request(WORD_LIST *arguments)
         offset += length + 1;
     }
     if (!same_context(&request, point, &directory)) goto done;
+    if (preview) {
+        const char *word = strrchr(request.line, ' ');
+        if (count == 1 && word) {
+            ++word;
+            size_t prefix = strlen(word), length = strlen(request.data);
+            const char *safe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-";
+            if (length > prefix && length - prefix <= 1024 &&
+                strncmp(request.data, word, prefix) == 0 && strspn(request.data, safe) == length) {
+                memcpy(preview, request.data + prefix, length - prefix + 1);
+                result = EXECUTION_SUCCESS;
+            }
+        }
+        goto done;
+    }
     replies = find_variable_noref("COMPREPLY");
     if (!replies || !array_p(replies) || readonly_p(replies) || noassign_p(replies) || integer_p(replies)) goto done;
     offset = 0;
@@ -287,4 +332,53 @@ done:
     discard_unwind_frame("binit-worker");
     cleanup(&request);
     return result;
+}
+
+int binit_worker_request(WORD_LIST *arguments)
+{
+    return worker_request(arguments, NULL);
+}
+
+bool binit_worker_preview(char output[1025])
+{
+    const char *safe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./- ";
+    const char *separator = strchr(rl_line_buffer, ' ');
+    if (!separator || strspn(rl_line_buffer, safe) != (size_t)rl_end) return false;
+    char name[65];
+    size_t length = (size_t)(separator - rl_line_buffer);
+    if (!length || length >= sizeof name) return false;
+    memcpy(name, rl_line_buffer, length);
+    name[length] = '\0';
+    SHELL_VAR *counts = find_variable_noref("__binit_provider_count");
+    SHELL_VAR *args = find_variable_noref("__binit_provider_args");
+    SHELL_VAR *disabled = find_variable_noref("__binit_completion_disabled");
+    const char *manager = get_string_value("__binit_manager");
+    if (!counts || !assoc_p(counts) || !args || !assoc_p(args) || !manager) return false;
+    if (disabled && assoc_p(disabled)) {
+        const char *flag = assoc_reference(assoc_cell(disabled), name);
+        if (flag && strcmp(flag, "1") == 0) return false;
+    }
+    const char *amount = assoc_reference(assoc_cell(counts), name);
+    if (!amount || !*amount || strlen(amount) > 2 || strspn(amount, "0123456789") != strlen(amount)) return false;
+    int count = atoi(amount);
+    if (count < 1 || count > 64) return false;
+    WORD_LIST list[65];
+    WORD_DESC words[65];
+    words[0] = (WORD_DESC){.word = (char *)manager};
+    for (int i = 0; i < count; ++i) {
+        char key[80];
+        snprintf(key, sizeof key, "%s:%d", name, i);
+        char *argument = assoc_reference(assoc_cell(args), key);
+        if (!argument) return false;
+        words[i + 1] = (WORD_DESC){.word = argument};
+    }
+    for (int i = 0; i <= count; ++i)
+        list[i] = (WORD_LIST){.word = &words[i], .next = i < count ? &list[i + 1] : NULL};
+    return worker_request(list, output) == EXECUTION_SUCCESS;
+}
+
+bool binit_worker_has_provider(void)
+{
+    SHELL_VAR *counts = find_variable_noref("__binit_provider_count");
+    return counts && assoc_p(counts) && assoc_num_elements(assoc_cell(counts)) != 0;
 }

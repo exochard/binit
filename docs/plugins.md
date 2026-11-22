@@ -231,10 +231,53 @@ binit_on prompt example_prompt
 
 The runtime prepends one dispatcher to the existing `PROMPT_COMMAND`. It returns the saved command status so the original first hook sees that status. It leaves `DEBUG` traps and shell options intact. Hook failures do not stop later callbacks. The first dispatch also adds the segment prefix to `PS1`, so a `PS1` assigned later in the startup file keeps it. A later `PROMPT_COMMAND="history -a; $PROMPT_COMMAND"` keeps the dispatcher but runs it after `history -a`, so hooks then see that command's status; a plain `PROMPT_COMMAND=...` assignment drops the dispatcher.
 
+### Prompt workers
+
+The native module exposes one worker slot per shell, shared by every
+plugin's prompt hook. Check availability with
+`builtin binit_complete prompt-worker available`.
+`builtin binit_complete prompt-worker start MANAGER PROGRAM [ARG...]`
+starts an absolute program through the Binit manager with the current
+directory and a filtered copy of the exported environment. Use the manager
+path supplied by Binit. Start fails when the arguments and environment exceed
+64 KiB or 32 arguments.
+
+The worker is trusted local code. The limits below stop a slow or stuck
+worker. A hostile worker can escape them, for example by killing its own
+supervisor. A worker that runs other programs on data it did not choose, such as
+Git in a repository the user just entered, must keep that data from running
+commands; the Git prompt, for example, never runs a repository's own content
+filter.
+
+`builtin binit_complete prompt-worker take NAME` sets an existing writable
+scalar whose name starts with `__binit_` once the worker exits successfully
+with a nonempty result. Any other name is a usage error that also ends the
+request, so worker output never reaches a variable the shell interprets.
+A different working directory or active generation
+invalidates it. Taking an unfinished request cancels it and returns failure.
+The first Readline input also cancels pending work, without consuming the key.
+A start right after a cancellation waits up to 50 ms for the cancelled
+request to stop, so a quickly typed command still gets a new request.
+
+`builtin binit_complete prompt-worker wait MS` waits up to `MS` milliseconds,
+at most 1000, and succeeds once a result is ready to take. Pending terminal
+input or a signal ends the wait early. A worker that is still running when
+the wait ends keeps its slot, so a later prompt can take its result.
+
+A request has a one-second deadline and a 512-byte output limit. Stdin and
+stderr go to `/dev/null`. The worker runs in its own session without a
+controlling terminal, so `/dev/tty` fails, it cannot push input into the
+shell's terminal, and Ctrl-C and other terminal signals do not reach it. The worker and its children cannot open network sockets or leave
+their process group. Binit stops that group when the request ends. Worker output is passed as data and never evaluated. Use
+`binit_segment` to render it through the prompt-text filter and length limit.
+
 ## Project data
 
 ```toml
 label = "example"
+path_prepend = ["tools/bin"]
+python_venv = ".venv"
+node_bin = true
 
 [env]
 PROJECT_MODE = "development"
@@ -242,7 +285,9 @@ PROJECT_MODE = "development"
 
 `binit trust DIRECTORY` approves the file's current content and prints its digest, label and variables. `binit trust DIRECTORY --sha256 HEX` approves only content with the digest you reviewed, so a change made between review and approval is refused; use it for checkouts that other people or tools can write. Trust records belong to the selected private state directory. Project values use NUL-delimited transport and quoted assignment, without `eval`. Bash control variables such as `PATH` and `POSIXLY_CORRECT` are rejected. That list is not a sandbox: values such as `GIT_SSH_COMMAND`, `PAGER` or `NODE_OPTIONS` decide what other programs run, so approving a project file is as consequential as running its code. Arrays and integer variables are skipped, as are readonly variables and namerefs.
 
-The runtime restores prior values and export declarations on the next directory change. If a variable changes to an incompatible type while the project is active, restoration leaves it intact and reports the conflict. Project profiles explicitly configure environment variables. External programs retain their normal permissions.
+The project-context plugin selects the profile in the current directory by default. Set `BINIT_PROJECT_SCOPE=ancestors` to select the nearest profile, including a nested profile that needs its own approval.
+
+The optional `path_prepend` list adds up to 16 existing directories. `python_venv` sets `VIRTUAL_ENV` and adds the environment's `bin` directory. `node_bin` adds `node_modules/.bin` when it exists. Helper directories resolve relative to the profile and must stay inside it. The plugin restores previous scalar values, unset states and export attributes on directory change. If a variable changes to an incompatible type while the project is active, restoration leaves it intact and reports the conflict. Run `binit-project-status` to see the selected profile and the variables it changed.
 
 ## Trust and loading failures
 

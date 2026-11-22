@@ -39,3 +39,15 @@ The panel does not appear for `read -e`, secondary prompts, input containing
 newlines or other control characters, or when the input and the panel would
 not fit on the screen. Resizing closes a focused panel without changing the
 command line. Bash keeps control of vi and Emacs editing outside the panel.
+
+`BINIT_HISTORY_MATCH=words` matches all query terms in any order.
+`BINIT_HISTORY_MATCH=fuzzy` allows intervening characters within each term.
+The default is literal matching. Set options before enabling history.
+
+Set `BINIT_HISTORY_CONTEXT=1` to capture directory, command timestamp and
+exit status for new history entries. Set `BINIT_HISTORY_SCOPE=directory`
+or `session` to filter the picker. Imported entries have no session context.
+
+With `BINIT_HISTORY_DELETE=1`, press `x` while browsing, then `y` to remove
+the selected live history entry. Esc cancels the confirmation. Deletion
+closes the picker and leaves the input line intact.

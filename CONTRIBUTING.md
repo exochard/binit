@@ -117,6 +117,8 @@ is useful for diagnosis; only the complete paired runs are comparable.
 
 ## Sending a change
 
+See [Binit conventions](CONVENTIONS.md) for topic branches and release versions.
+
 `main` holds released code only; development happens on `dev`. Branch from
 `dev`, open pull requests against `dev`, and use a concise conventional commit
 subject, for example `fix: preserve completion arguments`. Explain the behavior before and after

@@ -26,7 +26,8 @@ PROMPT = "READY>"
 
 
 class Session:
-    def __init__(self, wait_body, startup_body="", menu=True, rows=24, columns=80, mode="emacs"):
+    def __init__(self, wait_body, startup_body="", menu=True, rows=24, columns=80, mode="emacs",
+                 *, first_wait_body="", wait_edit=False):
         if not BINARY.is_file():
             raise RuntimeError("binit binary missing; run cargo build first")
         self.temporary = tempfile.TemporaryDirectory(prefix=".scratch-wait-", dir=ROOT)
@@ -34,7 +35,8 @@ class Session:
         self.marks = self.directory / "marks"
         self.marks.mkdir()
         config = "schema=1\n"
-        for name, load, body in (("early", "startup", startup_body), ("slow", "wait", wait_body)):
+        for name, load, body in (("early", "startup", startup_body),
+                                 ("first", "wait", first_wait_body), ("slow", "wait", wait_body)):
             if not body:
                 continue
             plugin = self.directory / name
@@ -56,6 +58,7 @@ class Session:
             os.chdir(self.directory)
             env = dict(os.environ, TERM="xterm-256color", PS1=PROMPT + " ", HOME=str(home), HISTFILE="/dev/null",
                        INPUTRC=str(inputrc), LC_ALL="C.UTF-8", BINIT_SAFE="0", BINIT_COMPLETION_MENU="1" if menu else "0",
+                       BINIT_WAIT_EDIT="1" if wait_edit else "0",
                        GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
             env.pop("BASH_ENV", None)
             env.pop("ENV", None)
@@ -121,6 +124,8 @@ class Session:
 
 
 SLOW = "touch MARKS/start\nsleep 0.6\nwaited_fn() { echo waited; }\ntouch MARKS/done\n"
+FIRST = "touch MARKS/first\nwhile [[ ! -e MARKS/release ]]; do sleep .01; done\n"
+TAIL = "touch MARKS/tail\nwhile [[ ! -e MARKS/finish ]]; do sleep .01; done\n"
 
 
 class WaitTests(unittest.TestCase):
@@ -218,11 +223,79 @@ class WaitTests(unittest.TestCase):
             session.wait(lambda: "\nstill-here" in session.text)
 
     def test_without_the_module_the_plugin_loads_at_the_first_prompt(self):
-        with Session(SLOW, menu=False) as session:
+        with Session(SLOW, menu=False, wait_edit=True) as session:
             session.wait(lambda: session.mark("done"))
             session.wait(lambda: PROMPT in session.text)
             session.send("type -t waited_fn\n")
             session.wait(lambda: "function" in session.text)
+
+    def test_opt_in_echoes_before_tail_and_checks_alias_at_first_use(self):
+        body = TAIL + "waited_fn() { printf 'accepted=%s\\n' \"$1\"; }\nalias waited=waited_fn\ntouch MARKS/done\n"
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode), Session(
+                body, mode=mode, first_wait_body=FIRST, wait_edit=True
+            ) as session:
+                session.wait(lambda: session.mark("first"))
+                session.send("waited 'two words'")
+                (session.marks / "release").touch()
+                session.wait(lambda: session.mark("tail") and "waited 'two words'" in session.text)
+                self.assertFalse(session.mark("done"))
+                (session.marks / "finish").touch()
+                session.wait(lambda: session.mark("done"))
+                session.send("\n")
+                session.wait(lambda: "\naccepted=two words" in session.text)
+
+    def test_default_and_native_disabled_apply_key_remap_before_editing(self):
+        body = TAIL + "bind -m emacs-standard '\"x\": \"y\"'\ntouch MARKS/done\n"
+        for menu in (True, False):
+            with self.subTest(menu=menu), Session(
+                body, menu=menu, first_wait_body=FIRST, wait_edit=not menu
+            ) as session:
+                session.wait(lambda: session.mark("first"))
+                session.send("x")
+                (session.marks / "release").touch()
+                session.wait(lambda: session.mark("tail"))
+                (session.marks / "finish").touch()
+                # The terminal may echo x before the first prompt in the fallback.
+                session.wait(lambda: session.cursor_line.endswith(f"{PROMPT} y"))
+
+    def test_opt_in_interrupt_recovers_from_a_tail_after_echo(self):
+        with Session(TAIL, first_wait_body=FIRST, wait_edit=True) as session:
+            session.wait(lambda: session.mark("first"))
+            session.send("echo never-runs")
+            (session.marks / "release").touch()
+            session.wait(lambda: session.mark("tail") and "echo never-runs" in session.text)
+            os.killpg(session.pid, signal.SIGINT)
+            session.wait(lambda: session.cursor_line == PROMPT)
+            session.send("binit profile | grep -o 'load interrupted'\n")
+            session.wait(lambda: "\nload interrupted" in session.text)
+            self.assertNotIn("\nnever-runs", session.text)
+
+    def test_opt_in_finishes_the_batch_when_a_binding_disables_native(self):
+        body = "alias waited='echo still-loaded'\n"
+        for action in ("builtin binit_complete off", "enable -d binit_complete"):
+            with self.subTest(action=action), Session(
+                body, f"""bind -x '"\\C-g": {action}'\n""",
+                first_wait_body=FIRST, wait_edit=True
+            ) as session:
+                session.wait(lambda: session.mark("first"))
+                session.send(b"\x07waited\n")
+                (session.marks / "release").touch()
+                session.wait(lambda: "\nstill-loaded" in session.text)
+                self.assertNotIn("command not found", session.text)
+
+    def test_opt_in_does_not_retry_a_wait_condition_during_the_same_prompt(self):
+        startup = (
+            "try_first() { printf x >> MARKS/attempts;\n"
+            + FIRST
+            + "return 1; }\n__binit_when[first]=try_first\n"
+        )
+        with Session("touch MARKS/done\n", startup, first_wait_body=":", wait_edit=True) as session:
+            session.wait(lambda: session.mark("first"))
+            session.send("x")
+            (session.marks / "release").touch()
+            session.wait(lambda: session.mark("done") and session.cursor_line.endswith(f"{PROMPT} x"))
+            self.assertEqual((session.marks / "attempts").read_text(), "x")
 
 
 if __name__ == "__main__":

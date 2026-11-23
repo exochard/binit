@@ -96,6 +96,10 @@ extern int running_trap;
 static rl_hook_func_t *previous_pre_input;
 static bool pre_input_installed;
 static bool wait_enabled;
+static bool wait_edit_armed;
+static rl_voidfunc_t *wait_previous_display;
+static void wait_edit_display(void);
+static void finish_wait_edit(void);
 static bool history_enabled, history_owns_suggestions, history_dismissed, history_live;
 static enum binit_match history_method;
 static bool history_context_enabled, history_delete_enabled;
@@ -145,6 +149,11 @@ static bool suggestion_visible, ghost_on_blank_row;
 static int ghost_column;
 static bool redisplay_running;
 static rl_voidfunc_t *previous_redisplay;
+
+static rl_voidfunc_t **editor_display_slot(void)
+{
+    return rl_redisplay_function == wait_edit_display ? &wait_previous_display : &rl_redisplay_function;
+}
 static int option(const char *);
 static size_t history_panel(const char **, const struct binit_layout *, int, int, bool);
 static void history_draw(const char **, size_t, int, int *);
@@ -768,6 +777,20 @@ static void suggestion_redisplay(void)
     fflush(rl_outstream);
 }
 
+static void install_editor_display(void)
+{
+    rl_voidfunc_t **display = editor_display_slot();
+    previous_redisplay = *display;
+    *display = suggestion_redisplay;
+}
+
+static void remove_editor_display(void)
+{
+    rl_voidfunc_t **display = editor_display_slot();
+    if (*display == suggestion_redisplay) *display = previous_redisplay;
+    previous_redisplay = NULL;
+}
+
 /* Inserts the whole suggestion when one is shown at the end of the input; otherwise the key keeps its meaning. */
 static int accept_or(rl_command_func_t *fallback, int count, int key)
 {
@@ -839,10 +862,7 @@ static void disable_suggestions(void)
     suggestion_poll = false;
     suggestion_preview_enabled = false;
     suggestion_preview_line[0] = suggestion_preview_value[0] = '\0';
-    if (!highlighting_enabled && !history_enabled) {
-        if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
-        previous_redisplay = NULL;
-    }
+    if (!highlighting_enabled && !history_enabled) remove_editor_display();
     for (size_t i = 0; i < 2; ++i) {
         Keymap map = rl_get_keymap_by_name(accept_keymaps[i]);
         for (size_t j = 0; j < sizeof accept_keys / sizeof *accept_keys; ++j) {
@@ -933,10 +953,7 @@ static int enable_suggestions(void)
             accept_owned[i][j] = true;
         }
     }
-    if (!highlighting_enabled && !history_enabled) {
-        previous_redisplay = rl_redisplay_function;
-        rl_redisplay_function = suggestion_redisplay;
-    }
+    if (!highlighting_enabled && !history_enabled) install_editor_display();
     suggestions_enabled = true;
     suggestion_update_poll();
     deprep_install();
@@ -1717,6 +1734,7 @@ static void history_deprep(void)
     poll_running = false;
     if (history_previous_deprep && history_previous_deprep != history_deprep) history_previous_deprep();
     history_deprep_running = false;
+    if (wait_edit_armed) finish_wait_edit();
 }
 
 static void deprep_install(void)
@@ -1732,7 +1750,7 @@ static void deprep_install(void)
 
 static void deprep_release(void)
 {
-    if (!history_deprep_active || suggestions_enabled || history_enabled) return;
+    if (!history_deprep_active || suggestions_enabled || history_enabled || wait_edit_armed) return;
     if (rl_deprep_term_function == history_deprep) {
         rl_deprep_term_function = history_previous_deprep;
         history_previous_deprep = NULL;
@@ -1794,10 +1812,7 @@ static void disable_history(void)
         history_unbind(&history_searches[i], 18, binit_history_search);
     }
     if (history_owns_suggestions) {history_owns_suggestions = false; disable_suggestions();}
-    else if (!suggestions_enabled && !highlighting_enabled) {
-        if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
-        previous_redisplay = NULL;
-    }
+    else if (!suggestions_enabled && !highlighting_enabled) remove_editor_display();
     deprep_release();
 }
 
@@ -2039,15 +2054,23 @@ static void restore_wait_parser(void *state)
     restore_parser_state(state);
 }
 
+static void restore_wait_line(void *state)
+{
+    restore_input_line_state(state);
+}
+
+enum wait_redraw { WAIT_REDRAW_NONE, WAIT_REDRAW_EVENT, WAIT_REDRAW_ALWAYS };
+
 /*
  * Readline calls the pre-input hook after the prompt is drawn and before it
  * reads a key. The dispatch runs only for the top-level command reader: `read
  * -e` has a builtin running, `bind -x` and nested evaluation raise the parse
  * level, and a trap sets running_trap. Bash itself does not use this hook.
  */
-static void run_wait_dispatch(const char *command, bool always_redraw)
+static void run_wait_dispatch(const char *command, enum wait_redraw redraw, bool preserve_line)
 {
     sh_parser_state_t state;
+    sh_input_line_state_t line;
     int status = last_command_exit_value;
     char *last = get_string_value("_");
     char *saved = last ? strdup(last) : NULL;
@@ -2056,6 +2079,10 @@ static void run_wait_dispatch(const char *command, bool always_redraw)
     rl_clear_signals();
     add_unwind_protect(free, saved);
     add_unwind_protect(restore_wait_parser, &state);
+    if (preserve_line) {
+        save_input_line_state(&line);
+        add_unwind_protect(restore_wait_line, &line);
+    }
     add_unwind_protect(restore_readline_signals, NULL);
 #ifdef SEVAL_NOTIFY
     int flags = SEVAL_NOTIFY | SEVAL_NOHIST;
@@ -2068,6 +2095,7 @@ static void run_wait_dispatch(const char *command, bool always_redraw)
 #endif
     parse_and_execute(savestring(command), "binit_wait", flags);
     rl_set_signals();
+    if (preserve_line) restore_input_line_state(&line);
     restore_parser_state(&state);
     discard_unwind_frame("binit-wait");
     if (saved) {
@@ -2076,19 +2104,63 @@ static void run_wait_dispatch(const char *command, bool always_redraw)
     }
     free(saved);
     last_command_exit_value = status;
-    const char *changed = get_string_value("__binit_event_changed");
-    if (always_redraw || (changed && strcmp(changed, "1") == 0)) {
+    const char *changed = redraw == WAIT_REDRAW_EVENT ? get_string_value("__binit_event_changed") : NULL;
+    if (redraw == WAIT_REDRAW_ALWAYS || (changed && strcmp(changed, "1") == 0)) {
         /* Output may have moved the cursor; forced redisplay assumes a fresh line. */
         rl_clear_visible_line();
         rl_forced_update_display();
     }
 }
 
+static bool wait_at_prompt(void)
+{
+    return interactive_shell && !executing_builtin && !running_trap &&
+           !parse_and_execute_level && get_current_prompt_level() == 1;
+}
+
+static void stop_wait_edit(void)
+{
+    wait_edit_armed = false;
+    /* Preserve a predecessor while a foreign hook may still delegate to us. */
+    if (rl_redisplay_function == wait_edit_display) {
+        rl_redisplay_function = wait_previous_display;
+        wait_previous_display = NULL;
+    }
+    deprep_release();
+    remove_unused_pre_input_hook();
+}
+
+static bool can_edit_during_wait(void)
+{
+    return !wait_previous_display && rl_redisplay_function && rl_deprep_term_function &&
+           (!history_deprep_active || rl_deprep_term_function == history_deprep);
+}
+
+static void wait_edit_display(void)
+{
+    if (wait_previous_display) wait_previous_display();
+    if (!wait_edit_armed || !wait_at_prompt() ||
+        RL_ISSTATE(RL_STATE_SIGHANDLER | RL_STATE_CALLBACK | RL_STATE_DONE |
+                   RL_STATE_DISPATCHING | RL_STATE_COMPLETING)) return;
+    stop_wait_edit();
+    run_wait_dispatch("__binit_wait_dispatch", WAIT_REDRAW_ALWAYS, true);
+}
+
+static void finish_wait_edit(void)
+{
+    if (!wait_at_prompt()) return;
+    bool accepted = rl_done && RL_ISSTATE(RL_STATE_DONE) &&
+                    !RL_ISSTATE(RL_STATE_EOF | RL_STATE_SIGHANDLER | RL_STATE_CALLBACK);
+    stop_wait_edit();
+    /* A key binding can accept a line without calling redisplay again. */
+    if (accepted) run_wait_dispatch("__binit_wait_dispatch", WAIT_REDRAW_NONE, true);
+}
+
 static int pre_input_hook(void)
 {
     if (previous_pre_input && previous_pre_input != pre_input_hook) previous_pre_input();
-    if (!interactive_shell || executing_builtin || running_trap || parse_and_execute_level ||
-        get_current_prompt_level() != 1) return 0;
+    if (!wait_at_prompt()) return 0;
+    if (wait_edit_armed) stop_wait_edit();
     // Ctrl-C can leave key-read flags set after Bash has unwound the previous input loop.
     if (poll_removal_deferred && !poll_running) detach_poll_hook();
     else remove_unused_pre_input_hook();
@@ -2096,7 +2168,20 @@ static int pre_input_hook(void)
     if (!wait_enabled) return 0;
     SHELL_VAR *pending = find_variable("__binit_wait_pending");
     if (!pending || !value_cell(pending) || strcmp(value_cell(pending), "1") != 0) return 0;
-    run_wait_dispatch("__binit_wait_dispatch", true);
+    const char *edit = get_string_value("BINIT_WAIT_EDIT");
+    bool allow_edit = edit && strcmp(edit, "1") == 0 && can_edit_during_wait();
+    run_wait_dispatch(allow_edit ? "__binit_wait_dispatch edit" : "__binit_wait_dispatch",
+                      WAIT_REDRAW_ALWAYS, false);
+    const char *yielded = allow_edit ? get_string_value("__binit_wait_yielded") : NULL;
+    if (!yielded || strcmp(yielded, "1") != 0) return 0;
+    if (!can_edit_during_wait()) {
+        run_wait_dispatch("__binit_wait_dispatch", WAIT_REDRAW_ALWAYS, false);
+        return 0;
+    }
+    wait_edit_armed = true;
+    wait_previous_display = rl_redisplay_function;
+    rl_redisplay_function = wait_edit_display;
+    deprep_install();
     return 0;
 }
 
@@ -2112,7 +2197,8 @@ static void install_pre_input_hook(void)
 static void remove_unused_pre_input_hook(void)
 {
     // A later hook may still call ours. Keep the predecessor until we own the slot again.
-    if (wait_enabled || history_input_enabled || poll_removal_deferred || rl_pre_input_hook != pre_input_hook) return;
+    if (wait_enabled || wait_edit_armed || history_input_enabled || poll_removal_deferred ||
+        rl_pre_input_hook != pre_input_hook) return;
     rl_pre_input_hook = previous_pre_input;
     pre_input_installed = false;
     previous_pre_input = NULL;
@@ -2127,6 +2213,7 @@ static int enable_wait(void)
 
 static void remove_wait_hook(void)
 {
+    /* An armed batch still has to finish before the current command. */
     wait_enabled = false;
     remove_unused_pre_input_hook();
 }
@@ -2238,7 +2325,7 @@ static int poll_hook(void)
     errno = saved_errno;
     if (now <= 0 || (last_poll > 0 && now >= last_poll && now - last_poll < 250)) return 0;
     last_poll = now;
-    run_wait_dispatch("__binit_event_dispatch", false);
+    run_wait_dispatch("__binit_event_dispatch", WAIT_REDRAW_EVENT, false);
     return 0;
 }
 
@@ -2429,7 +2516,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
                 if ((rl_readline_state & RL_STATE_INITIALIZED) == 0 || !term || strcmp(term, "dumb") == 0) return EXECUTION_FAILURE;
                 if (!highlight_options()) return EXECUTION_FAILURE;
                 highlight_work_reset();
-                if (!highlighting_enabled && !suggestions_enabled && !history_enabled) {previous_redisplay = rl_redisplay_function; rl_redisplay_function = suggestion_redisplay;}
+                if (!highlighting_enabled && !suggestions_enabled && !history_enabled) install_editor_display();
                 highlighting_enabled = true;
                 return EXECUTION_SUCCESS;
             }
@@ -2438,7 +2525,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
                 highlighting_extended = false;
                 highlight_work_reset();
                 binit_highlight_clear();
-                if (!suggestions_enabled && !history_enabled) {if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay; previous_redisplay = NULL;}
+                if (!suggestions_enabled && !history_enabled) remove_editor_display();
                 return EXECUTION_SUCCESS;
             }
 #else
@@ -2484,6 +2571,7 @@ EXPORT int binit_complete_builtin_load(char *name)
 EXPORT void binit_complete_builtin_unload(char *name)
 {
     (void)name;
+    remove_wait_hook();
     disable_keys();
     disable_history();
     clear_history_context();
@@ -2496,8 +2584,7 @@ EXPORT void binit_complete_builtin_unload(char *name)
     highlighting_extended = false;
     highlight_work_reset();
     binit_highlight_clear();
-    if (rl_redisplay_function == suggestion_redisplay) rl_redisplay_function = previous_redisplay;
-    previous_redisplay = NULL;
+    remove_editor_display();
 #endif
     disable_menu();
 }

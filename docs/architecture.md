@@ -79,6 +79,14 @@ exit status and `$_` are restored, and `rl_forced_update_display` redraws the
 prompt and typed input. The dispatch clears the pending flag first, so it runs
 at most once.
 
+With `BINIT_WAIT_EDIT=1`, a wait batch can return to Readline between
+plugin bodies when terminal input is ready. The redisplay hook drains the
+remainder after drawing the edit. The shared terminal teardown hook
+finishes a batch when a key binding accepts the line without another
+redisplay. Bash's parser and input line state are saved while the batch
+resumes. A started batch keeps that acceptance boundary if a key binding
+turns the menu off or unloads the builtin.
+
 Disabling or unloading the module restores the previous hook if Binit's is
 still current. If the module is absent, or the hook did not run for a prompt,
 the next prompt hook loads the pending plugins, so they load at the first

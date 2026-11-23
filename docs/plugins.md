@@ -30,6 +30,14 @@ the previous generation. A bare update keeps local snapshots prepared with
 
 At startup, a line whose exact arguments match a synced plugin activates it at once: `startup` plugins load in line order, `command` and `completion` plugins install their first-use stubs, `prompt` plugins load at the first prompt, `wait` plugins right after it is drawn. Existing functions, aliases, builtins and completion specifications still win. `load=wait` is Zinit's `wait` (turbo mode): the first prompt appears at once and the plugin loads before the next key is read, in line order with other `wait` plugins. Keys typed meanwhile are kept. `binit profile` shows `pending` until then. Without the native module (`BINIT_COMPLETION_MENU=0`, no `completion.so`) wait plugins load at the first prompt instead, like `prompt`. Output printed during a wait load lands on the prompt line; a plugin that changes `PS1` or key bindings takes effect from the next prompt or line.
 
+Set `BINIT_WAIT_EDIT=1` in an interactive startup file to let Readline
+process queued input between wait plugins. The remaining plugins load
+after an edit is displayed or before Bash parses the accepted line.
+Keys processed early use the bindings and completion definitions
+already installed. Use the default wait policy when the first editing
+action depends on a deferred plugin. Without the native module, wait
+loads at the first prompt.
+
 A synced plugin with no matching line is `undeclared` and never loads, including as a dependency; its dependants become unavailable. Declare a dependency before the plugin that needs it.
 
 When lines and generation differ, the first prompt prints `binit: N plugin lines changed since the last sync` and records the shell's lines in `declared`. Catalog plugins are unaffected by lines and activate at init.

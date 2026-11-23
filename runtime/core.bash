@@ -25,7 +25,7 @@ declare -gA __binit_audit_before=() __binit_audit_after=() __binit_audit_attribu
 declare -ga __binit_line_counts=() __binit_line_args=()
 declare -g __binit_loading='' __binit_callback_owner='' __binit_last_directory='' BINIT_LAST_STATUS=0 BINIT_PROMPT_TEXT=''
 declare -g __binit_line_text='' __binit_first_prompt=0 __binit_lines_total=0 __binit_lines_matched=0
-declare -gi __binit_wait_pending=0 __binit_wait_armed=0 __binit_dispatch_pending=0 __binit_load_active=0 __binit_event_changed=0
+declare -gi __binit_wait_pending=0 __binit_wait_armed=0 __binit_wait_yielded=0 __binit_dispatch_pending=0 __binit_load_active=0 __binit_event_changed=0
 declare -ga __binit_wait_queue=()
 
 # Collect only simple shell names; each definition is checked again on unload.
@@ -543,16 +543,25 @@ __binit_prompt_dispatch() {
 # Loads every pending wait plugin in line order. The Readline hook of the
 # native module runs it once after the prompt is drawn.
 __binit_wait_dispatch() {
-    local __binit_wait_id
+    local __binit_wait_id __binit_wait_edit=${1-} __binit_wait_index=0
     local -a __binit_wait_run=("${__binit_wait_queue[@]}")
-    __binit_wait_pending=0
+    __binit_wait_pending=0 __binit_wait_yielded=0
     __binit_wait_queue=()
     for __binit_wait_id in "${__binit_wait_run[@]}"; do
+        __binit_wait_index=$((__binit_wait_index + 1))
         if [[ ${__binit_state[$__binit_wait_id]} == pending ]]; then
             if __binit_load "$__binit_wait_id"; then :; fi
             if [[ ${__binit_state[$__binit_wait_id]} == pending && -n ${__binit_when[$__binit_wait_id]-} ]]; then
                 __binit_wait_pending=1
                 __binit_wait_queue+=("$__binit_wait_id")
+            fi
+            # The resumed batch must contain only entries that have not been tried.
+            if [[ $__binit_wait_edit == edit ]] &&
+               (( ! __binit_wait_pending && __binit_wait_index < ${#__binit_wait_run[@]} )) &&
+               IFS= builtin read -t 0; then
+                __binit_wait_queue+=("${__binit_wait_run[@]:__binit_wait_index}")
+                __binit_wait_pending=1 __binit_wait_yielded=1
+                return 0
             fi
         fi
     done

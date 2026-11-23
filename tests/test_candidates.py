@@ -88,8 +88,32 @@ class CandidateTests(unittest.TestCase):
         self.success('candidate', 'prepare', str(self.config))
         status = json.loads(self.success('candidate', 'status', '--json'))
         self.assertIsNone(status['base_generation'])
+        self.assertIn('+ sample  startup  init.bash', self.success('candidate', 'diff'))
         self.assertFalse((self.state / 'current').exists())
         self.assertFalse((self.state / 'previous').exists())
+
+    def test_candidate_diff_uses_verified_base_and_keeps_selection(self):
+        self.success('prepare', str(self.config))
+        before = (self.state / 'current').read_bytes()
+        (self.plugin / 'plugin.toml').write_text(
+            "schema=1\nid='sample'\nentry='next.bash'\nload='prompt'\n")
+        (self.plugin / 'next.bash').write_text('greet() { printf next; }\n')
+        self.success('candidate', 'prepare', str(self.config))
+        record = (self.state / 'candidate.json').read_bytes()
+        result = self.success('candidate', 'diff')
+        self.assertIn('~ sample', result)
+        self.assertIn('entry: "init.bash" -> "next.bash"', result)
+        self.assertIn('load: "startup" -> "prompt"', result)
+        self.assertIn('package contents changed', result)
+        self.assertEqual((self.state / 'current').read_bytes(), before)
+        self.assertEqual((self.state / 'candidate.json').read_bytes(), record)
+        self.config.write_text('schema=1\nplugins=[]\n')
+        self.success('prepare', str(self.config))
+        self.assertIn('stale base', self.success('candidate', 'diff'))
+        self.success('candidate', 'prepare', str(self.config))
+        self.success('rollback')
+        self.success('candidate', 'prepare', str(self.config))
+        self.assertIn('- sample', self.success('candidate', 'diff'))
 
     def test_failed_preparation_preserves_existing_candidate_and_current(self):
         self.success('prepare', str(self.config))

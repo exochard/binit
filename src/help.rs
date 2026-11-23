@@ -111,7 +111,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
         Some("project") => "usage: binit project DIRECTORY",
         Some("diagnose") => "usage: binit diagnose PLAN [--json] [--no-trace]",
         Some("candidate") => {
-            "usage: binit candidate prepare CONFIG | check PLAN | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
+            "usage: binit candidate prepare CONFIG | check PLAN | diff | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
         }
         Some("releases") => {
             "usage: binit releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]"

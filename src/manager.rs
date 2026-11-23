@@ -64,7 +64,7 @@ struct Plan {
     packages: BTreeMap<String, Vec<u8>>,
 }
 
-fn catalog(lock: &Lock) -> Vec<Installed> {
+pub(super) fn catalog(lock: &Lock) -> Vec<Installed> {
     if lock.schema == 1 {
         lock.plugins
             .iter()

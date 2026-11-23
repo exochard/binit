@@ -21,19 +21,23 @@ struct CheckRun {
     receipt_sha256: Option<String>,
 }
 
-fn selected(state: &Path) -> Result<Option<String>> {
+fn selected_id(state: &Path) -> Result<Option<String>> {
     match fs::symlink_metadata(state.join("current")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
-        Ok(_) => {
-            let generation = pointer(state, "current")?;
-            verify_generation(state, &generation)?;
-            Ok(Some(generation))
-        }
+        Ok(_) => Ok(Some(pointer(state, "current")?)),
     }
 }
 
-fn load(state: &Path) -> Result<Candidate> {
+fn selected(state: &Path) -> Result<Option<String>> {
+    let current = selected_id(state)?;
+    if let Some(id) = &current {
+        verify_generation(state, id)?;
+    }
+    Ok(current)
+}
+
+fn load_record(state: &Path) -> Result<Candidate> {
     private_dir(state)?;
     let path = state.join("candidate.json");
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
@@ -72,8 +76,140 @@ fn load(state: &Path) -> Result<Candidate> {
     {
         return Err("invalid candidate record".into());
     }
+    Ok(candidate)
+}
+
+fn load(state: &Path) -> Result<Candidate> {
+    let candidate = load_record(state)?;
     verify_generation(state, &candidate.generation)?;
     Ok(candidate)
+}
+
+fn catalog_by_id(lock: &Lock) -> BTreeMap<String, manager::Installed> {
+    manager::catalog(lock)
+        .into_iter()
+        .map(|entry| (entry.plugin.id.clone(), entry))
+        .collect()
+}
+
+fn package_changed(base: &Lock, candidate: &Lock, id: &str) -> bool {
+    let prefix = format!("plugins/{id}/");
+    let before = base.files.range(prefix.clone()..);
+    let after = candidate.files.range(prefix.clone()..);
+    before
+        .take_while(|(path, _)| path.starts_with(&prefix))
+        .ne(after.take_while(|(path, _)| path.starts_with(&prefix)))
+}
+
+fn describe_change(
+    old: &manager::Installed,
+    new: &manager::Installed,
+    content: bool,
+) -> Result<Vec<String>> {
+    let mut changes = Vec::new();
+    let before = serde_json::to_value(&old.plugin)?;
+    let after = serde_json::to_value(&new.plugin)?;
+    for (field, value) in after.as_object().ok_or("invalid plugin metadata")? {
+        if field != "schema" && value != &before[field] {
+            changes.push(format!("{field}: {} -> {value}", before[field]));
+        }
+    }
+    // These fields are omitted from the serialized form when their lists are empty.
+    for field in ["bin", "commands"] {
+        if after.get(field).is_none() && before.get(field).is_some() {
+            changes.push(format!("{field}: {} -> []", before[field]));
+        }
+    }
+    if old.enabled != new.enabled {
+        changes.push(format!("enabled: {} -> {}", old.enabled, new.enabled));
+    }
+    let commit =
+        |entry: &manager::Installed| entry.origin.as_ref().map(|origin| origin.commit.clone());
+    if commit(old) != commit(new) {
+        changes.push(format!(
+            "revision: {} -> {}",
+            commit(old).as_deref().unwrap_or("-"),
+            commit(new).as_deref().unwrap_or("-")
+        ));
+    }
+    if old.source != new.source
+        || old.declaration != new.declaration
+        || old.asset != new.asset
+        || old.origin.as_ref().map(|origin| &origin.url)
+            != new.origin.as_ref().map(|origin| &origin.url)
+    {
+        changes.push("source or declaration changed".into());
+    }
+    if content {
+        changes.push("package contents changed".into());
+    }
+    Ok(changes)
+}
+
+fn diff(state: &Path) -> Result<()> {
+    let record = load_record(state)?;
+    let candidate = verify_generation_checks(state, &record.generation)?;
+    let base = record
+        .base_generation
+        .as_deref()
+        .map(|id| verify_generation_checks(state, id))
+        .transpose()?;
+    let current = selected_id(state)?;
+    let before = base.as_ref().map(catalog_by_id).unwrap_or_default();
+    let after = catalog_by_id(&candidate);
+    let ids = before.keys().chain(after.keys()).collect::<BTreeSet<_>>();
+    let mut rows = Vec::new();
+    for id in ids {
+        match (before.get(id), after.get(id)) {
+            (None, Some(entry)) => rows.push(format!(
+                "+ {id}  {}  {}",
+                entry.plugin.load, entry.plugin.entry,
+            )),
+            (Some(_), None) => rows.push(format!("- {id}")),
+            (Some(old), Some(new)) => {
+                let content = base
+                    .as_ref()
+                    .is_some_and(|lock| package_changed(lock, &candidate, id));
+                let changes = describe_change(old, new, content)?;
+                if !changes.is_empty() {
+                    rows.push(format!("~ {id}"));
+                    rows.extend(changes.into_iter().map(|change| format!("  {change}")));
+                }
+            }
+            (None, None) => unreachable!("ids come from the verified catalogs"),
+        }
+    }
+    if let Some(base) = &base {
+        let order = |lock: &Lock| {
+            lock.plugins
+                .iter()
+                .map(|plugin| plugin.id.clone())
+                .collect::<Vec<_>>()
+        };
+        if order(base) != order(&candidate) {
+            rows.push(format!(
+                "load order: {} -> {}",
+                order(base).join(", "),
+                order(&candidate).join(", ")
+            ));
+        }
+    }
+    println!(
+        "base       {}",
+        record.base_generation.as_deref().unwrap_or("-")
+    );
+    println!("candidate  {}", record.generation);
+    if current != record.base_generation && current.as_deref() != Some(&record.generation) {
+        println!("state      stale base");
+    }
+    if rows.is_empty() {
+        println!("no plugin changes");
+    } else {
+        for row in rows {
+            println!("{}", releases::plain_text(&row));
+        }
+    }
+    Ok(())
 }
 
 fn prepare_candidate(state: &Path, config: &Path) -> Result<()> {
@@ -303,6 +439,7 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
     match args {
         [action, config] if action == "prepare" => prepare_candidate(state, Path::new(config)),
         [action, plan] if action == "check" => check_candidate(state, Path::new(plan)),
+        [action] if action == "diff" => diff(state),
         [action] if action == "select" => select_candidate(state, None),
         [action, review @ ..] if action == "select" => {
             select_candidate(state, Some(&reviewed(review)?))
@@ -323,7 +460,7 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&value)?);
             Ok(())
         }
-        _ => Err("usage: binit candidate prepare CONFIG | check PLAN \
+        _ => Err("usage: binit candidate prepare CONFIG | check PLAN | diff \
              | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
             .into()),
     }

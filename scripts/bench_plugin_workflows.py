@@ -28,7 +28,7 @@ METRICS = ("visible_prompt", "usable_startup", "startup_effects", "git_tab",
            "fzf_open", "fzf_query", "fzf_select", "nvm_first", "nvm_warm")
 EFFECTS = ("startup-registrations", "git-tab", "fzf-history", "nvm-first", "nvm-warm")
 SGR = re.compile(rb"\x1b\[[0-9;:]*m")
-ONE_FZF_MATCH = re.compile(rb"(?<![0-9])1/[0-9]+ \([0-9]+\)")
+ONE_FZF_MATCH = re.compile(rb"(?<![0-9])1/2 \(0\)")
 
 
 def elapsed(started):
@@ -108,6 +108,9 @@ def prepare(args, subject, directory, env):
         if preparation.returncode:
             raise RuntimeError("Binit generation preparation failed")
         setup += f'eval "$({shlex.quote(str(args.binary))} init --state {shlex.quote(str(state))})"\n'
+        if args.binit_native_effects:
+            setup += ('builtin binit_complete off && builtin binit_complete editor keys off '
+                      '|| return 1\n')
     else:
         upstream = shlex.quote(str(args.sources / "sources" / subject))
         custom = directory / "custom"
@@ -126,7 +129,7 @@ def prepare(args, subject, directory, env):
                       'DISABLE_AUTO_UPDATE=true\naliases=()\ncompletions=()\n'
                       'plugins=(workflow0 workflow1 workflow2 workflow3)\nsource "$OSH/oh-my-bash.sh"\n')
     rc = directory / "rc"
-    rc.write_text(setup + 'bind "set show-all-if-ambiguous on"\n' + prompt_hook(False))
+    rc.write_text(setup + 'HISTCONTROL=ignorespace\nbind "set show-all-if-ambiguous on"\n' + prompt_hook(False))
     return rc
 
 
@@ -153,7 +156,7 @@ def accepted(shell, command, marker):
 
 def nvm_state(shell, expected):
     offset = len(shell.raw)
-    shell.command("binit profile")
+    shell.command(" binit profile")
     if not re.search(rb"(?:\r|\n)nvm +"
                      + expected.encode() + rb" +", shell.raw[offset:]):
         raise RuntimeError(f"expected Binit to report NVM {expected}")
@@ -166,12 +169,12 @@ def fzf_query_ready(output, query):
             and HISTORY_LINE.encode() in clean)
 
 
-def exercise(shell, result, nvm_version, started):
+def exercise(shell, result, nvm_version, started, native_effects):
     timings, effects = result["timings_ms"], result["effects"]
-    accepted(shell, b"printf '\\036ready\\036'\n", b"\x1eready\x1e")
+    accepted(shell, b" printf '\\036ready\\036'\n", b"\x1eready\x1e")
     timings["usable_startup"] = elapsed(started)
     accepted(
-        shell, (b'[[ ${BASH_COMPLETION_VERSINFO[0]-0} -ge 2 ]] && complete -p git >/dev/null && '
+        shell, (b' [[ ${BASH_COMPLETION_VERSINFO[0]-0} -ge 2 ]] && complete -p git >/dev/null && '
                 b'declare -F fzf-file-widget __fzf_history__ >/dev/null && '
                 b'[[ $(type -t nvm) == function ]] && printf "\\036effects\\036"\n'),
         b"\x1eeffects\x1e")
@@ -179,6 +182,12 @@ def exercise(shell, result, nvm_version, started):
     effects.append("startup-registrations")
     if result["subject"].startswith("binit"):
         nvm_state(shell, "pending" if result["subject"] == "binit-lazy" else "loaded")
+    if native_effects:
+        offset = len(shell.raw)
+        shell.command(" builtin binit_complete status; builtin bind -q complete")
+        output = shell.raw[offset:]
+        if not re.search(rb"(?:\r|\n)menu\s+off(?:\r|\n)", output) or b'"\\C-i"' not in output:
+            raise RuntimeError("expected native effects with ordinary Readline Tab")
     input_to_effect(shell, b"git ch", lambda: visible(shell, "BENCH> git ch"))
     timings["git_tab"] = input_to_effect(shell, b"\t\t", lambda: (
         visible(shell, "checkout") and visible(shell, "cherry-pick")))
@@ -213,7 +222,8 @@ def sample(args, subject, run, pair, nvm_version):
     history = home / "history"
     history.write_text("printf 'another entry\\n'\n" + HISTORY_LINE + "\n")
     env = {
-        **environment(home), "BINIT_BASH": str(args.bash), "BINIT_COMPLETION_MENU": "0",
+        **environment(home), "BINIT_BASH": str(args.bash),
+        "BINIT_COMPLETION_MENU": "1" if subject.startswith("binit") and args.binit_native_effects else "0",
         "NVM_DIR": str(home / "nvm"), "HISTFILE": str(history), "HISTSIZE": "1000",
         "PATH": f"{args.work / 'bin'}:/usr/bin:/bin",
         "FZF_CTRL_R_OPTS": f"--height=12 --prompt={shlex.quote(FZF_PROMPT)}",
@@ -225,7 +235,7 @@ def sample(args, subject, run, pair, nvm_version):
         shell = CheckedShell(str(args.bash), rc, home, env, receipt_path=directory / "terminal.log")
         try:
             result["timings_ms"]["visible_prompt"] = shell.startup_ms
-            exercise(shell, result, nvm_version, start)
+            exercise(shell, result, nvm_version, start, env["BINIT_COMPLETION_MENU"] == "1")
         finally:
             shell.close(ready=at_empty_prompt(shell.screen))
         result["passed"] = True
@@ -265,6 +275,8 @@ def main():
     parser.add_argument("--bash", type=Path, default=Path("/bin/bash"))
     parser.add_argument("--bash-completion", type=Path, default=Path("/usr/share/bash-completion/bash_completion"))
     parser.add_argument("--git-completion", type=Path, default=Path("/usr/share/bash-completion/completions/git"))
+    parser.add_argument("--binit-native-effects", action="store_true",
+                        help="use Binit's native ownership recording and keep Readline editing")
     parser.add_argument("--runs", type=int, default=2)
     parser.add_argument("--pairs", type=int, default=20)
     args = parser.parse_args()
@@ -278,7 +290,9 @@ def main():
     args.work.mkdir(parents=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     receipt = {
-        "schema": 1, "profile": "real-plugins-readline", "runs": args.runs, "pairs": args.pairs,
+        "schema": 1, "profile": ("real-plugins-readline-native-effects" if args.binit_native_effects
+                                 else "real-plugins-readline"),
+        "runs": args.runs, "pairs": args.pairs,
         "host": {key: getattr(os.uname(), key) for key in ("sysname", "release", "machine")},
         "start_load": os.getloadavg(),
         "complete_profile": False, "rows": [],

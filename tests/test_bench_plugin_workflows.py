@@ -21,8 +21,9 @@ class WorkflowSummaryTests(unittest.TestCase):
         query = b"workflow-history-target"
         prompt = b"\x1b[1mWorkflow history>\x1b[0m " + query
         line = b"printf 'workflow-history-target\\n'"
-        self.assertFalse(fzf_query_ready(prompt + b"\r\n4/4 (0)\r\n" + line, query))
-        self.assertTrue(fzf_query_ready(prompt + b"\r\n1/4 (0)\r\n" + line, query))
+        self.assertFalse(fzf_query_ready(prompt + b"\r\n2/2 (0)\r\n" + line, query))
+        self.assertFalse(fzf_query_ready(prompt + b"\r\n1/4 (0)\r\n" + line, query))
+        self.assertTrue(fzf_query_ready(prompt + b"\r\n1/2 (0)\r\n" + line, query))
 
     def test_complete_subject_reports_each_metric(self):
         result = results_by_run([bash_row(0), bash_row(1)], runs=1, pairs=2)[0]

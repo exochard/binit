@@ -78,8 +78,9 @@ The default run alternates subject order across two runs of 20 pairs.
 Preparation stays outside the timed shell. Each case records the first
 visible prompt, the first accepted command, and when the startup
 registration checks finish. The terminal lists Git candidates, opens
-fzf with Ctrl-R, and selects and runs a seeded history command. The
-first and second `nvm --version` calls each have their own duration.
+fzf with Ctrl-R, and selects and runs a command from the same two
+history entries in every subject. Timing probes stay out of the history.
+The first and second `nvm --version` calls have separate durations.
 NVM starts with a private empty directory for Node versions.
 
 The receipt contains raw times, input digests, and the effect counts for
@@ -88,3 +89,8 @@ timing summary for its subject. Compare the results on the same host and
 Bash. This profile uses an uncached Binit generation at launch and plain
 Readline for the editor. The release editor and default-configuration
 comparisons have their own profiles.
+
+For a separate profile, pass `--binit-native-effects`. Binit loads its
+native ownership recorder during startup, then turns off its menu and
+editor bindings before the first prompt. This keeps the same Readline
+workflows and measures startup and first use with the native recorder.

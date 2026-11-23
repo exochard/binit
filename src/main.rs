@@ -249,6 +249,9 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     atomic_write_mode(path, bytes, 0o600)
 }
 fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    write_atomic(path, bytes, mode, true)
+}
+fn write_atomic(path: &Path, bytes: &[u8], mode: u32, sync: bool) -> Result<()> {
     let parent = path.parent().ok_or("missing parent")?;
     private_dir(parent)?;
     let temp = parent.join(format!(".write-{}-{}", std::process::id(), unique()));
@@ -260,7 +263,9 @@ fn atomic_write_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     file.write_all(bytes)?;
     // The umask must not change the mode that verification expects.
     file.set_permissions(fs::Permissions::from_mode(mode))?;
-    file.sync_all()?;
+    if sync {
+        file.sync_all()?;
+    }
     fs::rename(temp, path)?;
     Ok(())
 }

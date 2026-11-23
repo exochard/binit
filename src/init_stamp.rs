@@ -4,7 +4,8 @@
 //! generation's lock, every locked file and every directory on their paths. `unchanged` compares
 //! them with `lstat`. Any write, rename, chmod or chown moves a file's ctime, which only root can
 //! set back, so a match means the verified bytes are still in place. Anything else, including a
-//! missing or unreadable stamp or one from another Binit version, makes the caller verify in full.
+//! missing, damaged or incompatible stamp, makes the caller verify in full. The stamp is a
+//! disposable cache. The checksum lets startup reject a partially persisted record after a crash.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -110,7 +111,8 @@ pub fn record<'a>(
         text.push_str(&line(&meta, &relative));
         text.push('\n');
     }
-    crate::atomic_write(&stamp_path(state, id), text.as_bytes())
+    let bytes = format!("{}\n{text}", crate::hash(text.as_bytes()));
+    crate::write_atomic(&stamp_path(state, id), bytes.as_bytes(), 0o600, false)
 }
 
 /// Whether every path in the generation's stamp still has the recorded metadata.
@@ -121,6 +123,12 @@ pub fn unchanged(state: &Path, id: &str) -> bool {
     let Ok(text) = String::from_utf8(text) else {
         return false;
     };
+    let Some((checksum, text)) = text.split_once('\n') else {
+        return false;
+    };
+    if crate::hash(text.as_bytes()) != checksum {
+        return false;
+    }
     let mut lines = text.lines();
     let Some(first) = lines.next() else {
         return false;

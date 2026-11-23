@@ -411,6 +411,8 @@ fn init_stamp_skips_rehashing_only_while_metadata_is_unchanged() {
 
 #[test]
 fn init_stamp_must_name_the_lock_and_the_generation_directory() {
+    use sha2::{Digest, Sha256};
+
     let f = Fixture::new();
     f.plugin("sample", "load='startup'", "BINIT_SAMPLE=original\n");
     success(f.prepare(&["sample"]));
@@ -421,7 +423,9 @@ fn init_stamp_must_name_the_lock_and_the_generation_directory() {
     success(f.cli(&["init"]));
     // Without the lock and directory lines, the remaining lines all match, yet the stamp is refused.
     let text = fs::read_to_string(&stamp).unwrap();
-    let kept: Vec<_> = text
+    let (_, body) = text.split_once('\n').unwrap();
+    let (header, metadata) = body.split_once('\n').unwrap();
+    let kept: Vec<_> = metadata
         .lines()
         .filter(|line| {
             !line.ends_with(" lock.toml")
@@ -429,10 +433,31 @@ fn init_stamp_must_name_the_lock_and_the_generation_directory() {
                 && !line.ends_with(" plugins/sample/plugin.bash")
         })
         .collect();
-    fs::write(&stamp, kept.join("\n") + "\n").unwrap();
+    let (header_prefix, _) = header.rsplit_once(' ').unwrap();
+    let body = format!("{header_prefix} {}\n{}\n", kept.len(), kept.join("\n"));
+    let checksum = Sha256::digest(body.as_bytes());
+    fs::write(&stamp, format!("{checksum:x}\n{body}")).unwrap();
     let plugin = generation.join("plugins/sample/plugin.bash");
     fs::write(&plugin, "BINIT_SAMPLE=tampered\n").unwrap();
     failure(f.cli(&["init"]), "content changed");
+}
+
+#[test]
+fn damaged_init_stamp_is_regenerated_after_full_verification() {
+    let f = Fixture::new();
+    f.plugin("sample", "load='startup'", "BINIT_SAMPLE=original\n");
+    success(f.prepare(&["sample"]));
+    let generation = f.generation();
+    let id = generation.file_name().unwrap().to_str().unwrap();
+    let stamp = generation.with_file_name(format!("{id}.verified"));
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    let source = success(f.cli(&["init"]));
+    let valid = fs::read(&stamp).unwrap();
+    let mut damaged = valid.clone();
+    damaged[0] = if damaged[0] == b'0' { b'1' } else { b'0' };
+    fs::write(&stamp, damaged).unwrap();
+    assert_eq!(success(f.cli(&["init"])), source);
+    assert_eq!(fs::read(stamp).unwrap(), valid);
 }
 
 #[test]

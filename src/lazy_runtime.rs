@@ -41,7 +41,27 @@ const GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("unload", &["__binit_unload", "__binit_provider_forget"]),
+    ("cli-completion", &["__binit_cli_complete"]),
+    (
+        "audit",
+        &[
+            "__binit_audit_begin",
+            "__binit_audit_clear",
+            "__binit_audit_end",
+            "__binit_audit_snapshot",
+            "__binit_audit_entries",
+            "__binit_audit_value",
+            "__binit_audit_report",
+            "__binit_audit_restore_functions",
+        ],
+    ),
 ];
+
+pub(super) const SOURCE: &str = concat!(
+    include_str!("../runtime/core.bash"),
+    "\n",
+    include_str!("../runtime/plugin-audit.bash"),
+);
 
 /// The file that holds every deferred function outside `GROUPS`.
 const REST: &str = "more";
@@ -49,8 +69,8 @@ const REST: &str = "more";
 /// Appended to the eager runtime, before the stubs. A deferred file holds only function
 /// definitions, so sourcing it again is safe: a definition installed before a failure is
 /// already the final one, and clearing the flag lets the next stub call retry the rest.
-/// A shell that needed the rest is already using the runtime at length, so loading the rest
-/// also loads every group; a group that fails there loads again on its own first use.
+/// Loading the general runtime warms the lifecycle groups. Audit and command
+/// completion still load on their own first use.
 const LOADER: &str = r#"
 # The functions below load from runtime-<group>.bash on first use; each file redefines its own.
 __binit_runtime_dir=$__binit_generation_dir
@@ -66,7 +86,7 @@ __binit_runtime_load() {
     __binit_runtime_loaded[$1]=1
     [[ $1 == @REST@ ]] || return 0
     local __binit_runtime_group
-    for __binit_runtime_group in @GROUPS@; do
+    for __binit_runtime_group in load unload; do
         [[ -n ${__binit_runtime_loaded[$__binit_runtime_group]-} ]] ||
             __binit_runtime_load "$__binit_runtime_group" || :
     done
@@ -127,12 +147,7 @@ pub fn split(source: &str) -> Result<(String, Vec<(String, String)>), String> {
     if let Some((group, ..)) = files.iter().find(|(_, _, names)| names.is_empty()) {
         return Err(format!("runtime has no deferred functions for {group}"));
     }
-    let groups = GROUPS
-        .iter()
-        .map(|(group, _)| *group)
-        .collect::<Vec<_>>()
-        .join(" ");
-    eager.push_str(&LOADER.replace("@REST@", REST).replace("@GROUPS@", &groups));
+    eager.push_str(&LOADER.replace("@REST@", REST));
     for (group, _, names) in &files {
         for name in names {
             eager.push_str(&format!(
@@ -162,9 +177,7 @@ fn function_start(line: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::split;
-
-    const RUNTIME: &str = include_str!("../runtime/core.bash");
+    use super::{SOURCE as RUNTIME, split};
 
     #[test]
     fn keeps_every_function_once_and_stubs_the_deferred_ones() {
@@ -175,6 +188,8 @@ mod tests {
             [
                 "runtime-load.bash",
                 "runtime-unload.bash",
+                "runtime-cli-completion.bash",
+                "runtime-audit.bash",
                 "runtime-more.bash"
             ]
         );
@@ -221,7 +236,8 @@ mod tests {
     #[test]
     fn a_failed_load_retries_and_spares_the_caller() {
         let source = "binit() {\n    :\n}\n__binit_load() {\n    :\n}\n__binit_unload() {\n    echo unload\n}\n\
-                      __binit_provider_forget() {\n    :\n}\n__binit_other() {\n    echo other\n}\n";
+                      __binit_provider_forget() {\n    :\n}\n__binit_other() {\n    echo other\n}\n\
+                      __binit_cli_complete() {\n    :\n}\n__binit_audit_report() {\n    :\n}\n";
         let (eager, files) = split(source).unwrap();
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("runtime.bash"), eager).unwrap();

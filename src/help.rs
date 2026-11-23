@@ -1,6 +1,170 @@
 use super::Result;
 use std::ffi::OsString;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Read};
+use std::os::unix::ffi::OsStrExt;
+
+const MANAGER_COMMANDS: &[&[&str]] = &[
+    &[
+        "add", "enable", "disable", "remove", "update", "plugins", "inspect", "shell", "apply",
+    ],
+    &[
+        "diagnose",
+        "candidate",
+        "prepare",
+        "init",
+        "status",
+        "rollback",
+        "trust",
+        "project",
+        "releases",
+    ],
+    &["run", "extension", "declare", "sync"],
+];
+const SHELL_COMMANDS: &[&[&str]] = &[
+    &[
+        "plugin",
+        "profile",
+        "report",
+        "unload",
+        "completions",
+        "load",
+        "editor",
+        "completion",
+    ],
+    &["on", "off", "emit", "dispatch"],
+];
+const CANDIDATE_ACTIONS: &[&str] = &["prepare", "check", "diff", "select", "status"];
+const COMPLETION_ACTIONS: &[&str] = &["list", "enable", "disable", "register", "unregister"];
+
+fn commands() -> impl Iterator<Item = &'static str> {
+    MANAGER_COMMANDS
+        .iter()
+        .chain(SHELL_COMMANDS)
+        .flat_map(|line| line.iter().copied())
+}
+
+// Results are one word per line. Markers ask Bash for data it already owns.
+pub(super) fn complete() -> Result<()> {
+    use super::{default_state, manager, pointer, verify_generation_checks};
+    use std::path::PathBuf;
+
+    const LIMIT: u64 = 64 * 1024;
+    let mut input = Vec::new();
+    io::stdin().take(LIMIT + 1).read_to_end(&mut input)?;
+    let Some(input) = input.strip_suffix(&[0]) else {
+        return Err("incomplete completion request".into());
+    };
+    if input.len() as u64 >= LIMIT {
+        return Err("completion request exceeds size limit".into());
+    }
+    let mut words = Vec::new();
+    let mut state = None;
+    let mut take_state = false;
+    for word in input
+        .split(|byte| *byte == 0)
+        .map(std::ffi::OsStr::from_bytes)
+    {
+        if take_state {
+            state = Some(PathBuf::from(word));
+            take_state = false;
+        } else if word == "--state" {
+            take_state = true;
+        } else {
+            words.push(word.to_str().unwrap_or_default());
+        }
+    }
+    let choices: &[&str] = if take_state {
+        &["@directories"]
+    } else {
+        match words.as_slice() {
+            [] => {
+                for name in commands().chain(["help", "--help", "--version", "--state"]) {
+                    println!("{name}");
+                }
+                return Ok(());
+            }
+            ["help"] => {
+                for name in commands() {
+                    println!("{name}");
+                }
+                return Ok(());
+            }
+            ["candidate"] => CANDIDATE_ACTIONS,
+            ["candidate", "prepare" | "check"] | ["prepare" | "diagnose" | "add"] => &["@files"],
+            ["candidate", "status"] => &["--json"],
+            ["candidate", "select", ..] => &["--base", "--generation", "--receipt"],
+            ["completions"] => COMPLETION_ACTIONS,
+            ["completions", "enable" | "disable"] => &["--plugin", "@completions"],
+            ["completions", "list"] => &["--plugin"],
+            ["completions", "list" | "enable" | "disable", "--plugin"] => &["@live"],
+            ["completions", "unregister"] => &["@completions"],
+            ["completion"] => &["on", "off", "status"],
+            ["editor"] => &["status"],
+            ["on" | "off"] => &["before-load", "after-load"],
+            ["on" | "off", "before-load" | "after-load"] | ["report" | "load" | "unload"] => {
+                &["@live"]
+            }
+            ["sync"] => &["--jobs"],
+            ["update" | "sync", .., "--jobs"] => &["1", "2", "3", "4", "5", "6", "7", "8"],
+            ["run"] => &["--engine", "--", "@files"],
+            ["run", "--engine"] | ["run", "--"] => &["@files"],
+            ["add", _] => &["--disabled"],
+            ["trust" | "project"] => &["@directories"],
+            ["trust", _] => &["--sha256"],
+            ["diagnose", _, ..] => &["--json", "--no-trace"],
+            ["releases", _, ..] => &["--ver", "--asset", "--platform"],
+            ["plugin"] => &["@directories"],
+            ["plugin", _, .., "load", "="] => &[
+                "startup",
+                "prompt",
+                "wait",
+                "command",
+                "completion",
+                "timed",
+                "event",
+                "watch",
+            ],
+            ["plugin", _, ..] => &[
+                "id=",
+                "files=",
+                "bin=",
+                "load=",
+                "commands=",
+                "completions=",
+                "requires=",
+                "depends=",
+                "delay_ms=",
+                "event=",
+                "when=",
+                "watch=",
+            ],
+            ["inspect" | "enable" | "disable" | "remove"] | ["update", ..] => {
+                if words[0] == "update" {
+                    println!("--check\n--jobs");
+                }
+                let state = state.map_or_else(default_state, Ok)?;
+                if !state.join("current").exists() {
+                    return Ok(());
+                }
+                let generation = pointer(&state, "current")?;
+                let lock = verify_generation_checks(&state, &generation)?;
+                for entry in manager::catalog(&lock) {
+                    if !words[1..].contains(&entry.plugin.id.as_str()) {
+                        println!("{}", entry.plugin.id);
+                    }
+                }
+                return Ok(());
+            }
+            _ => &[],
+        }
+    };
+    for option in choices {
+        if !words.contains(option) {
+            println!("{option}");
+        }
+    }
+    Ok(())
+}
 
 const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nplugins\n  plugins         list plugins for the next shell\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview plugin updates\n  rollback        select the previous generation\n\ncurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nall commands     binit --help\ncommand help     binit help COMMAND";
 
@@ -49,8 +213,17 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
     }
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help") {
         print_guide();
+        for (title, lines) in [
+            ("manager commands", MANAGER_COMMANDS),
+            ("current-shell commands", SHELL_COMMANDS),
+        ] {
+            println!("\n{title}");
+            for line in lines {
+                println!("  {}", line.join(" "));
+            }
+        }
         println!(
-            "\nmanager commands\n  add enable disable remove update plugins inspect shell apply\n  diagnose candidate prepare init status rollback trust project releases\n  run extension declare sync\n\ncurrent-shell commands\n  plugin profile report unload completions load editor completion\n  on off emit dispatch\n\nstate     --state dir, $BINIT_STATE, $XDG_DATA_HOME/binit,\n          or $HOME/.local/share/binit\nrecovery  BINIT_SAFE=1 bash --rcfile path/to/init.bash -i"
+            "\nstate     --state dir, $BINIT_STATE, $XDG_DATA_HOME/binit,\n          or $HOME/.local/share/binit\nrecovery  BINIT_SAFE=1 bash --rcfile path/to/init.bash -i"
         );
         return Ok(true);
     }

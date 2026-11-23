@@ -1143,15 +1143,7 @@ fn schema_one_generations_migrate_without_losing_plugins() {
     let legacy = f.state().join("generations").join(&id);
     fs::create_dir_all(legacy.join("plugins/custom")).unwrap();
     fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
-    for file in [
-        "init.bash",
-        "runtime.bash",
-        "runtime-more.bash",
-        "runtime-load.bash",
-        "runtime-unload.bash",
-        "plugins/custom/plugin.toml",
-        "plugins/custom/plugin.bash",
-    ] {
+    for file in lock["files"].as_table().unwrap().keys() {
         fs::copy(original.join(file), legacy.join(file)).unwrap();
     }
     fs::write(legacy.join("lock.toml"), encoded).unwrap();

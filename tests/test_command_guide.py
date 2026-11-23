@@ -9,6 +9,8 @@ import tempfile
 import termios
 import unittest
 
+from test_wait import PROMPT, Session
+
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get('BINIT_TEST_BINARY', ROOT / 'target/release/binit')).resolve()
 BASH = os.environ.get('BINIT_BASH', '/bin/bash')
@@ -90,3 +92,62 @@ class CommandGuideTests(unittest.TestCase):
         result = self.command('run', str(script), '--help')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, 'argument:--help\n')
+
+    def test_tab_completes_commands_and_the_right_plugin_catalogs(self):
+        for mode in ('emacs', 'vi'):
+            for text, expected in (
+                ('binit cand', 'binit candidate'),
+                ('binit candidate di', 'binit candidate diff'),
+                ('binit report slo', 'binit report slow'),
+                ('binit inspect slo', 'binit inspect slow'),
+            ):
+                with self.subTest(mode=mode, text=text), Session(':\n', menu=False, mode=mode) as shell:
+                    shell.wait(lambda: shell.cursor_line == PROMPT)
+                    shell.send(text + '\t')
+                    shell.wait(lambda: shell.cursor_line == f'{PROMPT} {expected}')
+
+    def test_tab_preserves_the_callers_completion_specification(self):
+        with Session('', 'complete -W custom-result binit\n', menu=False) as shell:
+            shell.wait(lambda: shell.cursor_line == PROMPT)
+            shell.send('binit cus\t')
+            shell.wait(lambda: shell.cursor_line == f'{PROMPT} binit custom-result')
+
+    def test_opt_in_report_and_unload_preserve_later_user_edits(self):
+        setup = r"""BINIT_REPORT_EFFECTS=1
+before_audit_fixture() {
+    shopt -s extglob
+    eval 'restore_me() { case a in @(a|b)) echo old;; esac; }'
+    shopt -u extglob
+    keep_me() { echo old; }
+    bring_back() { echo old; }
+    AUDITED=old
+    complete -W 'old choice' audit_cmd
+    bind -m emacs-standard '"\C-xq": beginning-of-line'
+}
+binit on before-load slow before_audit_fixture
+"""
+        change = r"""restore_me() { echo new; }
+keep_me() { echo new; }
+unset -f bring_back
+export AUDITED=fixture-value-must-stay-private
+complete -W 'new choice' audit_cmd
+bind -m emacs-standard '"\C-xq": end-of-line'
+return 9
+"""
+        with Session(change, setup, menu=False) as shell:
+            shell.wait(lambda: shell.cursor_line == PROMPT)
+            shell.send('keep_me() { echo user; }; binit report slow > marks/report\n')
+            shell.wait(lambda: shell.mark('report') and shell.cursor_line == PROMPT)
+            report = (shell.marks / 'report').read_text()
+            self.assertIn('state failed', report)
+            self.assertIn('effect changed function restore_me current', report)
+            self.assertIn('effect changed function keep_me modified', report)
+            self.assertIn('effect removed function bring_back current', report)
+            self.assertIn('effect changed variable AUDITED current  -- -> -x', report)
+            self.assertIn('effect changed completion audit_cmd current', report)
+            self.assertIn('effect changed binding emacs-', report)
+            self.assertNotIn('fixture-value-must-stay-private', report)
+            shell.send('binit unload slow && ! shopt -q extglob && '
+                       '(shopt -s extglob; restore_me; keep_me; bring_back) > marks/result\n')
+            shell.wait(lambda: shell.mark('result') and shell.cursor_line == PROMPT)
+            self.assertEqual((shell.marks / 'result').read_text(), 'old\nuser\nold\n')

@@ -51,10 +51,21 @@ function or a loaded dependant before removing anything. Unchanged recorded func
 aliases, owned prompt segments, declared completions and Binit prompt/directory subscriptions are
 removed. A later `binit load ID` explicitly reloads an unloaded plugin.
 
-Unload does not reverse arbitrary assignments, exports, directory changes,
-traps, key bindings, processes, filesystem changes or definitions a plugin
-overwrote. A failed source can leave partial effects. Open a fresh recovery
-shell when complete reversal is required.
+Set `BINIT_REPORT_EFFECTS=1` before a plugin loads to compare its entry's
+shell state before and after sourcing. The report adds changes to simple
+functions, completion specifications, variables and Readline bindings. It
+shows variable names and attributes. A change marked `modified` differs
+from the state immediately after loading. Shell tracing can skip capture.
+
+With capture enabled, unload can also restore ordinary functions that the
+plugin replaced or removed. It keeps later edits and leaves functions with
+overlapping or nested ownership in place. Variable and binding changes are
+observations. A failed source can leave partial effects. Use a fresh recovery
+shell when you need a clean shell.
+
+In an initialized Bash, press Tab after `binit` to find commands and options.
+Plugin IDs for `report` and `unload` come from the current shell. Management
+commands such as `inspect` complete IDs from the selected generation.
 
 `binit completions list` lists declared completion names and their owner.
 `binit completions disable NAME` removes an owned specification;

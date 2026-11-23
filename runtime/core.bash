@@ -20,6 +20,8 @@ declare -gA __binit_watch_value=() __binit_watch_dirty=() __binit_before_callbac
 declare -gA __binit_owned_functions=() __binit_owned_aliases=() __binit_completion_spec=() __binit_completion_disabled=()
 declare -gA __binit_provider_count=() __binit_provider_args=() __binit_provider_owner=() __binit_provider_spec=()
 declare -gA __binit_segment_owner=() __binit_owned_segment_value=()
+declare -gA __binit_audit_status=() __binit_audit_nested=()
+declare -gA __binit_audit_before=() __binit_audit_after=() __binit_audit_attributes=()
 declare -ga __binit_line_counts=() __binit_line_args=()
 declare -g __binit_loading='' __binit_callback_owner='' __binit_last_directory='' BINIT_LAST_STATUS=0 BINIT_PROMPT_TEXT=''
 declare -g __binit_line_text='' __binit_first_prompt=0 __binit_lines_total=0 __binit_lines_matched=0
@@ -237,6 +239,9 @@ __binit_unload() {
         __binit_unload_current=$( { builtin complete -p -- "$__binit_unload_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_unload_current=''
         [[ -z $__binit_unload_current || $__binit_unload_current == "${__binit_completion_spec[$__binit_unload_name]-}" ]] || { printf 'binit: %s: completion changed: %s\n' "$__binit_unload_id" "$__binit_unload_name" >&2; return 1; }
     done
+    if [[ ${__binit_audit_status[$__binit_unload_id]-} == captured ]]; then
+        __binit_audit_restore_functions "$__binit_unload_id" || return 1
+    fi
     __binit_unload_keep=()
     for __binit_unload_name in "${__binit_segments[@]}"; do
         if [[ ${__binit_segment_owner[$__binit_unload_name]-} == "$__binit_unload_id" ]]; then
@@ -332,6 +337,7 @@ __binit_load() {
     local -A __binit_load_functions=() __binit_load_aliases=() __binit_pre_completion=()
     local __binit_load_comp __binit_load_comp_before __binit_load_mark=''
     local -a __binit_load_completions=()
+    local -A __binit_load_audit=()
     case ${__binit_state[$__binit_load_id]-missing} in
         loaded) return 0 ;;
         pending) ;;
@@ -394,6 +400,14 @@ __binit_load() {
         fi
     done
     __binit_load_before=${EPOCHREALTIME/./}
+    if [[ -v __binit_audit_status[$__binit_load_id] ]]; then
+        __binit_audit_clear "$__binit_load_id"
+    fi
+    if [[ ${BINIT_REPORT_EFFECTS-0} == 1 ]]; then
+        __binit_audit_begin "$__binit_load_id" __binit_load_audit
+    elif [[ -n $__binit_load_saved && ${__binit_audit_status[$__binit_load_saved]-} == capturing ]]; then
+        __binit_audit_nested[$__binit_load_saved]=1
+    fi
     __binit_loading=$__binit_load_id
     # Sourced plugins are trusted code. A failed load can have partial effects.
     # shellcheck source=/dev/null
@@ -408,6 +422,9 @@ __binit_load() {
         __binit_record_effects "$__binit_load_id" __binit_load_functions __binit_load_aliases "$__binit_load_mark"
     fi
     [[ -z ${__binit_completions[$__binit_load_id]} ]] || __binit_capture_plugin_completions "$__binit_load_id"
+    if [[ ${__binit_audit_status[$__binit_load_id]-} == capturing ]]; then
+        __binit_audit_end "$__binit_load_id" __binit_load_audit
+    fi
     __binit_loading=$__binit_load_saved
     if [[ -n ${__binit_after_callbacks[$__binit_load_id]-} ]] && ! __binit_notify after-load "$__binit_load_id" "${__binit_state[$__binit_load_id]}"; then
         __binit_state[$__binit_load_id]=failed
@@ -489,6 +506,9 @@ __binit_prompt_dispatch() {
             if [[ ${__binit_state[$__binit_prompt_dispatch_id]} == loading || ${__binit_state[$__binit_prompt_dispatch_id]} == checking ]]; then
                 __binit_state[$__binit_prompt_dispatch_id]=failed
                 __binit_reason[$__binit_prompt_dispatch_id]='load interrupted'
+                if [[ ${__binit_audit_status[$__binit_prompt_dispatch_id]-} == capturing ]]; then
+                    __binit_audit_status[$__binit_prompt_dispatch_id]=interrupted
+                fi
             fi
         done
         __binit_loading=''
@@ -756,6 +776,34 @@ __binit_completion_admin() {
     done
 }
 
+__binit_cli_complete() {
+    local __binit_cli_choice __binit_cli_word
+    local -a __binit_cli_choices=()
+    COMPREPLY=()
+    while IFS= read -r __binit_cli_choice; do
+        case $__binit_cli_choice in
+            @live) __binit_cli_choices+=("${__binit_ids[@]}") ;;
+            @completions)
+                __binit_cli_choices+=("${!__binit_completion_owner[@]}")
+                for __binit_cli_word in "${!__binit_provider_count[@]}"; do
+                    [[ -v __binit_completion_owner[$__binit_cli_word] ]] ||
+                        __binit_cli_choices+=("$__binit_cli_word")
+                done
+                ;;
+            @directories) builtin compopt -o dirnames 2>/dev/null || : ;;
+            @files) builtin compopt -o default 2>/dev/null || : ;;
+            *) __binit_cli_choices+=("$__binit_cli_choice") ;;
+        esac
+    done < <(
+        printf '%s\0' --state "$BINIT_STATE_DIR" "${COMP_WORDS[@]:1:COMP_CWORD-1}" |
+            command "$__binit_manager" __complete 2>/dev/null
+    )
+    for __binit_cli_choice in "${__binit_cli_choices[@]}"; do
+        [[ $__binit_cli_choice != "$2"* ]] || COMPREPLY+=("$__binit_cli_choice")
+    done
+    return 0
+}
+
 binit() {
     if (( $# == 0 )) || [[ ${1-} =~ ^(--version|-V|--help|-h|help)$ ]] ||
        { (( $# == 2 )) && [[ ${2-} =~ ^(--help|-h)$ && $1 != run ]]; }; then
@@ -803,6 +851,9 @@ binit() {
         for __binit_report_key in "${!__binit_segment_owner[@]}"; do [[ ${__binit_segment_owner[$__binit_report_key]} == "$2" ]] && printf 'segment %s\n' "$__binit_report_key"; done
         for __binit_report_key in "${!__binit_hook_owner[@]}"; do [[ ${__binit_hook_owner[$__binit_report_key]} == "$2" ]] && printf 'hook %s\n' "$__binit_report_key"; done
         for __binit_report_key in "${!__binit_completion_owner[@]}"; do [[ ${__binit_completion_owner[$__binit_report_key]} == "$2" && -v __binit_completion_spec[$__binit_report_key] ]] && printf 'completion %s\n' "$__binit_report_key"; done
+        if [[ -v __binit_audit_status[$2] ]]; then
+            __binit_audit_report "$2"
+        fi
         return 0
     elif [[ ${1-} == unload ]]; then
         if (( $# != 2 )) || [[ ! $2 =~ ^[a-zA-Z][a-zA-Z0-9_-]{0,63}$ || ! -v __binit_state[$2] ]]; then printf 'usage: binit unload ID\n' >&2; return 2; fi
@@ -1053,7 +1104,8 @@ __binit_first_prompt_work() {
 __binit_load_direct() {
     # Each simple command costs about as much as the bookkeeping it does, so assignments share commands.
     local __binit_load_id=$1 __binit_load_mark __binit_load_before __binit_load_saved=$__binit_loading __binit_load_active_saved=$__binit_load_active
-    [[ $- != *T* && ${__binit_state[$__binit_load_id]} == pending &&
+    [[ $- != *T* && ${BINIT_REPORT_EFFECTS-0} != 1 && ! -v __binit_audit_status[$__binit_load_id] &&
+       ${__binit_state[$__binit_load_id]} == pending &&
        -z ${__binit_when[$__binit_load_id]-}${__binit_commands[$__binit_load_id]}${__binit_depends[$__binit_load_id]}${__binit_requires[$__binit_load_id]}${__binit_completions[$__binit_load_id]}${__binit_before_callbacks[$__binit_load_id]-}${__binit_after_callbacks[$__binit_load_id]-} ]] &&
         builtin binit_complete effects mark __binit_load_mark || return 2
     __binit_load_active=1 __binit_state[$__binit_load_id]=loading __binit_loading=$__binit_load_id __binit_load_before=${EPOCHREALTIME/./}
@@ -1179,6 +1231,9 @@ __binit_activate_shell() {
     PROMPT_COMMAND=(__binit_prompt_dispatch "${PROMPT_COMMAND[@]}")
     __binit_first_prompt=1
     __binit_active=1
+    if [[ $- == *i* ]] && ! builtin complete -p binit >/dev/null 2>&1; then
+        builtin complete -F __binit_cli_complete binit
+    fi
     if [[ ${BINIT_COMPLETION_MENU-1} == 1 && -f $__binit_generation_dir/completion.so ]]; then
         if __binit_load_completion >/dev/null 2>&1; then
             builtin binit_complete on >/dev/null 2>&1 || :

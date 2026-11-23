@@ -647,7 +647,7 @@ fn install_generation(
     }
     init.push_str("__binit_activate_shell\n");
     packages.insert("init.bash".into(), init.into_bytes());
-    let (runtime, deferred) = lazy_runtime::split(include_str!("../runtime/core.bash"))?;
+    let (runtime, deferred) = lazy_runtime::split(lazy_runtime::SOURCE)?;
     let runtime = runtime + include_str!("../runtime/completion-module.bash");
     packages.insert("runtime.bash".into(), runtime.into_bytes());
     for (name, text) in deferred {
@@ -1045,6 +1045,9 @@ fn run() -> Result<()> {
     let raw_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if help::handle(&raw_args)? {
         return Ok(());
+    }
+    if raw_args.len() == 1 && raw_args[0] == "__complete" {
+        return help::complete();
     }
     if raw_args
         .first()

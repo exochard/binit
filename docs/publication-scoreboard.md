@@ -53,6 +53,10 @@ timings are reported for each subject without a verdict.
 The editor corpus runs without `BINIT_HISTORY_MODE`, so Binit uses its default
 search-mode history.
 
+The [real plugin workflow benchmark](plugin-compatibility.md#real-plugin-workflow-timing)
+reports startup and first use with observable Git, fzf, and NVM effects.
+Its receipts use a separate workload and score no publication aspects.
+
 ## Current result
 
 The scored result for each release is published with it on the

@@ -379,6 +379,35 @@ class RuntimeFeatures(unittest.TestCase):
         self.assertIn('second:second:second', result.stdout.splitlines())
         self.assertNotIn('readonly', result.stderr)
 
+    def test_traced_nested_load_keeps_inner_function_after_outer_unload(self):
+        self.plugin('outer', "shared_command() { echo outer; }\n", 'load=event', 'event=start_outer')
+        self.plugin('inner', "shared_command() { echo inner; }\n", 'load=event', 'event=start_inner')
+        self.env['BINIT_COMPLETION_MENU'] = '0'
+        self.sync()
+        result = self.shell(r"""
+set +T
+declare -ft binit __binit_load __binit_record_effects
+# Transfer the function while the outer loader is recording its effects.
+replace_from_inner() {
+    if [[ ${__binit_record_id-} == outer && ${__binit_record_name-} == shared_command && $replaced == 0 ]]; then
+        replaced=1
+        unset -f shared_command
+        binit load inner || exit 41
+    fi
+}
+replaced=0
+trap 'replace_from_inner' DEBUG
+binit load outer || exit 42
+trap - DEBUG
+[[ $replaced == 1 ]] || exit 43
+binit unload outer || exit 44
+shared_command || exit 45
+binit unload inner || exit 46
+if declare -F shared_command >/dev/null; then exit 47; fi
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['inner'])
+
     def test_unload_dependency_refusal_preserves_both_plugins(self):
         self.plugin('parent', 'parent_function() { :; }\n', 'load=startup')
         self.plugin('child', 'child_function() { :; }\n', 'load=startup', 'depends=parent')

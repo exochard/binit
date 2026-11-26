@@ -62,9 +62,11 @@ identities in `verification/`.
 `BINIT_NATIVE=0 make check` qualifies the native-disabled build:
 Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
 Native completion and post-prompt PTY checks run in native-enabled jobs.
-Pull requests to `dev` run `make check` on Ubuntu 24.04 x86_64 with
-Bash 5.2 and 5.3, each with the native module enabled and disabled. Start the
-full check matrix and the separate editor workflow from the Actions tab.
+GitHub runs `make check` on pushes and pull requests to `dev` on Ubuntu
+24.04 x86_64 with Bash 5.2 and 5.3, each with the native module enabled
+and disabled. Forgejo runs its x86_64 workflow on pushes to `dev` and
+`main`. Start the full GitHub matrix and the separate editor workflow
+from the Actions tab.
 Each matrix cell uses the same check target with its own Bash and compiler.
 The ecosystem, ABI mismatch and sanitizer jobs have separate inputs.
 

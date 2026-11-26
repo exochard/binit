@@ -1,11 +1,13 @@
 """Checks for the source boundary of the CI Bash builder."""
 
+import errno
 import importlib.util
 import io
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 
@@ -27,6 +29,21 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), body)
             self.assertEqual(actual, digest)
             self.assertEqual(url, "https://ftp.gnu.org/gnu/bash/bash-test.tar.gz")
+
+    def test_unreachable_primary_uses_a_checksum_pinned_mirror(self):
+        body = b"known archive bytes"
+        checksum = "4071644df698372efb48caf3c44ad19684bbaeda8a375673d414d4dfb84ab0fa"
+        offline = urllib.error.URLError(OSError(errno.ENETUNREACH, "Network is unreachable"))
+        with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as directory:
+            target = Path(directory) / "source.tar.gz"
+            with patch.dict(ci_bash.SOURCES, {"test": ("test", checksum)}), patch.object(
+                ci_bash.urllib.request, "urlopen", side_effect=[offline, io.BytesIO(body)]
+            ) as fetch:
+                url, actual = ci_bash.download("test", target)
+            self.assertEqual(target.read_bytes(), body)
+            self.assertEqual(actual, checksum)
+            self.assertEqual(url, "https://mirrors.kernel.org/gnu/bash/bash-test.tar.gz")
+            self.assertEqual(fetch.call_args_list[1].args[0].full_url, url)
 
     def test_bad_checksum_is_rejected_before_writing(self):
         with tempfile.TemporaryDirectory(prefix=".scratch-ci-", dir=ROOT) as temporary:

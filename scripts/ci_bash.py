@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
+import urllib.error
 import urllib.request
 
 
@@ -18,12 +20,22 @@ SOURCES = {
 MAX_ARCHIVE = 20 * 1024 * 1024
 
 
-def download(version, destination):
-    archive_version, checksum = SOURCES[version]
-    url = f"https://ftp.gnu.org/gnu/bash/bash-{archive_version}.tar.gz"
+def fetch_archive(url):
     request = urllib.request.Request(url, headers={"User-Agent": "binit-ci"})
     with urllib.request.urlopen(request, timeout=60) as response:
-        data = response.read(MAX_ARCHIVE + 1)
+        return response.read(MAX_ARCHIVE + 1)
+
+
+def download(version, destination):
+    archive_version, checksum = SOURCES[version]
+    path = f"/gnu/bash/bash-{archive_version}.tar.gz"
+    url = "https://ftp.gnu.org" + path
+    try:
+        data = fetch_archive(url)
+    except (urllib.error.URLError, TimeoutError) as error:
+        print(f"{url}: {error}; trying the kernel.org mirror", file=sys.stderr)
+        url = "https://mirrors.kernel.org" + path
+        data = fetch_archive(url)
     if len(data) > MAX_ARCHIVE:
         raise ValueError("Bash source archive exceeds 20 MiB")
     if hashlib.sha256(data).hexdigest() != checksum:

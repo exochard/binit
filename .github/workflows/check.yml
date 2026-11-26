@@ -2,6 +2,8 @@ name: Check
 
 on:
   workflow_dispatch:
+  push:
+    branches: [dev]
   pull_request:
     branches: [dev]
 
@@ -14,14 +16,14 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["ubuntu-24.04","ubuntu-24.04-arm"]') }}
+        os: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["ubuntu-24.04"]' || '["ubuntu-24.04","ubuntu-24.04-arm"]') }}
         bash:
           - version: '5.2'
             source: '5.2.15'
           - version: '5.3'
             source: '5.3'
         native: ['0', '1']
-        compiler: ${{ fromJSON(github.event_name == 'pull_request' && '["gcc"]' || '["gcc","clang"]') }}
+        compiler: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["gcc"]' || '["gcc","clang"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:

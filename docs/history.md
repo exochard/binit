@@ -6,9 +6,10 @@ bindings it still owns. The development plugin `history-search` calls these comm
 
 While typing, only the inline suggestion is shown. Tab keeps its completion
 binding. Ctrl-R opens the history panel with a search query, including from an
-empty line. Matching ignores ASCII letter case, removes exact duplicates, and
-searches at most the 1,000 newest in-memory Bash history entries. Suggestion
-keys are described in [editor integration](editor.md).
+empty line. Ctrl-R searches all in-memory Bash history by default and shows
+up to 1,000 distinct matching commands, newest first. A more specific query
+can find a command beyond the first 1,000 results. Matching ignores ASCII
+letter case. See [editor integration](editor.md) for suggestion keys.
 
 While searching, the panel's last line shows the query and the position, as in
 `history  al▏  1/37   ?`. Letters including `j` and `k` extend the query. Enter
@@ -25,7 +26,8 @@ Binit binds.
 The older live panel remains available explicitly with
 `binit_complete editor history live`, or `BINIT_HISTORY_MODE=live` before
 loading the history plugin. It shows up to five matches and gives Tab to
-history navigation while they are visible. In this mode, Tab, Esc, Tab
+history navigation while they are visible. Live matches use the most recent
+1,000 entries. In this mode, Tab, Esc, Tab
 reaches ordinary completion. `BINIT_HISTORY_MODE=search` selects the default.
 The live mode preserves configurations that depend on that display and binding.
 
@@ -46,7 +48,8 @@ The default is literal matching. Set options before enabling history.
 
 Set `BINIT_HISTORY_CONTEXT=1` to capture directory, command timestamp and
 exit status for new history entries. Set `BINIT_HISTORY_SCOPE=directory`
-or `session` to filter the picker. Imported entries have no session context.
+or `session` to filter the picker. These scopes use captured context from
+the most recent 1,000 entries. Imported entries have no session context.
 
 With `BINIT_HISTORY_DELETE=1`, press `x` while browsing, then `y` to remove
 the selected live history entry. Esc cancels the confirmation. Deletion

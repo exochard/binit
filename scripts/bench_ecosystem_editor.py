@@ -354,12 +354,13 @@ def ble_empty_prompt(shell, mode):
     return mode != 'vi' or (cursor.y + 1 < len(rows) and '-- INSERT --' in rows[cursor.y + 1])
 
 
-def history_trace(shell, subject, history, mode='emacs'):
+def history_trace(shell, subject, history, mode='emacs', binit_history_range='full'):
     if not history['entries']:
         return {'range': 'empty', 'attempted': False}
     checks = [('recent', 'editor-recent-needle', 'wf-history-recent', True)]
     if history['entries'] == 2048:
-        checks.append(('old', 'editor-historic-needle', 'wf-history-old', subject not in NATIVE_SUBJECTS))
+        expected = subject not in NATIVE_SUBJECTS or binit_history_range == 'full'
+        checks.append(('old', 'editor-historic-needle', 'wf-history-old', expected))
     result = {}
     for name, needle, marker, expected in checks:
         shell.settled(b'\x12')
@@ -486,7 +487,7 @@ def cleanup_quiescence(pid, bound, samples):
     return False
 
 
-def run_trace(subject, mode, history, binary, bash, source, directory, events):
+def run_trace(subject, mode, history, binary, bash, source, directory, events, binit_history_range='full'):
     rc, home = configuration(subject, mode, history, directory, binary, bash, source)
     runtime = directory / 'runtime'
     runtime.mkdir(mode=0o700, exist_ok=True)
@@ -527,7 +528,7 @@ def run_trace(subject, mode, history, binary, bash, source, directory, events):
                              '&& :${bleopt_complete_auto_complete_opts-}: != *:history-disabled:* ]]')
         frame(shell, f'[[ $(history | wc -l) == {history["entries"]} ]]')
         row['traces']['typing'] = typing_trace(shell, events)
-        row['traces']['history-range'] = history_trace(shell, subject, history, mode)
+        row['traces']['history-range'] = history_trace(shell, subject, history, mode, binit_history_range)
         path = tag(shell, directory, 'unicode')
         row['traces']['unicode'] = {'elapsed_ms': accepted(shell, " wf_capture 'caffè 雪'".encode())}
         effect(path, 'caffè 雪\0'.encode())
@@ -863,6 +864,8 @@ def main():
     parser.add_argument('--subjects', nargs='+')
     parser.add_argument('--modes', nargs='+')
     parser.add_argument('--histories', nargs='+')
+    parser.add_argument('--binit-history-range', choices=('full', 'recent'), default='full',
+                        help='expected Ctrl-R range (recent for the 0.1.0 and 0.1.1 releases)')
     parser.add_argument('--skip-pairing', action='store_true', help='diagnostic only; does not qualify the corpus')
     args = parser.parse_args()
     args.work, args.output, args.sources, args.binary = (args.work.resolve(), args.output.resolve(),
@@ -886,7 +889,7 @@ def main():
         stream.write('{}\n')
     (args.work / 'driver.py').write_bytes(Path(__file__).read_bytes())
     result = {'schema': 1, 'phase': 'editor-common-traces', 'runs': [], 'complete_two_run_editor': False,
-              'comparability': policy['comparability']}
+              'comparability': policy['comparability'], 'binit_history_range': args.binit_history_range}
     try:
         source_lock = json.loads(corpus.SPEC.read_text())
         result['source_receipts'] = corpus.verify_sources(args.sources, source_lock)
@@ -927,7 +930,7 @@ def main():
                             result['active_case'] = [run, pair, subject, mode, history]
                             directory = args.work / f'{run}-{pair}-{subject}-{mode}-{history}'
                             row = run_trace(subject, mode, by_history[history], args.binary, args.bash,
-                                            source, directory, args.events)
+                                            source, directory, args.events, args.binit_history_range)
                             samples.append({'pair': pair, **row})
                             save(args.output, result)
                 print(f'run {run + 1} pair {pair + 1}/{args.pairs}: editor effects passed', flush=True)

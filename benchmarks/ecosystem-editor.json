@@ -37,7 +37,7 @@
     {"id": "wrapped-prompt", "columns": 40, "input": "prompt and editable line wrapping across the right edge", "effects": "complete argument bytes and usable prompt after acceptance"},
     {"id": "completion-first-warm", "input": "same Bash completion function and one candidate containing a space, twice", "effects": "correct first and warm insertion, literal argument bytes and provider invocation count"},
     {"id": "completion-large-cancel", "candidates": 1024, "input": "ambiguous completion then Readline Emacs Ctrl-G, Readline vi Esc followed by i, Binit menu Esc, or ble.sh menu Ctrl-G", "effects": "time from first cancellation input through accepted-command endpoint; record accepted-command latency separately; answer the complete Readline candidate confirmation when present, preserve editable input, record provider count and reject stale insertion"},
-    {"id": "history-range", "input": "search recent marker and large-history old marker", "effects": "record visible/retrievable matches; Binit searches only its newest 1000 entries"},
+    {"id": "history-range", "input": "search recent marker and large-history old marker", "effects": "require the recent marker and check the old marker against the selected Ctrl-R history range"},
     {"id": "isolated-slow-cancel", "provider_delay_ms": 200, "input": "type while isolated completion is in flight", "effects": "the provider publishes its own PID atomically; a successful Binit plus ble pairing requires that exact non-zombie owned descendant at input; Binit must preserve all input and reject stale completion; Readline and ble.sh synchronous controls record their exact accepted input and differing behavior; retain immediate resource and descriptor inventory; mark vanished descriptors partial; require a complete single-shell, no-child observation at or below the baseline descriptor count within 100 ms, with checks at 5 ms intervals and all observations retained"},
     {"id": "stateful-slow-provider", "provider_delay_ms": 200, "input": "ordinary current-shell Bash completion function changes globals", "effects": "record exact provider arguments, global changes and final candidate; report blocking behavior separately"},
     {"id": "recovery", "input": "press Ctrl-C on an unaccepted command, then execute a harmless capture command", "effects": "no interrupted command execution and correct next accepted argument; record ble.sh vi normal-mode line retention and explicit deletion before continuing"}
@@ -56,7 +56,7 @@
   },
   "comparability": [
     "Plain Readline is a control without Binit's or ble.sh's editor features.",
-    "Binit live history searches only the newest 1000 entries; the old large-history match must remain visible as a capability limit.",
+    "Binit's live panel uses the newest 1000 entries. Explicit Ctrl-R searches across in-memory history on current development builds. The 0.1.0 and 0.1.1 releases require the recent-only comparison profile.",
     "Frameworks without editors require an explicitly checked editor pairing; untested pairings remain unqualified.",
     "Binit plus ble.sh must pass compatibility behavior before any pairing can be measured.",
     "Isolated and current-shell stateful providers have different effects and are not interchangeable."

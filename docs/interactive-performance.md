@@ -571,7 +571,7 @@ prompt detection, which changes no timed step.
 | --- | --- | --- |
 | Git prompt | A persistent status daemon or index cache | Status costs 14–15 ms per prompt in a small repository and the full 50 ms wait on the 20,000-file fixture. A cached daemon could answer sooner, but it is a new runtime dependency that needs its own approval. |
 | Git completion | Cancelling installed definitions once they run | Definitions change live Bash state, so a running script cannot be stopped without losing that state. Discovery can be cancelled, and sourcing stays an explicit step. |
-| History search | A larger persistent index, sync and accounts | A larger index needs a new storage dependency and approval. Search stays bounded to the newest 1,000 entries. Sync and accounts are out of scope. |
+| History search | A persistent index, sync and accounts | The live panel uses the newest 1,000 entries. Ctrl-R can search the shell's in-memory history without a separate index. |
 | Autosuggestions | Previews from arbitrary shell completion, and asynchronous history | Shell completion functions can have side effects and need live definitions, so previews use isolated providers only. The history strategy stays synchronous with fixed limits until large histories are qualified. |
 | Project context | Running shell profiles and creating environments | Profiles stay declarative. Creating a virtual environment or installing dependencies belongs to an explicit command. |
 | Directory jump | Persistent directory history | Persistence needs private atomic storage, locked updates and merge rules for concurrent shells. History stays in the session. |

@@ -8,9 +8,11 @@ without its own editor needs a separately checked pairing.
 
 Each editor uses Emacs and vi modes with synthetic histories of 0, 64 and
 2,048 entries. The oldest entry in the large history contains a unique marker.
-Binit's history search covers at most the newest 1,000 entries in both its
-search and live modes, so that marker is expected to be absent there. It remains a reported difference. A failed
-search or interaction is retained as a failure and cannot become a timing row.
+The Ctrl-R trace requires that marker to appear in current Binit, Readline
+and ble.sh. For Binit 0.1.0 and 0.1.1 release binaries, pass
+`--binit-history-range recent`. That profile requires the older marker to be
+absent in Binit. The receipt records the selected profile and the observed
+result. A failed search or interaction invalidates the timing row.
 
 Large-candidate cancellation time starts at the first cancellation input,
 including any Readline confirmation response, and ends at the accepted-command

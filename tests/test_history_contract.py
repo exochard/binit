@@ -49,6 +49,49 @@ class HistoryContractTests(unittest.TestCase):
                 session.pump(.2)
                 self.assertEqual(session.capture()[1], 'printf needle')
 
+    def test_ctrl_r_finds_older_commands_without_executing_them(self):
+        entry = 'touch deep-witness # old needle'
+        for mode, method, query in (('emacs', 'literal', 'old needle'),
+                                    ('vi', 'words', 'needle old'), ('emacs', 'fuzzy', 'olndl')):
+            extra = (f"HISTSIZE=8192; history -c; BINIT_HISTORY_MATCH={method}\n"
+                     f"history -s '{entry}'; history -s '{entry}'\n"
+                     "for ((i=0; i<2048; i++)); do history -s \"printf recent-$i\"; done\n"
+                     "binit_complete editor history on\n")
+            with self.subTest(mode=mode, method=method), Session(extra=extra, mode=mode) as session:
+                session.send(b'\x12' + query.encode())
+                session.wait(lambda: entry in session.text and '1/1 ' in session.text)
+                session.send(b'Z')
+                session.wait(lambda: '0/0' in session.text)
+                session.send(b'\x7f\r')
+                session.wait(lambda: not session.panel)
+                self.assertEqual(session.capture()[1], entry)
+                self.assertFalse((session.directory / 'deep-witness').exists())
+
+    def test_deleting_an_older_match_preserves_recent_context(self):
+        extra = ("HISTSIZE=8192; HISTCONTROL=ignorespace; BINIT_HISTORY_CONTEXT=1; "
+                 "BINIT_HISTORY_DELETE=1; binit_complete editor history on\n")
+        with Session(extra=extra) as session:
+            (session.directory / 'seed').write_text(
+                "history -c; history -s 'printf old-delete-entry'\n"
+                "binit_complete history record 0 \"$PWD\"\n"
+                "for ((i=0; i<1100; i++)); do history -s \"printf recent-$i\"; "
+                "binit_complete history record 37 \"$PWD\"; done\n")
+            session.send(" source ./seed; binit_complete history list recent-1099 session > before\n")
+            before = session.directory / 'before'
+            session.wait(lambda: before.exists() and '\t37\t' in before.read_text())
+            session.send(b'\x12old-delete-entry\x1b')
+            session.wait(lambda: '1/1' in session.text and '▏' not in session.text)
+            session.send(b'x')
+            session.wait(lambda: 'delete entry?' in session.text)
+            session.send(b'y')
+            session.wait(lambda: not session.panel)
+            self.assertEqual(session.capture()[1], '')
+            session.send(" binit_complete history list recent-1099 session > after; history -w saved-history\n")
+            session.wait(lambda: (session.directory / 'saved-history').exists())
+            self.assertEqual((session.directory / 'after').read_text(), before.read_text())
+            self.assertNotIn('printf old-delete-entry',
+                             (session.directory / 'saved-history').read_text().splitlines())
+
     def test_confirmed_history_deletion_closes_without_inserting_or_executing(self):
         extra = ("BINIT_HISTORY_DELETE=1\nhistory -s 'touch delete-witness'\n"
                  "binit_complete editor history on\n")

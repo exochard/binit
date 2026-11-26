@@ -19,6 +19,8 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
 
 - Made bare `binit update` refresh declared local plugins along with Git pins.
 - Reduced the work required to publish a startup verification cache.
+- Extended Ctrl-R to search the shell's full in-memory history and show up to
+  1,000 distinct matches, newest first.
 
 ### Fixed
 

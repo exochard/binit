@@ -192,22 +192,50 @@ class RuntimeFeatures(unittest.TestCase):
             os.chdir(self.root)
             os.execve(BASH, [BASH, '--noprofile', '--rcfile', str(self.rc), '-i'],
                       dict(self.env, TERM='xterm-256color', PS1='READY> ', BINIT_COMPLETION_MENU='1'))
+        startup = bytearray()
+        output = bytearray()
+        foreground = []
+        prompt = b'READY> '
+        started = self.home / 'idle-start'
+
+        def context():
+            return (f'shell pid={pid}, foreground groups at Ctrl-C and profile probe={foreground}\n'
+                    f'startup terminal tail: {bytes(startup[-1024:])!r}\n'
+                    f'response terminal tail: {bytes(output[-1024:])!r}')
+
+        def foreground_group():
+            try:
+                return os.tcgetpgrp(fd)
+            except OSError:
+                return None
+
+        def read_terminal(destination):
+            data = os.read(fd, 65536)
+            if not data:
+                self.fail(f'idle interruption PTY reached EOF\n{context()}')
+            destination.extend(data)
+
+        def wait_for(predicate, destination, deadline, description):
+            while time.monotonic() < deadline and not predicate():
+                if select.select([fd], [], [], .05)[0]:
+                    read_terminal(destination)
+            self.assertTrue(predicate(), f'{description}\n{context()}')
+
         try:
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and not (self.home / 'idle-start').exists():
-                if select.select([fd], [], [], .05)[0]:
-                    os.read(fd, 65536)
-            self.assertTrue((self.home / 'idle-start').exists())
+            wait_for(lambda: prompt in startup and started.exists(), startup, time.monotonic() + 5,
+                     'The idle plugin did not start after the initial prompt')
+            foreground.append(foreground_group())
             os.write(fd, b'\x03')
-            time.sleep(.3)
-            os.write(fd, b"binit profile | grep -o 'load interrupted'\n")
-            output = b''
             deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and b'\rload interrupted\r\n' not in output:
-                if select.select([fd], [], [], .05)[0]:
-                    output += os.read(fd, 65536)
-            self.assertIn(b'\rload interrupted\r\n', output)
-            self.assertFalse((self.home / 'idle-done').exists())
+            wait_for(lambda: prompt in output, output, deadline,
+                     'Bash did not return to a fresh prompt after Ctrl-C')
+            foreground.append(foreground_group())
+            os.write(fd, b"binit profile | grep -o 'load interrupted'\n")
+            wait_for(lambda: b'\rload interrupted\r\n' in output, output, deadline,
+                     'The profile did not report an interrupted load')
+            self.assertFalse((self.home / 'idle-done').exists(), context())
+        except OSError as error:
+            self.fail(f'idle interruption PTY error: {error}\n{context()}')
         finally:
             os.kill(pid, 9)
             os.waitpid(pid, 0)

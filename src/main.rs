@@ -561,6 +561,7 @@ fn install_generation(
         if !item.enabled {
             continue;
         }
+        package::check_snapshot_minimum(&item.plugin.id, &packages)?;
         for command in &item.plugin.completions {
             if !completions.insert(command.clone()) {
                 return Err(format!("duplicate completion: {command}").into());

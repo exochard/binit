@@ -81,7 +81,7 @@ pub(super) fn line_error(
     source: &str,
     error: Box<dyn std::error::Error>,
 ) -> Box<dyn std::error::Error> {
-    if error.to_string() == CREDENTIALS {
+    if error.is::<package::IncompatibleCore>() || error.to_string() == CREDENTIALS {
         return error;
     }
     format!("plugin line {}: {error}", redact(source)).into()
@@ -652,6 +652,28 @@ impl Listing {
 
     pub(super) fn paths(&self) -> Vec<String> {
         self.entries.keys().cloned().collect()
+    }
+
+    pub(super) fn manifest(&self, mirror: &Path) -> Result<Option<Vec<u8>>> {
+        let Some(entry) = self
+            .entries
+            .get("plugin.toml")
+            .filter(|entry| !entry.symlink && entry.size <= MAX_BYTES)
+        else {
+            return Ok(None);
+        };
+        let bytes = git_bytes(
+            "read manifest",
+            &Scope {
+                git_dir: Some(mirror),
+            },
+            &["cat-file", "blob", &entry.object],
+            MAX_BYTES,
+        )?;
+        if bytes.len() as u64 != entry.size {
+            return Err("git read manifest: size mismatch".into());
+        }
+        Ok(Some(bytes))
     }
 }
 

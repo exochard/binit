@@ -9,6 +9,7 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
 - Added a command guide and per-command help in initialized shells.
 - Added per-plugin completion controls, a summary of recorded effects, and
   support for reviewing the plugin changes in a candidate generation.
+- Added optional minimum Binit versions for plugin packages.
 - Added cancellable prompt workers, configurable history and suggestions,
   and richer Bash syntax highlighting in grammar-enabled builds.
 - Added an opt-in wait policy that lets Readline process queued input between

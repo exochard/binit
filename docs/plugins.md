@@ -175,6 +175,20 @@ private stdin context, resource limits and the current qualification status.
 
 Package files must be regular files. Symlinks are rejected. Limits are 128 files and 2 MiB per package, with directory nesting capped at 16 levels. The entry path must stay inside the package. Unknown manifest fields fail validation with an error.
 
+A package can declare a minimum manager version with an optional
+`min_binit` string in `MAJOR.MINOR.PATCH` form. For example,
+`min_binit = "0.2.0"` requires Binit 0.2.0 or later. The manager compares
+the numeric version components. A prerelease of the minimum version is
+below that floor.
+
+`binit sync` checks the source manifest. `binit apply` checks the manifests
+in the pinned package snapshots. If a requirement exceeds the running version,
+the command reports the plugin and both versions. The current and previous
+generation pointers stay in place, so the current shell plan remains usable and
+`binit rollback` can select the previous one. A plugin line that selects its
+own files carries the minimum from a readable schema-1 package manifest into
+the snapshot.
+
 ## Existing Bash scripts
 
 Keep a declaration outside an upstream checkout, for example `tools.toml`:

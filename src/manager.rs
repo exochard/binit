@@ -181,10 +181,9 @@ fn hook(argv: &[String], directory: &Path, event: Option<&str>) -> Result<()> {
             let id = if let Some(id) = keys.get("id") {
                 id.to_string()
             } else if directory.join("plugin.toml").is_file() {
-                toml::from_str::<Plugin>(std::str::from_utf8(&read_regular(
-                    &directory.join("plugin.toml"),
-                )?)?)?
-                .id
+                package::parse_manifest(&read_regular(&directory.join("plugin.toml"))?)?
+                    .0
+                    .id
             } else if let Some(source) = git::parse_source(&argv[0])? {
                 source.name
             } else {
@@ -272,7 +271,13 @@ fn git_package(
         };
     let checkout = git::Checkout::create(state, mirror, &listing, paths.as_deref())?;
     hook(argv, checkout.root(), event)?;
-    let (plugin, files) = package::git_line(argv, checkout.root(), &remote.name)?;
+    let (plugin, mut files) = package::git_line(argv, checkout.root(), &remote.name)?;
+    if paths.is_some()
+        && !checkout.root().join("plugin.toml").exists()
+        && let Some(manifest) = listing.manifest(mirror)?
+    {
+        package::preserve_minimum(&plugin.id, &mut files, &manifest)?;
+    }
     let origin = Origin {
         url: remote.url.clone(),
         ver,

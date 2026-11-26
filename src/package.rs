@@ -359,6 +359,102 @@ fn build(
     Ok((plugin, files))
 }
 
+fn version_components(version: &str) -> Option<[(usize, &str); 3]> {
+    let mut parts = version.split('.');
+    let mut components = [(0, ""); 3];
+    for component in &mut components {
+        let part = parts.next()?;
+        if part.is_empty()
+            || (part.len() > 1 && part.starts_with('0'))
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        // Compare equal-length digit strings lexicographically.
+        *component = (part.len(), part);
+    }
+    parts.next().is_none().then_some(components)
+}
+
+#[derive(Debug)]
+pub(super) struct IncompatibleCore(String);
+
+impl std::fmt::Display for IncompatibleCore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for IncompatibleCore {}
+
+fn check_minimum(id: &str, minimum: Option<&toml::Value>) -> Result<()> {
+    let Some(minimum) = minimum else {
+        return Ok(());
+    };
+    let (version, required) = minimum
+        .as_str()
+        .and_then(|version| version_components(version).map(|components| (version, components)))
+        .ok_or_else(|| format!("plugin {id}: min_binit must be a MAJOR.MINOR.PATCH string"))?;
+    let running = version_components(concat!(
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        ".",
+        env!("CARGO_PKG_VERSION_MINOR"),
+        ".",
+        env!("CARGO_PKG_VERSION_PATCH"),
+    ))
+    .expect("Cargo version has three numeric components");
+    if required > running || (required == running && !env!("CARGO_PKG_VERSION_PRE").is_empty()) {
+        return Err(IncompatibleCore(format!(
+            "plugin {id} requires Binit {version} or newer (running {})",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+pub(super) fn check_snapshot_minimum(id: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    // The package manifest is pinned by the existing lock file hashes.
+    if let Some(bytes) = files.get(&format!("plugins/{id}/plugin.toml")) {
+        let manifest = manifest_fields(bytes)?;
+        check_minimum(id, manifest.get("min_binit"))?;
+    }
+    Ok(())
+}
+
+fn manifest_fields(bytes: &[u8]) -> Result<toml::Table> {
+    Ok(toml::from_str(std::str::from_utf8(bytes)?)?)
+}
+
+pub(super) fn parse_manifest(bytes: &[u8]) -> Result<(Plugin, Option<toml::Value>)> {
+    let mut manifest = manifest_fields(bytes)?;
+    let minimum = manifest.remove("min_binit");
+    Ok((toml::Value::Table(manifest).try_into()?, minimum))
+}
+
+pub(super) fn preserve_minimum(
+    id: &str,
+    files: &mut BTreeMap<String, Vec<u8>>,
+    source: &[u8],
+) -> Result<()> {
+    // A raw file declaration can point into a tree with its own unrelated manifest.
+    let Ok(manifest) = manifest_fields(source) else {
+        return Ok(());
+    };
+    let Some(minimum) = manifest.get("min_binit") else {
+        return Ok(());
+    };
+    if manifest.get("schema").and_then(toml::Value::as_integer) != Some(1) {
+        return Ok(());
+    }
+    check_minimum(id, Some(minimum))?;
+    files
+        .get_mut("plugin.toml")
+        .expect("generated package has a manifest")
+        .extend(format!("min_binit = {minimum}\n").bytes());
+    limits(files)
+}
+
 pub(super) fn read(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.is_file() {
@@ -369,10 +465,9 @@ pub(super) fn read(path: &Path) -> Result<(Plugin, BTreeMap<String, Vec<u8>>)> {
     }
     let mut files = BTreeMap::new();
     collect(path, Path::new(""), &mut files)?;
-    let plugin: Plugin = toml::from_str(std::str::from_utf8(
-        files.get("plugin.toml").ok_or("missing plugin.toml")?,
-    )?)?;
+    let (plugin, minimum) = parse_manifest(files.get("plugin.toml").ok_or("missing plugin.toml")?)?;
     validate_plugin(&plugin)?;
+    check_minimum(&plugin.id, minimum.as_ref())?;
     if !files.contains_key(&plugin.entry) {
         return Err(format!("missing entry for {}", plugin.id).into());
     }
@@ -653,5 +748,34 @@ fn line_in(
         bin: value("bin"),
     };
     let bytes = toml::to_string_pretty(&declaration)?.into_bytes();
-    build(declaration, root, bytes)
+    let (plugin, mut files) = build(declaration, root, bytes)?;
+    if let Ok(source) = read_regular(&root.join("plugin.toml")) {
+        preserve_minimum(&plugin.id, &mut files, &source)?;
+    }
+    Ok((plugin, files))
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::version_components;
+
+    #[test]
+    fn minimum_versions_use_three_numeric_components() {
+        assert!(version_components("0.10.0") > version_components("0.9.0"));
+        assert!(
+            version_components("18446744073709551616.0.0")
+                > version_components("18446744073709551615.0.0")
+        );
+        for invalid in [
+            "",
+            "0.1",
+            "0.1.0.0",
+            "0.01.1",
+            "v0.1.1",
+            "0.1.1-dev",
+            "0.+1.1",
+        ] {
+            assert_eq!(version_components(invalid), None, "{invalid}");
+        }
+    }
 }

@@ -244,6 +244,61 @@ fn apply_keeps_disabled_plugins_and_their_pinned_source() {
 }
 
 #[test]
+fn minimum_binit_apply_refusal_leaves_the_current_plan_and_rollback_usable() {
+    let f = Fixture::new();
+    f.plugin("sample", "load='startup'", "SAMPLE=previous\n");
+    success(f.prepare(&["sample"]));
+    let previous = fs::read_to_string(f.state().join("current")).unwrap();
+    f.plugin("sample", "load='startup'", "SAMPLE=current\n");
+    success(f.prepare(&["sample"]));
+    let current = f.generation();
+    let manifest = "plugins/sample/plugin.toml";
+    let newer = fs::read_to_string(current.join(manifest)).unwrap() + "min_binit='999.0.0'\n";
+    let mut lock: toml::Table =
+        toml::from_str(&fs::read_to_string(current.join("lock.toml")).unwrap()).unwrap();
+    let files = lock["files"].as_table_mut().unwrap();
+    files.insert(manifest.into(), fixture_digest(newer.as_bytes()).into());
+    let encoded = toml::to_string_pretty(&lock).unwrap();
+    let id = fixture_digest(encoded.as_bytes());
+    let snapshot = f.state().join("generations").join(&id);
+    fs::create_dir(&snapshot).unwrap();
+    fs::set_permissions(&snapshot, fs::Permissions::from_mode(0o700)).unwrap();
+    for file in lock["files"].as_table().unwrap().keys() {
+        let to = snapshot.join(file);
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        fs::copy(current.join(file), to).unwrap();
+    }
+    fs::write(snapshot.join(manifest), newer).unwrap();
+    fs::write(snapshot.join("lock.toml"), encoded).unwrap();
+    fs::write(f.state().join("current"), &id).unwrap();
+
+    let result = f.cli(&["apply"]);
+    assert!(!result.status.success());
+    assert_eq!(
+        stderr(&result).trim_end(),
+        concat!(
+            "binit: plugin sample requires Binit 999.0.0 or newer (running ",
+            env!("CARGO_PKG_VERSION"),
+            ")"
+        )
+    );
+    assert_eq!(fs::read_to_string(f.state().join("current")).unwrap(), id);
+    assert_eq!(
+        fs::read_to_string(f.state().join("previous")).unwrap(),
+        previous
+    );
+    success(f.cli(&["status"]));
+    let probe = r#"source "$BINIT_TEST_INIT"; printf %s "$SAMPLE""#;
+    assert_eq!(success(f.bash(probe)), "current");
+    success(f.cli(&["rollback"]));
+    assert_eq!(success(f.bash(probe)), "previous");
+    success(f.cli(&["rollback"]));
+    success(f.cli(&["disable", "sample"]));
+    assert_eq!(success(f.bash(probe)), "");
+    failure(f.cli(&["enable", "sample"]), "requires Binit 999.0.0");
+}
+
+#[test]
 #[cfg(feature = "completion-menu")]
 fn native_module_is_pinned_and_verified_with_the_generation() {
     let f = Fixture::new();
@@ -3065,6 +3120,94 @@ fn update_without_ids_refreshes_local_lines_and_preserves_rollback() {
     success(h.binit(&["rollback"]));
     assert_eq!(h.current(), original);
     assert!(success(h.shell(&lines, status)).contains("values:old:old:kept"));
+}
+
+#[test]
+fn minimum_binit_sync_refusal_keeps_the_current_plan_and_rollback_usable() {
+    let h = Home::new();
+    h.f.plugin("sample", "load='startup'", "SAMPLE=previous\n");
+    let lines = format!(
+        "binit plugin {}\n",
+        sh_quote(h.f.root().join("sample").to_str().unwrap())
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let previous = h.current();
+    h.f.plugin(
+        "sample",
+        "load='startup'\nmin_binit='0.1.0'",
+        "SAMPLE=current\n",
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let current = h.current();
+    assert_ne!(previous, current);
+    h.f.plugin(
+        "sample",
+        "load='startup'\nmin_binit='999.0.0'",
+        "SAMPLE=incompatible\n",
+    );
+    let result = h.binit(&["sync"]);
+    assert!(!result.status.success());
+    assert_eq!(
+        stderr(&result).trim_end(),
+        concat!(
+            "binit: plugin sample requires Binit 999.0.0 or newer (running ",
+            env!("CARGO_PKG_VERSION"),
+            ")"
+        )
+    );
+    assert_eq!(h.current(), current);
+    assert_eq!(
+        fs::read_to_string(h.f.state().join("previous")).unwrap(),
+        previous
+    );
+    let probe = "printf 'state:%s\\n' \"$SAMPLE\"\n";
+    assert!(success(h.shell(&lines, probe)).contains("state:current"));
+    success(h.binit(&["rollback"]));
+    assert!(success(h.shell(&lines, probe)).contains("state:previous"));
+}
+
+#[test]
+fn minimum_binit_survives_local_file_overrides_and_accepts_compatible_hooks() {
+    let h = Home::new();
+    h.f.plugin(
+        "sample",
+        "load='startup'\nmin_binit='0.1.0'",
+        "SAMPLE=ready\n",
+    );
+    let source = sh_quote(h.f.root().join("sample").to_str().unwrap());
+    let lines = format!("binit plugin {source} atclone=:\n");
+    success(h.shell(&lines, "binit sync\n"));
+
+    let overrides = format!("binit plugin {source} files=plugin.bash load=prompt\n");
+    success(h.shell(&overrides, "binit sync\n"));
+    let snapshot = h.f.generation().join("plugins/sample/plugin.toml");
+    assert!(fs::read_to_string(snapshot).unwrap().contains("min_binit"));
+
+    let current = h.current();
+    h.f.plugin(
+        "sample",
+        "load='startup'\nmin_binit='999.0.0'",
+        "SAMPLE=too-new\n",
+    );
+    failure(h.binit(&["sync"]), "plugin sample requires Binit 999.0.0");
+    assert_eq!(h.current(), current);
+}
+
+#[test]
+fn minimum_binit_rejects_an_incompatible_git_package_with_line_overrides() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "sample", "init.bash", "SAMPLE=too-new\n");
+    repo.commit(
+        "plugin.toml",
+        "schema=1\nid='sample'\nentry='init.bash'\nload='startup'\nmin_binit='999.0.0'\nfuture=true\n",
+        "add manifest",
+    );
+    let lines = format!("binit plugin {} files=init.bash load=prompt\n", repo.url());
+    failure(
+        h.shell(&lines, "binit sync\n"),
+        "plugin sample requires Binit 999.0.0",
+    );
+    assert!(!success(h.binit(&["plugins"])).contains("sample"));
 }
 
 #[test]

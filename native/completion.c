@@ -678,13 +678,14 @@ static void reset_display(void)
    which clears RL_STATE_SIGHANDLER, and the update would then print the prompt at the cursor. The
    marker only counts while Readline waits for a key, where the deferred resize runs; a marker left set
    by a longjmp out of the handler must not turn the first redisplay of a new line into a resize.
-   The weak reference keeps the module loadable where Readline does not define the variable (8.2). */
+   Readline 8.2 lacks the marker, but its asynchronous handler leaves the second signal pending. */
 extern int volatile _rl_handling_signal __attribute__((weak));
 
 static bool resizing(void)
 {
     if (RL_ISSTATE(RL_STATE_SIGHANDLER)) return true;
-    return &_rl_handling_signal && _rl_handling_signal == SIGWINCH && RL_ISSTATE(RL_STATE_READCMD);
+    if (!RL_ISSTATE(RL_STATE_READCMD)) return false;
+    return (&_rl_handling_signal ? _rl_handling_signal : rl_pending_signal()) == SIGWINCH;
 }
 
 /* Readline forces the update only when its screen size changed; an interrupt also redisplays from the
@@ -705,6 +706,9 @@ static void prepare_resize(void)
     for (const char *p = rl_display_prompt; p && *p; ++p) lines += *p == '\n';
     if (lines > 0) fprintf(rl_outstream, "\033[%dA", lines);
     fputs("\r\033[J", rl_outstream);
+    // A foreign hook can redisplay while SIGWINCH is pending. Its ordinary update
+    // still has the prior line cached even though we just erased it.
+    rl_on_new_line();
     colors_painted = suggestion_visible = history_painted = false;
 }
 

@@ -1003,8 +1003,12 @@ class AcceptKeyTests(unittest.TestCase):
                     self.assertEqual(typed(session), line)
 
     def test_resize_with_a_cleared_signal_state_returns_to_the_prompt_start(self):
-        # A second SIGWINCH during a resize's forced update runs Readline's asynchronous handler, which clears
-        # RL_STATE_SIGHANDLER; the fixture replays that update deterministically on a 60-column screen.
+        self.check_resize_replay('resize-clobbered')
+
+    def test_ordinary_redisplay_with_a_pending_resize_keeps_the_prompt(self):
+        self.check_resize_replay('resize-pending')
+
+    def check_resize_replay(self, command):
         fixture = MODULE.parent / 'binit_redisplay_test.so'
         if not fixture.is_file():
             self.skipTest('native redisplay fixture not built')
@@ -1012,14 +1016,11 @@ class AcceptKeyTests(unittest.TestCase):
         with Session(extra=extra) as session:
             settle(session)
             session.screen.resize(24, 60)
-            session.send('binit_redisplay_test resize-clobbered\n')
-            session.wait(lambda: 'RESIZE_ARMED' in session.text or 'NO_MARKER' in session.text)
-            if 'NO_MARKER' in session.text:
-                self.skipTest('this Readline has no _rl_handling_signal marker')
-            session.pump(.6)
-            row = session.screen.display[prompt_row(session)]
-            self.assertEqual(row.count(PROMPT), 1, row)
-            self.assertEqual(typed(session), '')
+            session.send(f'binit_redisplay_test {command}\n')
+            session.wait(lambda: session.screen.title == 'resize replay complete')
+            row = session.screen.display[session.screen.cursor.y]
+            self.assertEqual(row.rstrip(), PROMPT.rstrip(), row)
+            self.assertEqual(session.screen.cursor.x, len(PROMPT))
 
     @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_term_assignment_keeps_wrapped_input_aligned(self):

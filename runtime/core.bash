@@ -542,6 +542,7 @@ __binit_prompt_dispatch() {
 
 # Loads every pending wait plugin in line order. The Readline hook of the
 # native module runs it once after the prompt is drawn.
+# shellcheck disable=SC2120 # The native hook passes "edit" when typing may interrupt the batch.
 __binit_wait_dispatch() {
     local __binit_wait_id __binit_wait_edit=${1-} __binit_wait_index=0
     local -a __binit_wait_run=("${__binit_wait_queue[@]}")

@@ -127,12 +127,18 @@ os.write(1,b'alpha one\\0alpha two\\0')
 
     def test_signal_cancels_before_trap_changes_context_or_disables_menu(self):
         ready = self.root / "ready"
-        code = f"import time; open({str(ready)!r},'w').close(); time.sleep(1)"
-        with self.session(code, extra="trap '__binit_generation_dir=changed; builtin binit_complete off' USR1") as session:
+        trapped = self.root / "trapped"
+        # The provider must still be running when the driver sends the signal.
+        code = f"import signal; open({str(ready)!r},'w').close(); signal.pause()"
+        handler = ("__binit_generation_dir=changed; builtin binit_complete off; "
+                   f": > {shlex.quote(str(trapped))}")
+        with self.session(code, extra=f"trap {shlex.quote(handler)} USR1") as session:
             session.send(b"probe_cmd al\t")
             session.wait(ready.exists)
+            self.assertFalse(self.reply.exists(), "request completed before SIGUSR1")
             os.kill(session.terminal.pid, signal.SIGUSR1)
             self.assertEqual(self.reply_values(session), [b"1"])
+            session.wait(trapped.exists)
             self.assertEqual(session.capture()[1], "probe_cmd al")
 
     def test_repeated_requests_release_children_and_descriptors(self):

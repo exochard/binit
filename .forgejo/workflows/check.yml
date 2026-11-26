@@ -57,7 +57,7 @@ jobs:
       - name: Verify
         run: |
           set -o pipefail
-          bash scripts/verify.bash 2>&1 | tee .cache/ci/evidence/verify.log
+          make check 2>&1 | tee .cache/ci/evidence/verify.log
 
   ecosystem:
     runs-on: ubuntu-24.04

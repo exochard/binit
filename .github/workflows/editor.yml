@@ -46,7 +46,7 @@ jobs:
           export BINIT_EXPECT_HIGHLIGHT=1
           export CARGO_TARGET_DIR="$PWD/.cache/editor/target"
           cargo fetch --locked
-          bash scripts/verify.bash > .cache/editor/verification.log 2>&1
+          make check > .cache/editor/verification.log 2>&1
           python3 scripts/syntax_tree_probe.py build "$PWD/.cache/editor/probe" --source "$BINIT_SYNTAX_SOURCE"
           python3 scripts/syntax_tree_probe.py check --binary "$PWD/.cache/editor/probe/binit_tree_probe" --grammar "$PWD/.cache/editor/probe/libbash_grammar.so" --bash "$BINIT_BASH" --output .cache/editor/syntax.json
           python3 -c 'import json; d=json.load(open(".cache/editor/syntax.json")); assert len(d["cases"]) == 20; assert len(d["edits"]) == 678; assert sum(r["steps"] for r in d["sequences"]) == 660; assert len(d["dialects"]) == 6; assert all(r["classification_matches"] and all(r["spans"].values()) for r in d["cases"]); assert all(r["matches"] for r in d["edits"]); assert all(r["sequence_matches"] for r in d["sequences"]); assert all(r["bash_accepts"] == r["tree_accepts"] for r in d["dialects"])'

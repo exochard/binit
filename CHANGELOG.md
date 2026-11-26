@@ -1,5 +1,31 @@
 # Changelog
 
+Changes are grouped by release following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## Unreleased
+
+### Added
+
+- Added a command guide and per-command help in initialized shells.
+- Added per-plugin completion controls, a summary of recorded effects, and
+  support for reviewing the plugin changes in a candidate generation.
+- Added cancellable prompt workers, configurable history and suggestions,
+  and richer Bash syntax highlighting in grammar-enabled builds.
+- Added an opt-in wait policy that lets Readline process queued input between
+  deferred plugin loads.
+
+### Changed
+
+- Made bare `binit update` refresh declared local plugins along with Git pins.
+- Reduced the work required to publish a startup verification cache.
+
+### Fixed
+
+- Preserved queued input during a native prompt wait and restored terminal
+  state on cancellation.
+- Preserved argument highlighting after simple aliases.
+- Made version flags work in initialized shells.
+
 ## 0.1.1
 
 - Include native editor modules for Bash 5.2 with Readline 8.2 and Bash 5.3

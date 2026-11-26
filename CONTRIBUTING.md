@@ -18,8 +18,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 cargo fetch --locked
 cargo build --release --locked --offline
-bash scripts/verify.bash
-make demo
+make check
 ```
 
 The [source trial](docs/source-trial.md) documents an explicit source bundle
@@ -36,12 +35,12 @@ The first editor dependency preparation requires tree-sitter CLI 0.26.9; builds
 then reuse the verified local source/runtime configuration. `BINIT_DEMO_STATE`
 opens a custom catalog through the existing fixture demo path.
 
-`make build`, `make verify` and `make bench` run their tools directly. The Make
+`make build`, `make check` and `make bench` run their tools directly. The Make
 targets disable inherited Rust compiler wrappers by default. To select a working
 cache explicitly, use `make build RUSTC_WRAPPER=/path/to/sccache`. Global Cargo
 settings remain unchanged.
 
-The verification script checks formatting and ShellCheck, then runs Clippy,
+`make check` runs ShellCheck, Ruff and Rust formatting checks, then runs Clippy,
 Rust integration tests, Python tests, and real terminal smoke tests. Keep
 tests focused on behavior: argument handling, shell state preservation, and
 recovery are more useful than matching generated implementation text.
@@ -60,12 +59,14 @@ files there. Set both to absolute artifact paths to exercise a packaged
 binary and its embedded module in the Python and terminal suites. Rust tests
 still build from the checkout. Verification records the tool and artifact
 identities in `verification/`.
-`BINIT_NATIVE=0 bash scripts/verify.bash` qualifies the native-disabled build:
+`BINIT_NATIVE=0 make check` qualifies the native-disabled build:
 Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
 Native completion and post-prompt PTY checks run in native-enabled jobs.
-Pull requests to `dev` run `scripts/verify.bash` on Ubuntu 24.04 x86_64 with
+Pull requests to `dev` run `make check` on Ubuntu 24.04 x86_64 with
 Bash 5.2 and 5.3, each with the native module enabled and disabled. Start the
 full check matrix and the separate editor workflow from the Actions tab.
+Each matrix cell uses the same check target with its own Bash and compiler.
+The ecosystem, ABI mismatch and sanitizer jobs have separate inputs.
 
 The native menu tests use a real Bash PTY with a terminal emulator. They check
 the visible screen and command-line state, including cancellation, paste,

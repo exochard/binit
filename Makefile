@@ -1,4 +1,4 @@
-.PHONY: build verify demo bench bench-interactive bench-lifecycle
+.PHONY: build check verify demo bench bench-interactive bench-lifecycle
 
 -include .local-demo-interactive/build.mk
 
@@ -7,7 +7,7 @@ export RUSTC_WRAPPER :=
 build:
 	@cargo build --release --locked --offline
 
-verify:
+check verify:
 	@bash scripts/verify.bash
 
 demo:

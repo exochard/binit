@@ -69,7 +69,7 @@ jobs:
       - name: Verify
         run: |
           set -o pipefail
-          bash scripts/verify.bash 2>&1 | tee .cache/ci/evidence/verify.log
+          make check 2>&1 | tee .cache/ci/evidence/verify.log
       - name: Exercise isolated parser safety experiment
         if: github.event_name == 'workflow_dispatch' && matrix.bash.version == '5.3' && matrix.native == '1' && matrix.compiler == 'gcc'
         run: |

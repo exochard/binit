@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "reference": {
+    "binit": "911c067d4bca639b916359596bc1233984819189",
+    "zinit": "d7b10fcab51ea034aa7df5d241604b3e6bf46449",
+    "plugins": {
+      "autosuggestions": "900f0e746cdb1b1f4ba7eb5863781d594eb44c2b",
+      "directory-jump": "b0fdf421640acc94a3934a0111db14b39b45cbfb",
+      "git-completion": "de01bbf25bd79973fa089da07f27287824238f9d",
+      "git-prompt": "b2eed0160405fa741b019f619b55e6408a586e0d",
+      "history-search": "a246c32991a53324a4b8a2e20f0b0d219645c0d5",
+      "project-context": "e1976b216da1cb60169e50c22a556e8e86fbf2f6",
+      "syntax-highlighting": "f933f9a37d22da738c5e3826b1dca29a8591598a"
+    }
+  },
+  "timing": {
+    "platform": "linux-x86_64",
+    "bash": ["5.2.15", "5.3.20"],
+    "keymaps": ["emacs", "vi"],
+    "runs": 2,
+    "pairs_per_run": 20,
+    "maximum_win_ratio": 0.98,
+    "maximum_repeated_regression_ratio": 1.05,
+    "maximum_warm_typing_p95_ms": 0.2,
+    "maximum_isolated_provider_response_ms": 50,
+    "comparison": "Use effect-checked private homes and primed source caches. Rotate contender order and report raw PTY time and plain-shell controls separately. Keep distinct loaded-feature profiles separate. Require the win ratio in each run against each applicable baseline. Keep missing, unequal and failed observations explicit."
+  },
+  "workloads": [
+    {"id": "startup", "fixture": "framework fixture at 0, 10 and 50 plus seven pinned first-party plugins", "endpoint": "first acknowledged input and all required startup effects", "statistic": "median", "seven_plugin_ratio_max": 0.9},
+    {"id": "deferred", "fixture": "key between two ordered deferred plugins from the first-key validation fixture", "endpoint": "visible acknowledgement with pending and final source counts checked", "statistic": "p95", "ratio_max": 0.8},
+    {"id": "command", "fixture": "fixed real NVM command and unchanged command-load control", "endpoint": "first and warm accepted command and post-command prompt", "statistic": "p95"},
+    {"id": "git-tab", "fixture": "fixed local branches, tags and installed completion provider", "endpoint": "first and warm completion draw with candidate and insertion effects checked", "statistic": "p95"},
+    {"id": "history", "fixture": "64, 2048 and 50000 entries with unique recent and historic matches", "endpoint": "opening and query filtering measured separately with insertion and cancel checked", "statistic": "p95"},
+    {"id": "typing", "fixture": "ecosystem editor trace at 0, 64 and 2048 entries with 50 events per key per pair", "endpoint": "visible effect for every insertion and deletion", "statistic": "p95"},
+    {"id": "slow-provider", "fixture": "ecosystem editor isolated-provider trace", "endpoint": "acknowledgement during a pending provider, stale response absent and worker reclaimed", "statistic": "p95"}
+  ],
+  "release": {
+    "functional_architectures": ["linux-x86_64", "linux-aarch64"],
+    "require_all_cells": true,
+    "optional_interpreter_gate": "benchmarks/suite.lock.json"
+  }
+}

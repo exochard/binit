@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shlex
@@ -12,10 +13,11 @@ import sys
 import tarfile
 import tempfile
 import time
+import time
 
 import bench_ecosystem as corpus
 from bench_development_milestone import BASELINE, BINIT_HASHES, POLICY, ROOT, ZINIT_HASH
-from bench_interactive import Shell, digest
+from bench_interactive import PROMPT, Shell, digest
 
 NVM_HASH = '390260ab9eb1da20e8bc0ebea2ee90f528d53e5e9f6e13b16717db4af454df9d'
 METRICS = ('first', 'warm')
@@ -60,19 +62,30 @@ def prepare(directory, binary, nvm, zinit, editor, bash, zsh):
     return directory, rc, env, command, entry
 
 
+def accepted(shell, code):
+    marker = b'\x1eDONE\x1e'
+    start = len(shell.raw)
+    started = time.perf_counter_ns()
+    # A newline after the marker makes ZLE print a fresh prompt instead of recycling its row.
+    os.write(shell.fd, code.encode() + b"; printf '\\036DONE\\036\\n'\n")
+    shell.until(lambda: marker in shell.raw[start:] and
+                shell.raw.rfind(PROMPT) > shell.raw.index(marker, start))
+    return (time.perf_counter_ns() - started) / 1e6
+
+
 def observe(bash, arm, failure):
     directory, rc, env, command, entry = arm
     shell = Shell(str(bash), rc, directory, env, command)
     try:
         corpus.wait_for_editor(shell)
-        shell.command("if type nvm >/dev/null 2>&1 && ! type nvm_echo >/dev/null 2>&1; "
-                      "then printf '\\036NVM:PENDING\\037'; fi")
+        accepted(shell, "if type nvm >/dev/null 2>&1 && ! type nvm_echo >/dev/null 2>&1; "
+                 "then printf '\\036NVM:PENDING\\037'; fi")
         if b'\x1eNVM:PENDING\x1f' not in shell.raw:
             raise RuntimeError('NVM was not pending before first use')
         times = {}
         for metric in METRICS:
             start = len(shell.raw)
-            times[metric] = shell.command(NVM_COMMAND)
+            times[metric] = accepted(shell, NVM_COMMAND)
             output = shell.raw[start:]
             if not re.search(rb'[\r\n]0\.40\.3\r*\n', output) or b'\x1eNVM:0:loaded\x1f' not in output:
                 raise RuntimeError(f'{metric} NVM invocation failed the version or status check')

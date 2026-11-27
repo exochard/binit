@@ -8,6 +8,7 @@
 //! disposable cache. The checksum lets startup reject a partially persisted record after a crash.
 
 use std::collections::BTreeSet;
+use std::fmt::Write;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -67,17 +68,18 @@ fn covered<'a>(files: impl Iterator<Item = &'a String>) -> BTreeSet<String> {
 
 fn metadata(root: &Path, relative: &str) -> Option<fs::Metadata> {
     // `root/.` would follow a symlinked generation directory; lstat the directory itself.
-    let path = if relative == "." {
-        root.to_path_buf()
+    let meta = if relative == "." {
+        fs::symlink_metadata(root)
     } else {
-        root.join(relative)
-    };
-    let meta = fs::symlink_metadata(path).ok()?;
+        fs::symlink_metadata(root.join(relative))
+    }
+    .ok()?;
     (!meta.file_type().is_symlink()).then_some(meta)
 }
 
-fn line(meta: &fs::Metadata, relative: &str) -> String {
-    format!(
+fn write_line(output: &mut String, meta: &fs::Metadata, relative: &str) {
+    write!(
+        output,
         "{} {} {} {} {} {} {} {} {} {relative}",
         meta.dev(),
         meta.ino(),
@@ -89,6 +91,7 @@ fn line(meta: &fs::Metadata, relative: &str) -> String {
         meta.mode(),
         meta.uid()
     )
+    .expect("format metadata into a string");
 }
 
 /// Writes the stamp for a generation that has just passed full verification, unless one of its
@@ -108,7 +111,7 @@ pub fn record<'a>(
         if meta.ctime() > started - SETTLED_SECONDS || meta.mtime() > started - SETTLED_SECONDS {
             return Ok(());
         }
-        text.push_str(&line(&meta, &relative));
+        write_line(&mut text, &meta, &relative);
         text.push('\n');
     }
     let bytes = format!("{}\n{text}", crate::hash(text.as_bytes()));
@@ -139,13 +142,18 @@ pub fn unchanged(state: &Path, id: &str) -> bool {
     }
     let root = state.join("generations").join(id);
     let (mut directory, mut lock) = (false, false);
+    let mut observed = String::new();
     for recorded in lines {
         let Some(relative) = recorded.splitn(10, ' ').nth(9) else {
             return false;
         };
-        match metadata(&root, relative) {
-            Some(meta) if line(&meta, relative) == recorded => {}
-            _ => return false,
+        let Some(meta) = metadata(&root, relative) else {
+            return false;
+        };
+        observed.clear();
+        write_line(&mut observed, &meta, relative);
+        if observed != recorded {
+            return false;
         }
         directory |= relative == ".";
         lock |= relative == "lock.toml";

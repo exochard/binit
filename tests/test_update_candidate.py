@@ -1,6 +1,9 @@
 """Prototype update review: a plugin update reaches new shells only through a passing candidate check."""
+import hashlib
 import json
 import os
+import pty
+import select
 import shlex
 from pathlib import Path
 import subprocess
@@ -87,6 +90,7 @@ class UpdateCandidateTests(unittest.TestCase):
         self.assertEqual(report['regressions'], [])
         self.assertEqual(report['review']['base'], self.first)
         self.assertEqual(self.current(), self.first)
+
         self.assertEqual(self.select(report).returncode, 0)
         self.assertEqual(self.current(), report['review']['generation'])
         self.assertEqual((self.state / 'previous').read_text(), self.first)
@@ -95,10 +99,55 @@ class UpdateCandidateTests(unittest.TestCase):
         self.binit('rollback')
         self.assert_selected_generation_usable(self.first)
 
+    def test_history_lists_valid_generations_when_an_unrelated_one_is_corrupt(self):
+        source = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', '--stage', 'tool', str(source))
+        broken = self.state / 'generations' / ('a' * 64)
+        broken.mkdir(mode=0o700)
+        rows = json.loads(self.binit('candidate', 'history', '--json').stdout)
+        by_id = {row['generation']: row for row in rows}
+        self.assertFalse(by_id['a' * 64]['verified'])
+        self.assertTrue(by_id[self.first]['verified'])
+        self.assertNotEqual(self.binit('candidate', 'restore', 'tool', '--from', 'a' * 64,
+                                       check=False).returncode, 0)
+
+    def test_restore_picker_stages_on_enter_and_cancels_on_escape(self):
+        source = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', 'tool', str(source))
+        current = self.current()
+        previous = (self.state / 'previous').read_bytes()
+        init = self.binit('init').stdout
+        for key, staged in ((b'\x1b', False), (b'\n', True)):
+            master, slave = pty.openpty()
+            process = subprocess.Popen([os.environ.get('BINIT_BASH', '/bin/bash'), '--noprofile', '--norc', '-ic',
+                                        init + '\nbinit candidate restore tool --pick'],
+                                       stdin=slave, stdout=slave, stderr=slave,
+                                       env=dict(self.environment, TERM='xterm-256color'), cwd=self.root)
+            os.close(slave)
+            output = b''
+            try:
+                while b'1/1' not in output:
+                    self.assertTrue(select.select([master], [], [], 10)[0], output)
+                    data = os.read(master, 4096)
+                    self.assertTrue(data, output)
+                    output += data
+                os.write(master, key)
+                process.wait(timeout=10)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=10)
+                os.close(master)
+            self.assertEqual(process.returncode, 0 if staged else 1, output)
+            self.assertEqual(self.current(), current)
+            self.assertEqual((self.state / 'previous').read_bytes(), previous)
+            self.assertEqual((self.state / 'candidate.json').exists(), staged)
+
     def test_manager_stages_a_catalog_update_and_preserves_a_checked_candidate_on_error(self):
         source = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
         self.binit('update', '--stage', 'tool', str(source))
         self.assert_selected_generation_usable(self.first)
+
         self.assertIn('package contents changed', self.binit('candidate', 'diff').stdout)
         self.assertNotEqual(self.binit('candidate', 'select', check=False).returncode, 0)
         self.binit('candidate', 'check', str(self.root / 'checks.toml'))
@@ -116,6 +165,46 @@ class UpdateCandidateTests(unittest.TestCase):
         self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=2'])
         self.binit('rollback')
         self.assert_selected_generation_usable(self.first)
+
+    def test_check_progress_is_terminal_only_and_respects_opt_out(self):
+        replacement = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', '--stage', 'tool', str(replacement))
+        (self.root / 'completion.bash').write_text('sleep 0.35; complete -p tool\n')
+        (self.root / 'checks.toml').write_text('schema=1\n[[checks]]\nid="completion"\nscript="completion.bash"\n')
+        plan = str(self.root / 'checks.toml')
+        self.environment['TERM'] = 'xterm-256color'
+        result = self.binit('candidate', 'check', plan)
+        self.assertNotIn('Running candidate checks', result.stderr)
+        for enabled in ('1', '0'):
+            master, slave = pty.openpty()
+            try:
+                result = subprocess.run(
+                    [str(BINARY), 'candidate', 'check', plan, '--state', str(self.state)],
+                    stdin=subprocess.DEVNULL, stdout=slave, stderr=slave,
+                    env={**self.environment, 'BINIT_PROGRESS': enabled}, cwd=self.root, timeout=10)
+                output = os.read(master, 4096)
+                self.assertEqual(result.returncode, 0, output)
+                self.assertIn(b'checks     passed', output)
+                self.assertEqual(b'Running candidate checks' in output, enabled == '1')
+                if enabled == '1':
+                    self.assertRegex(output, rb'Running candidate checks\r\x1b\[2Kcandidate ')
+            finally:
+                os.close(slave)
+                os.close(master)
+
+    def test_generation_history_and_file_digests(self):
+        source = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', '--stage', 'tool', str(source))
+        report = json.loads(self.binit('candidate', 'status', '--json').stdout)
+        rows = json.loads(self.binit('candidate', 'history', '--json').stdout)
+        by_id = {row['generation']: row for row in rows}
+        self.assertTrue(by_id[self.first]['current'])
+        self.assertEqual(by_id[report['generation']]['candidate_state'], 'prepared')
+        text = self.binit('candidate', 'diff', '--files').stdout
+        self.assertIn('file plugins/tool/init.bash', text)
+        self.assertIn(hashlib.sha256(BASE.encode()).hexdigest(), text)
+        self.assertIn(hashlib.sha256((BASE + 'tool_version() { echo 2; }\n').encode()).hexdigest(), text)
+        self.assertEqual(self.current(), self.first)
 
     def test_single_restore_keeps_newer_plugins_without_reading_sources(self):
         companion = self.root / 'companion'

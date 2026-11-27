@@ -43,6 +43,15 @@ marks the load failed. Previously sourced shell effects may remain on failure.
 
 ## Reports and unload
 
+Set `BINIT_LOGS=1` before `binit init` to keep the last 256 lifecycle events
+in the current shell. `binit profile --timeline` and `binit logs` show the
+same timeline. `binit logs --json` also gives the dropped event count.
+Offsets start at Binit initialization. The module reads a monotonic clock.
+Without it, the timeline uses Linux uptime at 10 ms resolution. A first
+prompt-dispatch event measures the shell hook before terminal output.
+The records carry plugin IDs, outcomes and fixed reason codes. Command
+arguments, history and variable values stay out of the timeline.
+
 `binit report ID` lists new simple-named functions and aliases observed during
 the source call, and owned Binit prompt segments. It does not claim replacements of definitions that existed
 before loading. `binit unload ID` first checks the recorded definitions and

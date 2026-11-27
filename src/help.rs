@@ -24,6 +24,7 @@ const SHELL_COMMANDS: &[&[&str]] = &[
     &[
         "plugin",
         "profile",
+        "logs",
         "report",
         "unload",
         "completions",
@@ -33,7 +34,9 @@ const SHELL_COMMANDS: &[&[&str]] = &[
     ],
     &["on", "off", "emit", "dispatch"],
 ];
-const CANDIDATE_ACTIONS: &[&str] = &["prepare", "restore", "check", "diff", "select", "status"];
+const CANDIDATE_ACTIONS: &[&str] = &[
+    "prepare", "restore", "check", "diff", "history", "select", "status",
+];
 const COMPLETION_ACTIONS: &[&str] = &["list", "enable", "disable", "register", "unregister"];
 
 fn commands() -> impl Iterator<Item = &'static str> {
@@ -91,8 +94,12 @@ pub(super) fn complete() -> Result<()> {
             }
             ["candidate"] => CANDIDATE_ACTIONS,
             ["candidate", "prepare" | "check"] | ["prepare" | "diagnose" | "add"] => &["@files"],
-            ["candidate", "status"] => &["--json"],
-            ["candidate", "restore", _] => &["--from"],
+            ["candidate", "status" | "history"] | ["logs"] | ["profile", "--timeline"] => {
+                &["--json"]
+            }
+            ["candidate", "diff"] => &["--files"],
+            ["profile"] => &["--timeline"],
+            ["candidate", "restore", _] => &["--from", "--pick"],
             ["candidate", "select", ..] => &["--base", "--generation", "--receipt"],
             ["completions"] => COMPLETION_ACTIONS,
             ["completions", "enable" | "disable"] => &["--plugin", "@completions"],
@@ -267,12 +274,17 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
             "usage: binit completion [on|off|status]\n\nRequires an initialized shell."
         }
         Some("editor") => "usage: binit editor [status]\n\nRequires an initialized shell.",
+        Some("logs") => {
+            "usage: binit logs [--json]\n\nSet BINIT_LOGS=1 before initializing Binit to record lifecycle events."
+        }
+        Some("profile") => {
+            "usage: binit profile [--timeline [--json]]\n\nRequires an initialized shell."
+        }
         Some(
-            "profile" | "dispatch" | "plugins" | "shell" | "apply" | "init" | "status" | "rollback"
-            | "declare",
+            "dispatch" | "plugins" | "shell" | "apply" | "init" | "status" | "rollback" | "declare",
         ) => {
             println!("usage: binit {}", topic.unwrap());
-            if matches!(topic, Some("profile" | "dispatch")) {
+            if matches!(topic, Some("dispatch")) {
                 println!("\nrequires an initialized shell");
             }
             return Ok(true);
@@ -287,7 +299,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
         Some("project") => "usage: binit project DIRECTORY",
         Some("diagnose") => "usage: binit diagnose PLAN [--json] [--no-trace]",
         Some("candidate") => {
-            "usage: binit candidate prepare CONFIG | restore ID [--from GENERATION] | check PLAN | diff | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
+            "usage: binit candidate prepare CONFIG | restore ID [--from GENERATION | --pick] | check PLAN | diff [--files] | history [--json] | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
         }
         Some("releases") => {
             "usage: binit releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]"

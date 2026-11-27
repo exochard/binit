@@ -37,6 +37,10 @@ catalog plugin takes its saved source path. For a plugin declared in Bash,
 the saved and current declarations must match so the active startup line
 can still load it.
 
+In an initialized interactive shell, `binit candidate restore ID --pick`
+lists verified snapshots with matching declarations. Use j/k or arrow keys
+to move, Enter to stage the selected snapshot, and Esc to cancel.
+
 Status verifies the installed candidate's files before reporting it. The JSON
 form includes the full candidate and reference generation identifiers.
 Config-based candidates also include the config path and its SHA-256.
@@ -49,7 +53,14 @@ their package files changed. A first candidate is compared with an empty base.
 If the active selection has moved, the diff still uses the recorded base and
 shows that it is stale.
 
+Use `binit candidate diff --files` to include each changed plugin file and
+its full before and after SHA-256. `binit candidate history` lists verified
+generations and marks the current, previous and candidate states. Add
+`--json` for machine-readable generation identifiers and status flags.
+
 `check` runs the explicit [check plan](candidate-checks.md) and saves its receipt.
+On a terminal it animates a progress line during longer checks. Set
+`BINIT_PROGRESS=0` to use plain output in an interactive terminal.
 The selected generation stays in place throughout checking. `select` requires
 a complete passing receipt whose declared inputs and runtime still match.
 Successful selection makes the candidate current for new shells and retains

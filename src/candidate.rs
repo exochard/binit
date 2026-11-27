@@ -155,7 +155,7 @@ fn describe_change(
     Ok(changes)
 }
 
-fn diff(state: &Path) -> Result<()> {
+fn diff(state: &Path, files: bool) -> Result<()> {
     let record = load_record(state)?;
     let candidate = verify_generation_checks(state, &record.generation)?;
     let base = record
@@ -188,6 +188,26 @@ fn diff(state: &Path) -> Result<()> {
             (None, None) => unreachable!("ids come from the verified catalogs"),
         }
     }
+    if files {
+        let empty = BTreeMap::new();
+        let before_files = base.as_ref().map(|lock| &lock.files).unwrap_or(&empty);
+        let paths = before_files
+            .keys()
+            .chain(candidate.files.keys())
+            .filter(|path| path.starts_with("plugins/"))
+            .collect::<BTreeSet<_>>();
+        for path in paths {
+            let before = before_files.get(path);
+            let after = candidate.files.get(path);
+            if before != after {
+                rows.push(format!(
+                    "  file {path}  {} -> {}",
+                    before.map_or("-", String::as_str),
+                    after.map_or("-", String::as_str)
+                ));
+            }
+        }
+    }
     if let Some(base) = &base {
         let order = |lock: &Lock| {
             lock.plugins
@@ -217,6 +237,106 @@ fn diff(state: &Path) -> Result<()> {
         for row in rows {
             println!("{}", releases::plain_text(&row));
         }
+    }
+    Ok(())
+}
+
+fn history(state: &Path, json: bool) -> Result<()> {
+    let current = selected_id(state)?;
+    let previous = match fs::symlink_metadata(state.join("previous")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+        Ok(_) => Some(pointer(state, "previous")?),
+    };
+    let candidate = match fs::symlink_metadata(state.join("candidate.json")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+        Ok(_) => Some(load(state)?),
+    };
+    let candidate_state = candidate
+        .as_ref()
+        .map(|record| state_label(state, record))
+        .transpose()?;
+    let mut ids = Vec::new();
+    for entry in fs::read_dir(state.join("generations"))? {
+        let entry = entry?;
+        let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !valid_digest(&id) {
+            continue;
+        }
+        let verified = verify_generation_checks(state, &id).is_ok();
+        ids.push((id, verified));
+    }
+    ids.sort();
+    let mut rows = Vec::new();
+    for (id, verified) in ids {
+        let staged = candidate
+            .as_ref()
+            .is_some_and(|record| record.generation == id);
+        rows.push(
+            serde_json::json!({"generation": id, "current": current.as_ref() == Some(&id),
+            "previous": previous.as_ref() == Some(&id), "candidate": staged,
+            "candidate_state": if staged { candidate_state } else { None }, "verified": verified}),
+        );
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        for row in rows {
+            let mut labels = Vec::new();
+            if row["current"] == true {
+                labels.push("current");
+            }
+            if row["previous"] == true {
+                labels.push("previous");
+            }
+            if row["verified"] == false {
+                labels.push("invalid");
+            }
+            if let Some(status) = row["candidate_state"].as_str() {
+                labels.push(status);
+            }
+            println!(
+                "{}  {}",
+                row["generation"].as_str().unwrap_or_default(),
+                labels.join(" ")
+            );
+        }
+    }
+    Ok(())
+}
+
+fn restore_list(state: &Path, id: &str) -> Result<()> {
+    let current = pointer(state, "current")?;
+    let current_lock = verify_generation_checks(state, &current)?;
+    let current_entry = manager::catalog(&current_lock)
+        .into_iter()
+        .find(|entry| entry.plugin.id == id)
+        .ok_or("plugin not installed")?;
+    let mut generations = Vec::new();
+    for entry in fs::read_dir(state.join("generations"))? {
+        let entry = entry?;
+        let Some(generation) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !valid_digest(&generation) || generation == current {
+            continue;
+        }
+        let Ok(lock) = verify_generation_checks(state, &generation) else {
+            continue;
+        };
+        if manager::catalog(&lock)
+            .iter()
+            .any(|item| item.plugin.id == id && item.declaration == current_entry.declaration)
+        {
+            generations.push(generation);
+        }
+    }
+    generations.sort();
+    for generation in generations {
+        println!("{generation}");
     }
     Ok(())
 }
@@ -385,7 +505,12 @@ fn check_candidate(state: &Path, plan: &Path) -> Result<()> {
         receipt_sha256: None,
     });
     save(&state, &candidate)?;
-    let checked = checks::run(&subject, &state, plan, &root, false)?;
+    let progress = progress::Progress::start("Running candidate checks");
+    let checked = checks::run(&subject, &state, plan, &root, false);
+    if let Some(progress) = progress {
+        progress.finish();
+    }
+    let checked = checked?;
     let bytes = read_regular_limit(&root.join("receipt.json"), checks::MAX_RECEIPT_BYTES)?;
     candidate
         .check
@@ -480,7 +605,11 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
             manager::stage_restore(state, id, Some(generation))
         }
         [action, plan] if action == "check" => check_candidate(state, Path::new(plan)),
-        [action] if action == "diff" => diff(state),
+        [action] if action == "diff" => diff(state, false),
+        [action, flag] if action == "diff" && flag == "--files" => diff(state, true),
+        [action] if action == "history" => history(state, false),
+        [action, id] if action == "__restore-list" => restore_list(state, id),
+        [action, flag] if action == "history" && flag == "--json" => history(state, true),
         [action] if action == "select" => select_candidate(state, None),
         [action, review @ ..] if action == "select" => {
             select_candidate(state, Some(&reviewed(review)?))

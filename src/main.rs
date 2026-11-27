@@ -21,6 +21,7 @@ mod lazy_runtime;
 mod manager;
 mod package;
 mod process;
+mod progress;
 mod publication;
 mod releases;
 mod remote;
@@ -648,7 +649,12 @@ fn install_generation(
         }
     }
     // Startup plugins may initialize editor capabilities before prompt hooks run.
-    init.push_str("if [[ ${BINIT_COMPLETION_MENU-1} == 1 ]]; then __binit_load_completion >/dev/null 2>&1 || :; fi\n");
+    if order.is_empty() {
+        init.push_str("if [[ ${BINIT_LOGS-0} == 1 && ${BINIT_COMPLETION_MENU-1} == 1 ]]; then __binit_load_completion >/dev/null 2>&1 || :; fi\n");
+    } else {
+        init.push_str("if [[ ${BINIT_COMPLETION_MENU-1} == 1 ]]; then __binit_load_completion >/dev/null 2>&1 || :; fi\n");
+    }
+    init.push_str("if [[ ${BINIT_LOGS-0} == 1 ]]; then __binit_log_start; fi\n");
     if !activate.is_empty() {
         init.push_str(&format!(
             "__binit_activate_plugins {}\n",
@@ -657,7 +663,7 @@ fn install_generation(
     }
     init.push_str("__binit_activate_shell\n");
     packages.insert("init.bash".into(), init.into_bytes());
-    let (runtime, deferred) = lazy_runtime::split(lazy_runtime::SOURCE)?;
+    let (runtime, deferred) = lazy_runtime::split(lazy_runtime::SOURCE, !order.is_empty())?;
     let runtime = runtime + include_str!("../runtime/completion-module.bash");
     packages.insert("runtime.bash".into(), runtime.into_bytes());
     for (name, text) in deferred {

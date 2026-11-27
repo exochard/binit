@@ -555,7 +555,14 @@ fn update_lines(
             requests.push((entry.declaration[0].clone(), true));
         }
     }
-    let mirrors = prefetch_mirrors(state, requests, jobs)?;
+    let progress = (!requests.is_empty())
+        .then(|| progress::Progress::start("Checking plugin sources"))
+        .flatten();
+    let mirrors = prefetch_mirrors(state, requests, jobs);
+    if let Some(progress) = progress {
+        progress.finish();
+    }
+    let mirrors = mirrors?;
     let mut changes = Vec::new();
     // Results print after the generation is prepared, so a failure shows no
     // moves.
@@ -1048,7 +1055,14 @@ pub(super) fn sync_with_jobs(state: &Path, jobs: usize, from_shell: bool) -> Res
         let refresh = kept.is_none() && !ver.as_deref().is_some_and(git::valid_commit);
         requests.push((argv[0].clone(), refresh));
     }
-    let mirrors = prefetch_mirrors(state, requests, jobs)?;
+    let progress = (!requests.is_empty())
+        .then(|| progress::Progress::start("Preparing plugin sources"))
+        .flatten();
+    let mirrors = prefetch_mirrors(state, requests, jobs);
+    if let Some(progress) = progress {
+        progress.finish();
+    }
+    let mirrors = mirrors?;
     for entry in &old {
         let prefix = format!("plugins/{}/", entry.plugin.id);
         plan.packages.retain(|name, _| !name.starts_with(&prefix));

@@ -42,6 +42,17 @@ const GROUPS: &[(&str, &[&str])] = &[
     ),
     ("unload", &["__binit_unload", "__binit_provider_forget"]),
     ("cli-completion", &["__binit_cli_complete"]),
+    ("restore-picker", &["__binit_restore_picker"]),
+    (
+        "logs",
+        &[
+            "__binit_log_start",
+            "__binit_log_clock",
+            "__binit_log_add",
+            "__binit_log_load",
+            "__binit_log_show",
+        ],
+    ),
     (
         "audit",
         &[
@@ -61,10 +72,16 @@ pub(super) const SOURCE: &str = concat!(
     include_str!("../runtime/core.bash"),
     "\n",
     include_str!("../runtime/plugin-audit.bash"),
+    "\n",
+    include_str!("../runtime/logs.bash"),
+    "\n",
+    include_str!("../runtime/restore-picker.bash"),
 );
 
 /// The file that holds every deferred function outside `GROUPS`.
 const REST: &str = "more";
+const ACTIVATION: &str = "activate";
+const ACTIVATION_FUNCTIONS: &[&str] = &["__binit_activate_plugins", "__binit_load_direct"];
 
 /// Appended to the eager runtime, before the stubs. A deferred file holds only function
 /// definitions, so sourcing it again is safe: a definition installed before a failure is
@@ -96,12 +113,18 @@ __binit_runtime_load() {
 
 /// Returns the eager runtime, with the loader and stubs appended, and each deferred file as
 /// `(name, text)`, named `runtime-<group>.bash`.
-pub fn split(source: &str) -> Result<(String, Vec<(String, String)>), String> {
+pub fn split(
+    source: &str,
+    eager_activation: bool,
+) -> Result<(String, Vec<(String, String)>), String> {
     let mut eager = String::new();
     let mut files: Vec<(&str, String, Vec<String>)> = GROUPS
         .iter()
         .map(|(group, _)| (*group, String::new(), Vec::new()))
         .collect();
+    if !eager_activation {
+        files.push((ACTIVATION, String::new(), Vec::new()));
+    }
     files.push((REST, String::new(), Vec::new()));
     let mut lines = source.split_inclusive('\n').peekable();
     // Comment lines directly above a function travel with it.
@@ -131,14 +154,19 @@ pub fn split(source: &str) -> Result<(String, Vec<(String, String)>), String> {
                 return Err(format!("runtime function {name} has no closing brace"));
             }
         }
-        if EAGER.contains(&name) {
+        let defer_activation = !eager_activation && ACTIVATION_FUNCTIONS.contains(&name);
+        if EAGER.contains(&name) && !defer_activation {
             eager.push_str(&body);
             continue;
         }
-        let group = GROUPS
-            .iter()
-            .find(|(_, names)| names.contains(&name))
-            .map_or(REST, |(group, _)| group);
+        let group = if defer_activation {
+            ACTIVATION
+        } else {
+            GROUPS
+                .iter()
+                .find(|(_, names)| names.contains(&name))
+                .map_or(REST, |(group, _)| group)
+        };
         let file = files.iter_mut().find(|(name, ..)| *name == group).unwrap();
         file.1.push_str(&body);
         file.2.push(name.to_owned());
@@ -181,7 +209,7 @@ mod tests {
 
     #[test]
     fn keeps_every_function_once_and_stubs_the_deferred_ones() {
-        let (eager, files) = split(RUNTIME).unwrap();
+        let (eager, files) = split(RUNTIME, true).unwrap();
         let names: Vec<_> = files.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
@@ -189,6 +217,8 @@ mod tests {
                 "runtime-load.bash",
                 "runtime-unload.bash",
                 "runtime-cli-completion.bash",
+                "runtime-restore-picker.bash",
+                "runtime-logs.bash",
                 "runtime-audit.bash",
                 "runtime-more.bash"
             ]
@@ -234,11 +264,26 @@ mod tests {
     }
 
     #[test]
+    fn empty_generations_defer_activation_code() {
+        let (eager, files) = split(RUNTIME, false).unwrap();
+        assert!(!eager.contains("__binit_activate_plugins() {\n"));
+        assert!(!eager.contains("__binit_load_direct() {\n"));
+        let body = &files
+            .iter()
+            .find(|(name, _)| name == "runtime-activate.bash")
+            .unwrap()
+            .1;
+        assert!(body.contains("__binit_activate_plugins() {\n"));
+        assert!(body.contains("__binit_load_direct() {\n"));
+    }
+
+    #[test]
     fn a_failed_load_retries_and_spares_the_caller() {
         let source = "binit() {\n    :\n}\n__binit_load() {\n    :\n}\n__binit_unload() {\n    echo unload\n}\n\
                       __binit_provider_forget() {\n    :\n}\n__binit_other() {\n    echo other\n}\n\
-                      __binit_cli_complete() {\n    :\n}\n__binit_audit_report() {\n    :\n}\n";
-        let (eager, files) = split(source).unwrap();
+                      __binit_cli_complete() {\n    :\n}\n__binit_audit_report() {\n    :\n}\n\
+                      __binit_restore_picker() {\n    :\n}\n__binit_log_start() {\n    :\n}\n";
+        let (eager, files) = split(source, true).unwrap();
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("runtime.bash"), eager).unwrap();
         for (name, text) in files {
@@ -288,7 +333,7 @@ mod tests {
 
     #[test]
     fn rejects_an_unterminated_function() {
-        assert!(split("__binit_x() {\n    :\n").is_err());
-        assert!(split("__binit_x() {\n    :\n__binit_y() {\n}\n").is_err());
+        assert!(split("__binit_x() {\n    :\n", true).is_err());
+        assert!(split("__binit_x() {\n    :\n__binit_y() {\n}\n", true).is_err());
     }
 }

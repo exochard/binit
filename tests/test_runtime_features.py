@@ -1,4 +1,5 @@
 """Calling-shell lifecycle and scheduling behavior."""
+import json
 import os
 import pty
 import select
@@ -54,6 +55,33 @@ class RuntimeFeatures(unittest.TestCase):
         result = self.shell("before() { printf 'before:%s\\n' \"$1\"; }; after() { printf 'after:%s:%s\\n' \"$1\" \"$2\"; }; binit on before-load sample before; binit on after-load sample after; greet ok")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ['before:sample', 'plugin', 'after:sample:loaded', 'greet:ok'])
+
+    def test_lifecycle_logs_are_opt_in_and_use_fixed_reason_codes(self):
+        self.plugin('precursor', 'SHOULD_NOT_APPEAR=private_value\n')
+        self.plugin('later', 'return 17\n', 'load=event', 'event=demo')
+        self.sync()
+        self.assertEqual(json.loads(self.shell('binit logs --json').stdout)['events'], [])
+        self.env['BINIT_LOGS'] = '1'
+        result = self.shell('binit emit demo; binit profile --timeline --json')
+        receipt = json.loads(result.stdout)
+        self.assertIn(receipt['clock'], ('native', 'uptime'))
+        events = receipt['events']
+        self.assertEqual([row['stage'] for row in events], ['load', 'prompt-dispatch', 'load'])
+        self.assertEqual([row['offset_us'] for row in events], sorted(row['offset_us'] for row in events))
+        self.assertEqual((events[-1]['outcome'], events[-1]['reason']), ('failed', 'entry'))
+        self.assertNotIn('private_value', result.stdout)
+
+    def test_lifecycle_log_retains_a_bounded_ordered_window(self):
+        self.plugin('pending', ':\n', 'load=event', 'event=demo', 'when=no_such_condition')
+        self.sync()
+        self.env.update(BINIT_LOGS='1', BINIT_COMPLETION_MENU='0')
+        result = self.shell('for ((i=0; i<270; ++i)); do binit emit demo; done; binit logs --json')
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt['clock'], 'uptime')
+        self.assertEqual(receipt['dropped'], 15)
+        self.assertEqual(len(receipt['events']), 256)
+        self.assertEqual([row['sequence'] for row in receipt['events']], list(range(15, 271)))
+        self.assertTrue(all(row['reason'] == 'condition' for row in receipt['events']))
 
     @unittest.skipIf(os.environ.get('BINIT_NATIVE') == '0', 'native module required')
     def test_completion_status_stays_in_the_calling_shell_with_a_shadowing_function(self):

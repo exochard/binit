@@ -338,11 +338,13 @@ __binit_load() {
     local __binit_load_comp __binit_load_comp_before __binit_load_mark=''
     local -a __binit_load_completions=()
     local -A __binit_load_audit=()
+    local __binit_load_stamp=''
     case ${__binit_state[$__binit_load_id]-missing} in
         loaded) return 0 ;;
         pending) ;;
         *) return 1 ;;
     esac
+    if [[ -n ${__binit_log_source-} ]]; then __binit_log_clock __binit_load_stamp || __binit_load_stamp=-1; fi
     __binit_load_active=1
     if [[ -n ${__binit_when[$__binit_load_id]-} ]]; then
         __binit_state[$__binit_load_id]=checking
@@ -350,6 +352,7 @@ __binit_load() {
             __binit_state[$__binit_load_id]=pending
             __binit_reason[$__binit_load_id]='condition not met'
             __binit_load_active=$__binit_load_active_saved
+            if [[ -n $__binit_load_stamp ]]; then __binit_log_load "$__binit_load_id" "$__binit_load_stamp" "$__binit_load_active_saved"; fi
             return 1
         fi
     fi
@@ -357,6 +360,7 @@ __binit_load() {
     if [[ -n ${__binit_commands[$__binit_load_id]} ]] && ! __binit_drop_commands "$__binit_load_id"; then
         __binit_state[$__binit_load_id]=blocked
         __binit_load_active=$__binit_load_active_saved
+        if [[ -n $__binit_load_stamp ]]; then __binit_log_load "$__binit_load_id" "$__binit_load_stamp" "$__binit_load_active_saved"; fi
         return 1
     fi
     if [[ -n "${__binit_depends[$__binit_load_id]}" ]]; then IFS=' ' read -r -a __binit_load_dependencies <<< "${__binit_depends[$__binit_load_id]}"; else __binit_load_dependencies=(); fi
@@ -366,6 +370,7 @@ __binit_load() {
             __binit_state[$__binit_load_id]=unavailable
             __binit_reason[$__binit_load_id]="dependency unavailable: $__binit_load_dependency"
             __binit_load_active=$__binit_load_active_saved
+            if [[ -n $__binit_load_stamp ]]; then __binit_log_load "$__binit_load_id" "$__binit_load_stamp" "$__binit_load_active_saved"; fi
             return 1
         fi
     done
@@ -374,6 +379,7 @@ __binit_load() {
             __binit_state[$__binit_load_id]=unavailable
             __binit_reason[$__binit_load_id]="missing command: $__binit_load_requirement"
             __binit_load_active=$__binit_load_active_saved
+            if [[ -n $__binit_load_stamp ]]; then __binit_log_load "$__binit_load_id" "$__binit_load_stamp" "$__binit_load_active_saved"; fi
             return 1
         fi
     done
@@ -382,6 +388,7 @@ __binit_load() {
         __binit_reason[$__binit_load_id]='before-load callback failed'
         __binit_notify after-load "$__binit_load_id" failed || :
         __binit_load_active=$__binit_load_active_saved
+        if [[ -n $__binit_load_stamp ]]; then __binit_log_load "$__binit_load_id" "$__binit_load_stamp" "$__binit_load_active_saved"; fi
         return 1
     fi
     # A native entry snapshot replaces the two name arrays when no trap or function tracing can observe it.
@@ -433,6 +440,7 @@ __binit_load() {
     __binit_load_after=${EPOCHREALTIME/./}
     __binit_load_us[$__binit_load_id]=$((__binit_load_after - __binit_load_before))
     __binit_load_active=$__binit_load_active_saved
+    if [[ -n $__binit_load_stamp ]]; then __binit_log_load "$__binit_load_id" "$__binit_load_stamp" "$__binit_load_active_saved"; fi
     [[ ${__binit_state[$__binit_load_id]} == loaded ]]
 }
 
@@ -506,6 +514,9 @@ __binit_prompt_dispatch() {
             if [[ ${__binit_state[$__binit_prompt_dispatch_id]} == loading || ${__binit_state[$__binit_prompt_dispatch_id]} == checking ]]; then
                 __binit_state[$__binit_prompt_dispatch_id]=failed
                 __binit_reason[$__binit_prompt_dispatch_id]='load interrupted'
+                if [[ -n ${__binit_log_source-} ]]; then
+                    __binit_log_add load "$__binit_prompt_dispatch_id" "${__binit_load_kind[$__binit_prompt_dispatch_id]}" cancelled interrupted
+                fi
                 if [[ ${__binit_audit_status[$__binit_prompt_dispatch_id]-} == capturing ]]; then
                     __binit_audit_status[$__binit_prompt_dispatch_id]=interrupted
                 fi
@@ -518,6 +529,7 @@ __binit_prompt_dispatch() {
     fi
     if (( __binit_first_prompt )); then
         __binit_first_prompt=0
+        if [[ -n ${__binit_log_source-} ]]; then __binit_log_add prompt-dispatch - - started none; fi
         __binit_first_prompt_work
     fi
     if (( __binit_dispatch_pending )); then __binit_event_dispatch; fi
@@ -818,6 +830,12 @@ binit() {
     if (( $# == 0 )) || [[ ${1-} =~ ^(--version|-V|--help|-h|help)$ ]] ||
        { (( $# == 2 )) && [[ ${2-} =~ ^(--help|-h)$ && $1 != run ]]; }; then
         command "$__binit_manager" "$@"
+    elif [[ $# == 4 && $1 == candidate && $2 == restore && $4 == --pick ]]; then
+        __binit_restore_picker "$3"
+    elif [[ ${1-} == logs ]]; then
+        __binit_log_show "${@:2}"
+    elif [[ ${1-} == profile && ${2-} == --timeline ]]; then
+        __binit_log_show "${@:3}"
     elif [[ ${1-} == profile ]]; then
         local id
         printf '%-20s %-12s %10s %10s %8s  %s\n' PLUGIN STATE LOAD_US HOOK_US CALLS REASON
@@ -875,6 +893,7 @@ binit() {
             printf 'usage: binit load ID\n' >&2
             return 2
         fi
+        local __binit_log_manual=manual
         if [[ ${__binit_state[$2]} == unloaded ]]; then __binit_state[$2]=pending; fi
         if ! __binit_load "$2"; then
             printf 'binit: %s: %s\n' "$2" "${__binit_reason[$2]:-${__binit_state[$2]}}" >&2
@@ -1114,7 +1133,7 @@ __binit_first_prompt_work() {
 __binit_load_direct() {
     # Each simple command costs about as much as the bookkeeping it does, so assignments share commands.
     local __binit_load_id=$1 __binit_load_mark __binit_load_before __binit_load_saved=$__binit_loading __binit_load_active_saved=$__binit_load_active
-    [[ $- != *T* && ${BINIT_REPORT_EFFECTS-0} != 1 && ! -v __binit_audit_status[$__binit_load_id] &&
+    [[ $- != *T* && ${BINIT_REPORT_EFFECTS-0} != 1 && -z ${__binit_log_source-} && ! -v __binit_audit_status[$__binit_load_id] &&
        ${__binit_state[$__binit_load_id]} == pending &&
        -z ${__binit_when[$__binit_load_id]-}${__binit_commands[$__binit_load_id]}${__binit_depends[$__binit_load_id]}${__binit_requires[$__binit_load_id]}${__binit_completions[$__binit_load_id]}${__binit_before_callbacks[$__binit_load_id]-}${__binit_after_callbacks[$__binit_load_id]-} ]] &&
         builtin binit_complete effects mark __binit_load_mark || return 2

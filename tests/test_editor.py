@@ -460,6 +460,7 @@ class EditorTests(unittest.TestCase):
             session.send(b'\x06')
             self.assertEqual(session.capture()[1], 'echo sample-suggestion')
 
+    @unittest.skipUnless(os.environ.get('BINIT_EXPECT_HIGHLIGHT') == '1', 'grammar-enabled native build required')
     def test_opt_in_syntax_error_color_keeps_the_unexecuted_line(self):
         extra = 'BINIT_HIGHLIGHT_ERRORS=1\nbinit_complete editor highlighting on\n'
         for mode in ('emacs', 'vi'):

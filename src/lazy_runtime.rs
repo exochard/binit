@@ -18,6 +18,7 @@ const EAGER: &[&str] = &[
     "__binit_activate_shell",
     "__binit_load_completion",
     "__binit_has_completion",
+    "__binit_call",
     "__binit_prompt_dispatch",
     "__binit_first_prompt_work",
     "__binit_wait_arm",
@@ -259,6 +260,7 @@ mod tests {
             }
         }
         assert!(eager.contains("__binit_activate_plugins() {\n"));
+        assert!(eager.contains("__binit_call() {\n"));
         assert!(files[0].1.contains("__binit_load() {\n"));
         assert!(files[1].1.contains("__binit_unload() {\n"));
     }

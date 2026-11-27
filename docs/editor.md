@@ -76,6 +76,12 @@ the prompt contains other unmarked escape sequences, when the line contains tabs
 or other control characters, when the input and the history panel would not fit
 on the screen, and while another builtin such as `read -e` owns the line reader.
 
+With `BINIT_HISTORY_CONTEXT=1`, Ctrl-T in the Ctrl-R picker cycles through
+all history, the current directory and this session. The picker keeps the
+query when scope changes and shows the selected command's last recorded
+exit status and directory when available. Each picker starts with the
+configured `BINIT_HISTORY_SCOPE`.
+
 Syntax highlighting is advisory: its parser cannot execute input. It colors
 command names, keywords, strings, variables and comments. An unfinished
 statement is colored while it is typed: in `for f in a b; do echo "$f"` the

@@ -243,6 +243,7 @@ class CompletionTests(unittest.TestCase):
             self.assertIn("alpha 39.txt", session.text)
             session.send(b"\x15xyz")
             session.wait(lambda: "/xyz  0/0" in session.text)
+            self.assertIn("No matches", session.text)
             session.send(b"\r")
             session.pump()
             self.assertTrue(session.panel)

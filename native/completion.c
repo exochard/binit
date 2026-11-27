@@ -53,6 +53,8 @@ enum key {
     KEY_HOME, KEY_END, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_REPLAY
 };
 
+enum history_scope { HISTORY_ALL, HISTORY_DIRECTORY, HISTORY_SESSION };
+
 struct context {
     char *line;
     int point, mark;
@@ -71,6 +73,8 @@ struct context {
     size_t sequence_length;
     struct binit_menu menu;
     bool filtering, history, filenames, delete_pending;
+    bool history_cycling;
+    enum history_scope history_scope;
     const char **history_items;
     bool history_truncated;
     char history_basis[BINIT_QUERY_SIZE];
@@ -106,7 +110,6 @@ static void finish_wait_edit(void);
 static bool history_enabled, history_owns_suggestions, history_dismissed, history_live;
 static enum binit_match history_method;
 static bool history_context_enabled, history_delete_enabled;
-enum history_scope { HISTORY_ALL, HISTORY_DIRECTORY, HISTORY_SESSION };
 static enum history_scope history_scope;
 struct history_context_entry {
     const HIST_ENTRY *entry;
@@ -163,7 +166,7 @@ static void history_draw(const char **, size_t, int, int *);
 static void history_clear(void);
 static int history_tab(int, int);
 static int binit_history_search(int, int);
-static void refresh_history_results(struct context *);
+static void refresh_history_results(struct context *, bool);
 static void completion_cleanup(void *);
 static void select_history_delete(struct context *);
 static void delete_history_line(const struct context *);
@@ -1131,16 +1134,18 @@ static void paint_menu(struct context *ctx)
     for (int row = 0; row < ctx->list_rows; ++row) {
         move_cursor(ctx->row + 1 + row, 1);
         fputs("\033[2K", rl_outstream);
+        if (row == 0 && ctx->menu.count == 0) {
+            fputs("\033[2m  No matches\033[0m", rl_outstream);
+        }
         for (int column = 0; column < ctx->cells; ++column) {
             size_t item = first + (size_t)(row * ctx->cells + column);
             if (item >= ctx->menu.count) break;
-            move_cursor(ctx->row + 1 + row, column * ctx->cell_width + 1);
+            if (column) move_cursor(ctx->row + 1 + row, column * ctx->cell_width + 1);
             const char *value = ctx->menu.values[ctx->menu.visible[item]];
             int width = binit_text(text, sizeof text, ctx->history ? value : label(ctx, value), ctx->cell_width - 3);
             bool chosen = item == ctx->menu.selected;
-            fprintf(rl_outstream, "%s%s%s", chosen ? "\033[7m" : "", chosen ? "> " : "  ", text);
-            for (int i = width + 2; i < ctx->cell_width; ++i) fputc(' ', rl_outstream);
-            if (chosen) fputs("\033[0m", rl_outstream);
+            if (chosen) fprintf(rl_outstream, "\033[7m> %s%*s\033[0m", text, ctx->cell_width - width - 2, "");
+            else fprintf(rl_outstream, "  %s", text);
         }
     }
     // State only: what is browsed, the query and the position. Keys appear on `?`.
@@ -1148,9 +1153,19 @@ static void paint_menu(struct context *ctx)
     // position. A completion filter shows as `/query`, since typing there always filters.
     char query[sizeof ctx->menu.query * 6] = "";
     bool queried = ctx->history ? ctx->filtering : ctx->filtering || ctx->menu.query[0];
-    if (queried) binit_text(query, sizeof query, ctx->menu.query, ctx->columns / 2);
+    static const char *const scopes[] = {"all  ", "directory  ", "session  "};
+    static const char *const narrow_scopes[] = {"all  ", "cwd  ", "shell  "};
+    bool narrow = ctx->history_cycling && ctx->columns < 44;
+    const char *heading = narrow ? "" : "history  ";
+    const char *scope = ctx->history_cycling ? (narrow ? narrow_scopes : scopes)[ctx->history_scope] : "";
+    int query_width = ctx->columns / 2;
+    if (ctx->history_cycling) {
+        int room = ctx->columns - (int)(strlen(heading) + strlen(scope)) - 13;
+        if (room < query_width) query_width = room;
+    }
+    if (queried) binit_text(query, sizeof query, ctx->menu.query, query_width);
     int used = ctx->history ?
-        snprintf(state, sizeof state, "history  %s%s", query, queried ? "\xe2\x96\x8f  " : "") :
+        snprintf(state, sizeof state, "%s%s%s%s", heading, scope, query, queried ? "\xe2\x96\x8f  " : "") :
         snprintf(state, sizeof state, "%s%s%s%s%s", ctx->word, *ctx->word && queried ? " " : "",
                  queried ? "/" : "", query, *ctx->word || queried ? "  " : "");
     // `?` is shown only where it works: once a query has text, `?` is part of the query.
@@ -1166,8 +1181,7 @@ static void paint_menu(struct context *ctx)
             const struct history_context_entry *entry = history_context_for(ctx->menu.values[choice - 1]);
             if (entry) {
                 size_t offset = (size_t)(used + written);
-                snprintf(state + offset, sizeof state - offset, "  exit %d  %jd  %s", entry->status,
-                         (intmax_t)entry->time, entry->directory);
+                snprintf(state + offset, sizeof state - offset, "  exit %d  %s", entry->status, entry->directory);
             }
         }
     }
@@ -1178,11 +1192,14 @@ static void paint_menu(struct context *ctx)
         // The longest line that fits; shorter lines keep the keys nobody can guess.
         static const char *const history_browse[] = {"jk move  / search  enter insert  esc close", "/ search  esc close"};
         static const char *const history_search[] = {"enter insert  esc browse", "esc browse"};
+        static const char *const scoped_browse[] = {"ctrl-t scope  jk move  / search  enter insert  esc close", "ctrl-t scope  / search"};
+        static const char *const scoped_search[] = {"ctrl-t scope  enter insert  esc browse", "ctrl-t scope"};
         static const char *const menu_browse[] = {"tab next  hjkl move  / filter  enter insert  esc close",
                                                   "tab next  / filter  esc close", "/ filter  esc close"};
         static const char *const menu_filter[] = {"enter insert  esc close", "esc close"};
-        const char *const *tiers = ctx->history ? ctx->filtering ? history_search : history_browse :
-                                   ctx->filtering ? menu_filter : menu_browse;
+        const char *const *tiers = ctx->history_cycling ? (ctx->filtering ? scoped_search : scoped_browse) :
+                                   ctx->history ? (ctx->filtering ? history_search : history_browse) :
+                                   (ctx->filtering ? menu_filter : menu_browse);
         size_t count = tiers == menu_browse ? 3 : 2;
         const char *keys = tiers[count - 1];
         for (size_t i = 0; i < count; ++i)
@@ -1290,7 +1307,7 @@ static int picker(struct context *ctx)
     if (rl_redisplay_function == suggestion_redisplay) suggestion_redisplay();
     else rl_redisplay();
     terminal_size(&ctx->rows, &ctx->columns);
-    if (ctx->menu.total == 0 || ctx->rows < 4 || ctx->columns < 20 ||
+    if ((!ctx->menu.total && !ctx->history_cycling) || ctx->rows < 4 || ctx->columns < 20 ||
         !cursor_position(ctx, &ctx->row, &ctx->column) ||
         ctx->row > ctx->rows || ctx->column > ctx->columns) {
         if (!ctx->history) terminal_support = -1;
@@ -1308,10 +1325,10 @@ static int picker(struct context *ctx)
     ctx->cells = (ctx->columns - 2) / cell;
     if (ctx->cells < 1) ctx->cells = 1;
     if (ctx->cells > 4) ctx->cells = 4;
-    if ((size_t)ctx->cells > ctx->menu.total) ctx->cells = (int)ctx->menu.total;
+    if (!ctx->history && (size_t)ctx->cells > ctx->menu.total) ctx->cells = (int)ctx->menu.total;
     if (ctx->cells < 1) return -1;
     ctx->cell_width = (ctx->columns - 2) / ctx->cells < cell ? (ctx->columns - 2) / ctx->cells : cell;
-    int rows = (int)((ctx->menu.total + (size_t)ctx->cells - 1) / (size_t)ctx->cells);
+    int rows = ctx->history_cycling ? 5 : (int)((ctx->menu.total + (size_t)ctx->cells - 1) / (size_t)ctx->cells);
     if (rows > (ctx->history ? 5 : 6)) rows = ctx->history ? 5 : 6;
     if (rows > ctx->rows / 3) rows = ctx->rows / 3;
     if (rows < 1) rows = 1;
@@ -1355,18 +1372,21 @@ static int picker(struct context *ctx)
             clear_panel(ctx);
             keys_shown = !keys_shown;
             reserve_panel(ctx);
+        } else if (key == 20 && ctx->history_cycling) {
+            ctx->history_scope = (ctx->history_scope + 1) % (HISTORY_SESSION + 1);
+            refresh_history_results(ctx, true);
         } else if (!ctx->filtering && key == '/') ctx->filtering = true;
         else if (ctx->history && history_delete_enabled && !ctx->filtering && key == 'x' && ctx->menu.count)
             select_history_delete(ctx);
         else if (ctx->filtering && (key == 127 || key == 8)) {
             binit_menu_backspace(&ctx->menu);
-            refresh_history_results(ctx);
+            refresh_history_results(ctx, false);
         } else if (ctx->filtering && key == 21) {
             binit_menu_clear(&ctx->menu);
-            refresh_history_results(ctx);
+            refresh_history_results(ctx, false);
         } else if (key >= 32 && key <= 255 && key != 127 && (ctx->filtering || !ctx->history)) {
             ctx->filtering = true;
-            if (binit_menu_append(&ctx->menu, (unsigned char)key)) refresh_history_results(ctx);
+            if (binit_menu_append(&ctx->menu, (unsigned char)key)) refresh_history_results(ctx, false);
         } else if (ctx->history && key >= 32 && key <= 255 && key != 127) {
             continue;
         } else {
@@ -1544,10 +1564,11 @@ static bool history_options(void)
 #define HISTORY_RESULTS 1000
 
 static size_t history_collect(const char **items, size_t limit, const char *query,
-                              enum history_scope scope, bool full_search)
+                              enum history_scope scope, bool picker_search)
 {
     HIST_ENTRY **entries = history_list();
     if (!entries) return 0;
+    bool full_search = picker_search && scope == HISTORY_ALL;
     int lower = !full_search && history_length > HISTORY_RESULTS ? history_length - HISTORY_RESULTS : 0;
     /* At most 1,000 distinct results (five during live redisplay). Index plus
        one leaves zero available for an empty bucket. */
@@ -1561,7 +1582,7 @@ static size_t history_collect(const char **items, size_t limit, const char *quer
         if (!line || !*line) continue;
         size_t length = strnlen(line, 4097);
         if (length > 4096) continue;
-        if (!full_search && history_method == BINIT_LITERAL ? !strcasestr(line, query) :
+        if (!picker_search && history_method == BINIT_LITERAL ? !strcasestr(line, query) :
             !binit_query_matches(line, query, history_method)) continue;
         if (binit_cells(line, length) < 0) continue;
         if (scope != HISTORY_ALL) {
@@ -1581,19 +1602,20 @@ static size_t history_collect(const char **items, size_t limit, const char *quer
     return count;
 }
 
-static void refresh_history_results(struct context *ctx)
+static void refresh_history_results(struct context *ctx, bool scope_changed)
 {
     if (!ctx->history_items) return;
     struct binit_menu *menu = &ctx->menu;
     /* Filtering a complete result set can only narrow it while this query
        prefix remains. A broader query may need entries outside that set. */
-    if (!ctx->history_truncated &&
+    if (!scope_changed && !ctx->history_truncated &&
         strncmp(menu->query, ctx->history_basis, strlen(ctx->history_basis)) == 0) return;
     size_t choice = binit_menu_choice(menu);
     const char *selected = choice ? menu->values[choice - 1] : NULL;
-    size_t count = history_collect(ctx->history_items, HISTORY_RESULTS, menu->query, HISTORY_ALL, true);
+    bool full_search = ctx->history_scope == HISTORY_ALL;
+    size_t count = history_collect(ctx->history_items, HISTORY_RESULTS, menu->query, ctx->history_scope, true);
     memcpy(ctx->history_basis, menu->query, sizeof ctx->history_basis);
-    ctx->history_truncated = count == HISTORY_RESULTS;
+    ctx->history_truncated = full_search && count == HISTORY_RESULTS && history_length > HISTORY_RESULTS;
     menu->total = menu->count = count;
     menu->selected = 0;
     for (size_t i = 0; i < count; ++i) {
@@ -1698,8 +1720,9 @@ static int history_pick(bool search)
         get_current_prompt_level() != 1 || active || !rl_line_buffer || rl_end > 4096) return 0;
     const char *items[HISTORY_RESULTS];
     bool full_search = search && history_scope == HISTORY_ALL;
-    size_t count = history_collect(items, HISTORY_RESULTS, search ? "" : rl_line_buffer, history_scope, full_search);
-    if (!count) return 0;
+    bool history_cycling = search && history_context_enabled;
+    size_t count = history_collect(items, HISTORY_RESULTS, search ? "" : rl_line_buffer, history_scope, search);
+    if (!count && !history_cycling) return 0;
     history_clear();
     struct context *ctx = calloc(1, sizeof *ctx);
     if (!ctx) return 0;
@@ -1714,9 +1737,16 @@ static int history_pick(bool search)
     ctx->show_all = option("show-all-if-ambiguous");
     ctx->prefix_first = option("menu-complete-display-prefix");
     ctx->history = true;
-    if (full_search && count == HISTORY_RESULTS && history_length > HISTORY_RESULTS) {
+    ctx->history_scope = history_scope;
+    ctx->history_cycling = history_cycling;
+    ctx->history_truncated = full_search && count == HISTORY_RESULTS && history_length > HISTORY_RESULTS;
+    if (history_cycling && count < HISTORY_RESULTS) {
+        size_t *visible = realloc(ctx->menu.visible, HISTORY_RESULTS * sizeof *visible);
+        if (!visible) {binit_menu_free(&ctx->menu); free(ctx->line); free(ctx); return 0;}
+        ctx->menu.visible = visible;
+    }
+    if (history_cycling || ctx->history_truncated) {
         ctx->history_items = items;
-        ctx->history_truncated = true;
     }
     ctx->menu.match = history_method;
     ctx->filtering = search;

@@ -115,6 +115,42 @@ class HistoryContractTests(unittest.TestCase):
             session.send("binit_complete history list 'false # context-witness' session\n")
             session.wait(lambda: b'\t1\t' in session.transcript)
 
+    def test_control_t_cycles_history_scope_with_the_current_query(self):
+        extra = ("HISTCONTROL=ignorespace; BINIT_HISTORY_CONTEXT=1; BINIT_HISTORY_SCOPE=directory\n"
+                 "binit_complete editor history on\n")
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                (session.directory / 'seed').write_text(
+                    "history -c; history -s 'printf untracked-scope'\n"
+                    "binit_complete history record 0 /\n"
+                    "history -s 'printf elsewhere-scope'; binit_complete history record 2 \"$PWD\"\n"
+                    "history -s 'printf here-scope'; binit_complete history record 0 \"$PWD\"\n")
+                session.send(" source ./seed; printf 'scope seeded\\n'\n")
+                session.wait(lambda: '\nscope seeded' in session.text)
+                session.send(b'printf draft\x12scope')
+                session.wait(lambda: 'history  directory  scope▏  1/1' in session.text)
+                self.assertNotIn('printf elsewhere-scope', session.text)
+                session.send(b'\x14')
+                session.wait(lambda: 'history  session  scope▏  1/2' in session.text)
+                self.assertIn('printf elsewhere-scope', session.text)
+                session.send(b'\x14')
+                session.wait(lambda: 'history  all  scope▏  1/3' in session.text)
+                self.assertIn('printf untracked-scope', session.text)
+                session.send(b'\x07')
+                self.assertEqual(session.capture()[1], 'printf draft')
+
+    def test_control_t_recovers_from_an_empty_scope_in_a_narrow_terminal(self):
+        extra = ("HISTCONTROL=ignorespace; BINIT_HISTORY_CONTEXT=1; BINIT_HISTORY_SCOPE=directory\n"
+                 "history -c; history -s 'printf kept'\n"
+                 "binit_complete editor history on\n")
+        with Session(extra=extra, columns=28) as session:
+            session.send(b'\x12kept')
+            session.wait(lambda: 'No matches' in session.text)
+            session.send(b'\x14\x14')
+            session.wait(lambda: 'all  kept▏  1/1' in session.text)
+            session.send(b'\r')
+            self.assertEqual(session.capture()[1], 'printf kept')
+
     def test_editor_status_reports_actual_flags(self):
         with Session(framework=True) as session:
             session.send('binit editor\n')

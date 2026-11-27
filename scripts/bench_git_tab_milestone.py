@@ -67,9 +67,20 @@ def observe(bash, arm, failure):
         return (shell.screen.display[shell.screen.cursor.y].rstrip().endswith(PROMPT.decode() + line)
                 and shell.screen.cursor.x >= len(PROMPT) + len(line))
 
+    def finish_command(code):
+        if shell_command is None:
+            accepted(shell, code)
+            return
+        start = len(shell.raw)
+        os.write(shell.fd, code.encode() + b"; printf '\\036DONE\\036\\n'\n")
+        shell.until(lambda: b'\x1eDONE\x1e' in shell.raw[start:])
+        # ZLE can reuse the rendered prompt without writing its text again.
+        corpus.wait_for_editor(shell)
+
     def check(expression, marker):
-        accepted(shell, expression + " && printf '\\036GIT:" + marker + "\\037'")
-        if b'\x1eGIT:' + marker.encode() + b'\x1f' not in shell.raw:
+        start = len(shell.raw)
+        finish_command(expression + " && printf '\\036GIT:" + marker + "\\037'")
+        if b'\x1eGIT:' + marker.encode() + b'\x1f' not in shell.raw[start:]:
             raise RuntimeError(f'Git completion failed its {marker} state check')
 
     try:
@@ -91,10 +102,10 @@ def observe(bash, arm, failure):
             os.write(shell.fd, b'\t')
             shell.until(lambda: shown(LINE))
             times[metric] = (time.perf_counter_ns() - started) / 1e6
-            accepted(shell, '')
+            finish_command('')
             if head.read_text() != HEAD:
                 raise RuntimeError('accepted completion did not switch to the fixture branch')
-            accepted(shell, 'git switch -q fixture')
+            finish_command('git switch -q fixture')
             if head.read_text() != 'ref: refs/heads/fixture\n':
                 raise RuntimeError('failed to reset the fixture branch')
         if shell_command is None:

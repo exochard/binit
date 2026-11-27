@@ -37,9 +37,12 @@ def configure(label, directory, binary, args, work, source, history):
         # This probe must neither add a history entry nor race ZLE's first key.
         with rc.open('a') as config:
             config.write(
-                'setopt HIST_IGNORE_SPACE\n'
-                f'if (( $+functions[zinit] && ${{#history}} == {history["entries"]} )); then '
-                'printf "\\036EDITOR-READY\\037"; fi\n')
+                'setopt HIST_IGNORE_SPACE\nunset HISTFILE\n'
+                '__milestone_typing_ready() {\n'
+                f'    if (( $+functions[zinit] && ${{#history}} == {history["entries"]} )); then '
+                'printf "\\036EDITOR-READY\\037"; fi\n'
+                '}\n'
+                'precmd_functions+=(__milestone_typing_ready)\n')
         return rc, env, launch
     bash = str(args.bash)
     rc, home = editor.configuration('binit', args.editor, history, directory, binary, bash, work)

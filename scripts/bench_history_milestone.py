@@ -62,23 +62,39 @@ def observe(bash, config, work, trace, age):
     needle = NEEDLES[age]
     old = age == 'old'
 
-    def line_is(expected):
-        row = shell.screen.display[shell.screen.cursor.y].rstrip()
-        return row == PROMPT.decode() + expected
+    def line_is(expected, *, at_end=False):
+        cursor = shell.screen.cursor
+        line = PROMPT.decode() + expected
+        row = shell.screen.display[cursor.y]
+        return (not at_end or cursor.x == len(line)) and row.startswith(line) and not row[len(line):].strip()
+
+    def wait_for_redraw(visible):
+        # Keep settling outside the timed endpoint. ZLE can redraw the prompt or
+        # enter the search keymap after output has already made the effect visible.
+        deadline = time.monotonic() + .1
+        while shell.read(.002):
+            if time.monotonic() >= deadline:
+                raise RuntimeError('history redraw did not settle')
+        if not visible():
+            raise RuntimeError('history effect changed during redraw')
 
     def measure(keys, visible):
         started = time.perf_counter_ns()
         os.write(shell.fd, keys)
         shell.until(visible)
-        return (time.perf_counter_ns() - started) / 1e6
+        elapsed = (time.perf_counter_ns() - started) / 1e6
+        wait_for_redraw(visible)
+        return elapsed
 
     try:
         corpus.wait_for_editor(shell)
+        wait_for_redraw(lambda: line_is(''))
         if not old:
-            os.write(shell.fd, DRAFT[:1].encode())
-            shell.until(lambda: line_is(DRAFT[:1]))
-            os.write(shell.fd, DRAFT[1:].encode())
-            shell.until(lambda: line_is(DRAFT))
+            for index, key in enumerate(DRAFT):
+                prefix = DRAFT[:index + 1]
+                os.write(shell.fd, key.encode())
+                shell.until(lambda: line_is(prefix, at_end=True))
+                wait_for_redraw(lambda: line_is(prefix, at_end=True))
         opened = measure(b'\x12', lambda: any(menu in row for row in shell.screen.display))
         filtered = 0.0
         for index, key in enumerate(needle):

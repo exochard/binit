@@ -33,7 +33,14 @@ def configure(label, directory, binary, args, work, source, history):
         directory.mkdir()
         path = directory / 'history.txt'
         path.write_text(editor.history_text(history['entries']))
-        return prepare_history(directory, None, source, args, path)
+        rc, env, launch = prepare_history(directory, None, source, args, path)
+        # This probe must neither add a history entry nor race ZLE's first key.
+        with rc.open('a') as config:
+            config.write(
+                'setopt HIST_IGNORE_SPACE\n'
+                f'if (( $+functions[zinit] && ${{#history}} == {history["entries"]} )); then '
+                'printf "\\036EDITOR-READY\\037"; fi\n')
+        return rc, env, launch
     bash = str(args.bash)
     rc, home = editor.configuration('binit', args.editor, history, directory, binary, bash, work)
     return rc, corpus.environment(home) | {'BINIT_BASH': bash, 'XDG_RUNTIME_DIR': str(directory / 'runtime')}, None
@@ -46,7 +53,7 @@ def observe(label, directory, scenario, args, history, trace, row):
     try:
         corpus.wait_for_editor(shell)
         if label == 'zinit':
-            editor.frame(shell, '(( $+functions[zinit] )) && (( ${#history} == ' + str(history['entries']) + ' ))')
+            shell.until(lambda: b'\x1eEDITOR-READY\x1f' in shell.raw)
         else:
             editor.frame(shell, '[[ $(type -t binit) == function && $(type -t binit_complete) == builtin '
                          '&& $WF_MENU_STATUS == 0 && $WF_HISTORY_STATUS == 0 && $WF_PROVIDER_STATUS == 0 ]]'

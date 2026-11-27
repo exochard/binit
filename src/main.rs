@@ -1129,17 +1129,13 @@ fn run() -> Result<()> {
     }
     let command = args.first().ok_or("missing command")?.clone();
     let command = command.as_str();
-    let check = command == "update" && args.iter().any(|s| s == "--check");
-    if check {
-        args.retain(|s| s != "--check");
-    }
     match (command, args.len()) {
         ("candidate", _) => candidate::command(&state, &args[1..])?,
         ("diagnose", _) => diagnose::command(&state, &args[1..])?,
         ("add", 2) => manager::add(&state, Path::new(&args[1]), true)?,
         ("add", 3) if args[2] == "--disabled" => manager::add(&state, Path::new(&args[1]), false)?,
         ("enable" | "disable" | "remove", 2) => manager::change(&state, &args[1], command)?,
-        ("update", _) => manager::update_command_with_jobs(&state, &args[1..], check, jobs)?,
+        ("update", _) => manager::update_command_with_jobs(&state, &args[1..], jobs)?,
         ("plugins", 1) => manager::list(&state)?,
         ("inspect", 2) => manager::inspect(&state, &args[1])?,
         ("shell", 1) => manager::shell(&state)?,

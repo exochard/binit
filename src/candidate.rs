@@ -6,8 +6,10 @@ struct Candidate {
     schema: u32,
     generation: String,
     base_generation: Option<String>,
-    config: PathBuf,
-    config_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prepared_by: Option<checks::FileIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,8 +62,15 @@ fn load_record(state: &Path) -> Result<Candidate> {
             .base_generation
             .as_deref()
             .is_some_and(|generation| !valid_digest(generation))
-        || !valid_digest(&candidate.config_sha256)
-        || !candidate.config.is_absolute()
+        || candidate.config.is_some() != candidate.config_sha256.is_some()
+        || candidate
+            .config
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        || candidate
+            .config_sha256
+            .as_deref()
+            .is_some_and(|digest| !valid_digest(digest))
         || candidate
             .prepared_by
             .as_ref()
@@ -218,19 +227,46 @@ fn prepare_candidate(state: &Path, config: &Path) -> Result<()> {
     let config = fs::canonicalize(config)?;
     let bytes = read_regular(&config)?;
     let generation = install_config(&config, &bytes, state)?;
+    save_prepared(
+        state,
+        generation,
+        base_generation,
+        Some(checks::FileIdentity {
+            path: config,
+            sha256: hash(&bytes),
+        }),
+    )
+}
+
+pub(super) fn save_prepared(
+    state: &Path,
+    generation: String,
+    base_generation: Option<String>,
+    config: Option<checks::FileIdentity>,
+) -> Result<()> {
+    let prepared_by = Some(checks::manager_identity()?);
+    if config.is_none()
+        && load_record(state).is_ok_and(|existing| {
+            existing.config.is_none()
+                && existing.generation == generation
+                && existing.base_generation == base_generation
+                && existing.prepared_by == prepared_by
+        })
+    {
+        println!("candidate  {generation}");
+        println!("state      unchanged");
+        return Ok(());
+    }
     let candidate = Candidate {
         schema: 1,
         generation,
         base_generation,
-        config,
-        config_sha256: hash(&bytes),
-        prepared_by: Some(checks::manager_identity()?),
+        config: config.as_ref().map(|identity| identity.path.clone()),
+        config_sha256: config.map(|identity| identity.sha256),
+        prepared_by,
         check: None,
     };
-    atomic_write(
-        &state.join("candidate.json"),
-        &serde_json::to_vec_pretty(&candidate)?,
-    )?;
+    save(state, &candidate)?;
     println!("candidate  {}", candidate.generation);
     println!("state      prepared");
     Ok(())
@@ -247,10 +283,11 @@ fn subject(candidate: &Candidate) -> Result<checks::Subject> {
     Ok(checks::Subject {
         generation: candidate.generation.clone(),
         base_generation: candidate.base_generation.clone(),
-        config: Some(checks::FileIdentity {
-            path: candidate.config.clone(),
-            sha256: candidate.config_sha256.clone(),
-        }),
+        config: candidate
+            .config
+            .clone()
+            .zip(candidate.config_sha256.clone())
+            .map(|(path, sha256)| checks::FileIdentity { path, sha256 }),
         manager: candidate
             .prepared_by
             .clone()

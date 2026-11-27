@@ -3238,6 +3238,38 @@ fn bulk_update_publishes_git_and_local_changes_together() {
     assert!(success(h.shell(&lines, status)).contains("values:new:new"));
 }
 
+#[test]
+fn stage_updates_preserve_current_snapshots_until_selection() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "remote", "init.bash", "REMOTE=old\n");
+    let local = h.src("local", "init.bash", "LOCAL=old\n");
+    let lines = format!(
+        "binit plugin {}\nbinit plugin {}\n",
+        repo.url(),
+        sh_quote(&local)
+    );
+    success(h.shell(&lines, "binit sync\n"));
+    let original = h.current();
+    repo.commit("init.bash", "REMOTE=new\n", "update remote");
+    fs::write(Path::new(&local).join("init.bash"), "LOCAL=new\n").unwrap();
+    failure(
+        h.binit(&["update", "--stage", "--check"]),
+        "either --check or --stage",
+    );
+    assert!(success(h.shell(&lines, "binit update --stage\n")).contains("prepared"));
+    let diff = success(h.binit(&["candidate", "diff"]));
+    assert!(
+        diff.contains("~ remote\n") && diff.contains("~ local\n"),
+        "{diff}"
+    );
+    assert!(diff.contains("revision:"), "{diff}");
+    assert_eq!(h.current(), original);
+    assert!(
+        success(h.shell(&lines, "printf 'values:%s:%s\n' \"$REMOTE\" \"$LOCAL\"\n"))
+            .contains("values:old:old")
+    );
+}
+
 // Findings from review of the Git sources.
 fn plugin_package(repo: &Repo, id: &str, body: &str) {
     repo.commit(

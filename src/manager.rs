@@ -457,36 +457,59 @@ fn prefetch_mirrors(state: &Path, requests: Vec<(String, bool)>, jobs: usize) ->
     Ok(mirrors)
 }
 
-/// `binit update [--check] [ID...]`. The old `update ID [PATH]` form applies
-/// to a catalog plugin, and a second argument is a PATH only when it is not
-/// an installed plugin.
-pub(super) fn update_command_with_jobs(
-    state: &Path,
-    args: &[String],
-    check: bool,
-    jobs: usize,
-) -> Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UpdateMode {
+    Apply,
+    Check,
+    Stage,
+}
+
+pub(super) fn update_command_with_jobs(state: &Path, args: &[String], jobs: usize) -> Result<()> {
     if !(1..=8).contains(&jobs) {
         return Err("jobs must be between 1 and 8".into());
     }
-    if !check && (1..=2).contains(&args.len()) {
-        let plan = current(state)?;
+    let mut mode = UpdateMode::Apply;
+    let mut targets = Vec::new();
+    for arg in args {
+        let requested = match arg.as_str() {
+            "--check" => UpdateMode::Check,
+            "--stage" => UpdateMode::Stage,
+            _ => {
+                targets.push(arg.as_str());
+                continue;
+            }
+        };
+        if mode != UpdateMode::Apply {
+            return Err("specify either --check or --stage once".into());
+        }
+        mode = requested;
+    }
+    let _guard = MutationGuard::acquire(state)?;
+    let plan = current(state)?;
+    if mode != UpdateMode::Check && (1..=2).contains(&targets.len()) {
         let catalog = plan
             .catalog
             .iter()
-            .any(|entry| entry.plugin.id == args[0] && entry.declaration.is_empty());
-        let installed = |id: &String| plan.catalog.iter().any(|entry| entry.plugin.id == *id);
-        if catalog && (args.len() == 1 || !installed(&args[1])) {
-            return update(state, &args[0], args.get(1).map(Path::new));
+            .any(|entry| entry.plugin.id == targets[0] && entry.declaration.is_empty());
+        let installed = |id: &str| plan.catalog.iter().any(|entry| entry.plugin.id == id);
+        // Treat the second argument as a replacement path only for a catalog
+        // plugin and only if it does not name an installed plugin.
+        if catalog && (targets.len() == 1 || !installed(targets[1])) {
+            return update_catalog(state, plan, targets[0], targets.get(1).map(Path::new), mode);
         }
     }
-    update_lines(state, args, check, jobs)
+    update_lines(state, plan, &targets, mode, jobs)
 }
 
-fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Result<()> {
-    let _guard = MutationGuard::acquire(state)?;
+fn update_lines(
+    state: &Path,
+    mut plan: Plan,
+    ids: &[&str],
+    mode: UpdateMode,
+    jobs: usize,
+) -> Result<()> {
+    let check = mode == UpdateMode::Check;
     git::clean_leftovers(state);
-    let mut plan = current(state)?;
     let mut targets = Vec::new();
     if ids.is_empty() {
         for (position, entry) in plan.catalog.iter().enumerate() {
@@ -525,7 +548,7 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
     }
     let mirrors = prefetch_mirrors(state, requests, jobs)?;
     let mut changes = Vec::new();
-    // Results print after the generation is published, so a failure shows no
+    // Results print after the generation is prepared, so a failure shows no
     // moves.
     let mut report = Vec::new();
     let mut say = |line: String| {
@@ -641,17 +664,37 @@ fn update_lines(state: &Path, ids: &[String], check: bool, jobs: usize) -> Resul
         plan.packages.extend(files);
         plan.catalog[position] = item;
     }
-    let generation = publish(plan.catalog, plan.packages, state)?;
+    let generation = finish_update(state, plan, mode)?;
     for line in report {
         println!("{line}");
     }
-    println!("applied {}; new shells use it", &generation[..12]);
+    if let Some(generation) = generation {
+        println!("applied {}; new shells use it", &generation[..12]);
+    }
     Ok(())
 }
 
-pub(super) fn update(state: &Path, id: &str, path: Option<&Path>) -> Result<()> {
-    let _guard = MutationGuard::acquire(state)?;
-    let mut plan = current(state)?;
+fn finish_update(state: &Path, plan: Plan, mode: UpdateMode) -> Result<Option<String>> {
+    if mode == UpdateMode::Apply {
+        return Ok(Some(publish(plan.catalog, plan.packages, state)?));
+    }
+    let base = pointer(state, "current")?;
+    let generation = install_generation(plan.catalog, plan.packages, state)?;
+    if generation == base {
+        println!("no generation changes to stage");
+    } else {
+        candidate::save_prepared(state, generation, Some(base), None)?;
+    }
+    Ok(None)
+}
+
+fn update_catalog(
+    state: &Path,
+    mut plan: Plan,
+    id: &str,
+    path: Option<&Path>,
+    mode: UpdateMode,
+) -> Result<()> {
     let position = plan
         .catalog
         .iter()
@@ -670,8 +713,9 @@ pub(super) fn update(state: &Path, id: &str, path: Option<&Path>) -> Result<()> 
     plan.packages.retain(|name, _| !name.starts_with(&prefix));
     plan.packages.extend(files);
     plan.catalog[position] = item;
-    let generation = publish(plan.catalog, plan.packages, state)?;
-    announce(&format!("updated {id}"), &generation);
+    if let Some(generation) = finish_update(state, plan, mode)? {
+        announce(&format!("updated {id}"), &generation);
+    }
     Ok(())
 }
 

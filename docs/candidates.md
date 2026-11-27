@@ -17,9 +17,18 @@ does not source the plugin code or change the `current` or `previous` pointer.
 Preparing a new candidate replaces the candidate record after successful
 installation; a failed preparation retains the earlier record.
 
+Use `binit update --stage [ID...]` to refresh declarations from the current
+generation and review them through the same commands. For a catalog plugin,
+`binit update --stage ID [PATH]` snapshots its local source or a replacement.
+The candidate records the current generation as its base. Failed updates
+and updates that match the current generation keep any earlier candidate.
+Restaging the same candidate with the same manager keeps its check receipt.
+Acquisition hooks run under the same rules as `binit update`.
+
 Status verifies the installed candidate's files before reporting it. The JSON
-form includes the full candidate and reference generation identifiers, the
-configuration path and its SHA-256. A first candidate has no reference until
+form includes the full candidate and reference generation identifiers.
+Config-based candidates also include the config path and its SHA-256.
+A first candidate has no reference until
 a generation has been selected through an existing manager command.
 
 `diff` compares verified snapshots against the recorded base. It shows added

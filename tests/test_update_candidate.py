@@ -95,6 +95,28 @@ class UpdateCandidateTests(unittest.TestCase):
         self.binit('rollback')
         self.assert_selected_generation_usable(self.first)
 
+    def test_manager_stages_a_catalog_update_and_preserves_a_checked_candidate_on_error(self):
+        source = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', '--stage', 'tool', str(source))
+        self.assert_selected_generation_usable(self.first)
+        self.assertIn('package contents changed', self.binit('candidate', 'diff').stdout)
+        self.assertNotEqual(self.binit('candidate', 'select', check=False).returncode, 0)
+        self.binit('candidate', 'check', str(self.root / 'checks.toml'))
+        checked = json.loads(self.binit('candidate', 'status', '--json').stdout)
+        self.assertEqual(checked['base_generation'], self.first)
+        self.assertEqual(checked['state'], 'checked')
+        self.assertNotIn('config', checked)
+        self.assertIn('unchanged', self.binit('update', '--stage', 'tool', str(source)).stdout)
+        self.assertNotEqual(self.binit('update', '--stage', 'tool', str(self.root / 'missing'),
+                                       check=False).returncode, 0)
+        self.assertIn('no generation changes', self.binit('update', '--stage', 'tool').stdout)
+        self.assertEqual(json.loads(self.binit('candidate', 'status', '--json').stdout), checked)
+        self.assert_selected_generation_usable(self.first)
+        self.binit('candidate', 'select')
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=2'])
+        self.binit('rollback')
+        self.assert_selected_generation_usable(self.first)
+
     def test_review_replaced_while_staging_reports_no_identities(self):
         self.source('v2', BASE + 'tool_version() { echo 2; }\n')
         self.source('v3', BASE + 'tool_version() { echo 3; }\n')

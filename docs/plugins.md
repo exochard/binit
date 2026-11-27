@@ -27,6 +27,8 @@ selected changes publish together. If any source fails, new shells still use
 the previous generation. A bare update keeps local snapshots prepared with
 `atclone` alone. Add an `atpull` hook to prepare those sources on update.
 `binit update --check` lists local sources without reading or running them.
+Use `binit update --stage` to prepare a [candidate](candidates.md) for
+review and checks before selection.
 
 At startup, a line whose exact arguments match a synced plugin activates it at once: `startup` plugins load in line order, `command` and `completion` plugins install their first-use stubs, `prompt` plugins load at the first prompt, `wait` plugins right after it is drawn. Existing functions, aliases, builtins and completion specifications still win. `load=wait` is Zinit's `wait` (turbo mode): the first prompt appears at once and the plugin loads before the next key is read, in line order with other `wait` plugins. Keys typed meanwhile are kept. `binit profile` shows `pending` until then. Without the native module (`BINIT_COMPLETION_MENU=0`, no `completion.so`) wait plugins load at the first prompt instead, like `prompt`. Output printed during a wait load lands on the prompt line; a plugin that changes `PS1` or key bindings takes effect from the next prompt or line.
 

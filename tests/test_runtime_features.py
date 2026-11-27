@@ -57,6 +57,38 @@ class RuntimeFeatures(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ['before:sample', 'plugin', 'after:sample:loaded', 'greet:ok'])
 
+    @unittest.skipIf(os.environ.get('BINIT_NATIVE') == '0', 'native module required')
+    def test_prompt_load_uses_direct_path_and_preserves_requirement_fallback(self):
+        for name, body, requires in (
+            ('ready', 'seen_group=${__binit_runtime_loaded[load]-deferred}\nready_function() { :; }\n',
+             ['printf', 'true']),
+            ('zz-missing', "printf 'unexpected-source\\n'\n", ['absent_binit_prompt_requirement']),
+        ):
+            directory = self.root / name
+            directory.mkdir()
+            (directory / 'init.bash').write_text(body)
+            (directory / 'plugin.toml').write_text(
+                f"schema=1\nid='{name}'\nentry='init.bash'\nload='prompt'\nrequires={json.dumps(requires)}\n")
+        config = self.root / 'config.toml'
+        config.write_text("schema=1\n[[plugins]]\npath='ready'\n[[plugins]]\npath='zz-missing'\n")
+        subprocess.run([BINARY, 'prepare', config, '--state', self.state], env=self.env, check=True,
+                       capture_output=True)
+        script = ('printf "group=%s\\n" "$seen_group"; binit profile; '
+                  'binit unload ready && ! declare -F ready_function >/dev/null && printf "unloaded\\n"')
+        direct = self.shell(script)
+        self.assertEqual(direct.returncode, 0, direct.stderr)
+        self.assertIn('group=deferred\n', direct.stdout)
+        self.assertRegex(direct.stdout, r'zz-missing\s+unavailable[^\n]*missing command: absent_binit_prompt_requirement')
+        self.assertTrue(direct.stdout.endswith('unloaded\n'))
+        self.assertNotIn('unexpected-source', direct.stdout)
+
+        self.lines.insert(0, 'command() { builtin command "$@"; }')
+        fallback = self.shell(script)
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertIn('group=1\n', fallback.stdout)
+        self.assertRegex(fallback.stdout, r'zz-missing\s+unavailable[^\n]*missing command: absent_binit_prompt_requirement')
+        self.assertTrue(fallback.stdout.endswith('unloaded\n'))
+
     def test_lifecycle_logs_are_opt_in_and_use_fixed_reason_codes(self):
         self.plugin('precursor', 'SHOULD_NOT_APPEAR=private_value\n')
         self.plugin('later', 'return 17\n', 'load=event', 'event=demo')

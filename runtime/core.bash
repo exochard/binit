@@ -536,6 +536,11 @@ __binit_prompt_dispatch() {
     if (( __binit_dispatch_pending )); then __binit_event_dispatch; fi
     for __binit_prompt_dispatch_id in "${__binit_prompt_ids[@]}"; do
         if [[ ${__binit_state[$__binit_prompt_dispatch_id]} == pending ]]; then
+            if ! builtin alias -- source &>/dev/null && ! builtin declare -F -- source >/dev/null &&
+               builtin binit_complete effects plain 2>/dev/null; then
+                __binit_load_direct "$__binit_prompt_dispatch_id" && continue
+                (( $? != 2 )) && continue
+            fi
             if __binit_load "$__binit_prompt_dispatch_id"; then :; fi
         fi
     done
@@ -1129,7 +1134,7 @@ __binit_first_prompt_work() {
 
 # Activates the given plugins together: conflicts are checked before any
 # startup dependency can load, then triggers are installed.
-# Loads a pending startup plugin that has no condition, command, dependency, requirement, completion or
+# Loads a pending plugin that has no condition, command, dependency, completion or
 # callback, with only its source and the native effect record. Each plugin gets this function's frame, as
 # under __binit_load, so a top-level declare or local in the plugin stays local to its load; the locals
 # keep __binit_load's names. Returns 2, having changed nothing, when the general load must run instead:
@@ -1139,8 +1144,19 @@ __binit_load_direct() {
     local __binit_load_id=$1 __binit_load_mark __binit_load_before __binit_load_saved=$__binit_loading __binit_load_active_saved=$__binit_load_active
     [[ $- != *T* && ${BINIT_REPORT_EFFECTS-0} != 1 && -z ${__binit_log_source-} && ! -v __binit_audit_status[$__binit_load_id] &&
        ${__binit_state[$__binit_load_id]} == pending &&
-       -z ${__binit_when[$__binit_load_id]-}${__binit_commands[$__binit_load_id]}${__binit_depends[$__binit_load_id]}${__binit_requires[$__binit_load_id]}${__binit_completions[$__binit_load_id]}${__binit_before_callbacks[$__binit_load_id]-}${__binit_after_callbacks[$__binit_load_id]-} ]] &&
-        builtin binit_complete effects mark __binit_load_mark || return 2
+       -z ${__binit_when[$__binit_load_id]-}${__binit_commands[$__binit_load_id]}${__binit_depends[$__binit_load_id]}${__binit_completions[$__binit_load_id]}${__binit_before_callbacks[$__binit_load_id]-}${__binit_after_callbacks[$__binit_load_id]-} ]] || return 2
+    if [[ -n ${__binit_requires[$__binit_load_id]} ]]; then
+        # The general loader keeps caller-defined command checks and reports missing requirements.
+        if builtin alias -- command &>/dev/null || builtin alias -- read &>/dev/null ||
+           builtin declare -F -- command >/dev/null || builtin declare -F -- read >/dev/null; then return 2; fi
+        local __binit_load_requirement
+        local -a __binit_load_requirements
+        IFS=' ' builtin read -r -a __binit_load_requirements <<< "${__binit_requires[$__binit_load_id]}"
+        for __binit_load_requirement in "${__binit_load_requirements[@]}"; do
+            builtin command -v -- "$__binit_load_requirement" >/dev/null || return 2
+        done
+    fi
+    builtin binit_complete effects mark __binit_load_mark || return 2
     __binit_load_active=1 __binit_state[$__binit_load_id]=loading __binit_loading=$__binit_load_id __binit_load_before=${EPOCHREALTIME/./}
     # Sourced plugins are trusted code. A failed load can have partial effects. The plugin sees the same
     # positional parameters as under __binit_load: its identifier alone.

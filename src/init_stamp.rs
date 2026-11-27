@@ -8,10 +8,13 @@
 //! disposable cache. The checksum lets startup reject a partially persisted record after a crash.
 
 use std::collections::BTreeSet;
+use std::ffi::CString;
 use std::fmt::Write;
 use std::fs;
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::mem::MaybeUninit;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The kernel sets ctime from a clock that ticks every few milliseconds, so a write in the same
@@ -77,19 +80,87 @@ fn metadata(root: &Path, relative: &str) -> Option<fs::Metadata> {
     (!meta.file_type().is_symlink()).then_some(meta)
 }
 
-fn write_line(output: &mut String, meta: &fs::Metadata, relative: &str) {
+#[derive(PartialEq, Eq)]
+struct Fingerprint {
+    device: u64,
+    inode: u64,
+    size: u64,
+    modified: i64,
+    modified_ns: i64,
+    changed: i64,
+    changed_ns: i64,
+    mode: u32,
+    owner: u32,
+}
+
+impl From<&fs::Metadata> for Fingerprint {
+    fn from(meta: &fs::Metadata) -> Self {
+        Self {
+            device: meta.dev(),
+            inode: meta.ino(),
+            size: meta.size(),
+            modified: meta.mtime(),
+            modified_ns: meta.mtime_nsec(),
+            changed: meta.ctime(),
+            changed_ns: meta.ctime_nsec(),
+            mode: meta.mode(),
+            owner: meta.uid(),
+        }
+    }
+}
+
+fn metadata_at(root: &fs::File, relative: &str) -> Option<Fingerprint> {
+    if relative != "."
+        && Path::new(relative)
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    let relative = CString::new(relative).ok()?;
+    let mut meta = MaybeUninit::<libc::stat>::uninit();
+    // `root` stays open while the kernel resolves the relative path and fills the stat.
+    let status = unsafe {
+        libc::fstatat(
+            root.as_raw_fd(),
+            relative.as_ptr(),
+            meta.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let meta = unsafe { meta.assume_init() };
+    if meta.st_mode & libc::S_IFMT == libc::S_IFLNK {
+        return None;
+    }
+    Some(Fingerprint {
+        device: meta.st_dev,
+        inode: meta.st_ino,
+        size: meta.st_size.try_into().ok()?,
+        modified: meta.st_mtime,
+        modified_ns: meta.st_mtime_nsec,
+        changed: meta.st_ctime,
+        changed_ns: meta.st_ctime_nsec,
+        mode: meta.st_mode,
+        owner: meta.st_uid,
+    })
+}
+
+fn write_line(output: &mut String, meta: &Fingerprint, relative: &str) {
     write!(
         output,
         "{} {} {} {} {} {} {} {} {} {relative}",
-        meta.dev(),
-        meta.ino(),
-        meta.size(),
-        meta.mtime(),
-        meta.mtime_nsec(),
-        meta.ctime(),
-        meta.ctime_nsec(),
-        meta.mode(),
-        meta.uid()
+        meta.device,
+        meta.inode,
+        meta.size,
+        meta.modified,
+        meta.modified_ns,
+        meta.changed,
+        meta.changed_ns,
+        meta.mode,
+        meta.owner,
     )
     .expect("format metadata into a string");
 }
@@ -111,7 +182,7 @@ pub fn record<'a>(
         if meta.ctime() > started - SETTLED_SECONDS || meta.mtime() > started - SETTLED_SECONDS {
             return Ok(());
         }
-        write_line(&mut text, &meta, &relative);
+        write_line(&mut text, &Fingerprint::from(&meta), &relative);
         text.push('\n');
     }
     let bytes = format!("{}\n{text}", crate::hash(text.as_bytes()));
@@ -141,13 +212,20 @@ pub fn unchanged(state: &Path, id: &str) -> bool {
         return false;
     }
     let root = state.join("generations").join(id);
-    let (mut directory, mut lock) = (false, false);
+    let Ok(root_dir) = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(&root)
+    else {
+        return false;
+    };
+    let (mut directory, mut lock) = (None, false);
     let mut observed = String::new();
     for recorded in lines {
         let Some(relative) = recorded.splitn(10, ' ').nth(9) else {
             return false;
         };
-        let Some(meta) = metadata(&root, relative) else {
+        let Some(meta) = metadata_at(&root_dir, relative) else {
             return false;
         };
         observed.clear();
@@ -155,15 +233,46 @@ pub fn unchanged(state: &Path, id: &str) -> bool {
         if observed != recorded {
             return false;
         }
-        directory |= relative == ".";
+        if relative == "." {
+            directory = Some(meta);
+        }
         lock |= relative == "lock.toml";
     }
-    directory && lock
+    // The path used by the caller must still resolve to the directory we checked.
+    lock && directory.is_some_and(|anchored| {
+        metadata(&root, ".").is_some_and(|named| Fingerprint::from(&named) == anchored)
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::covered;
+    use super::{Fingerprint, covered, metadata, metadata_at};
+    use std::fs;
+    use std::os::unix::fs::{OpenOptionsExt, symlink};
+
+    #[test]
+    fn descriptor_metadata_matches_path_metadata_and_rejects_links() {
+        let work = crate::private_tempdir();
+        let root = work.path().join("generation");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("entry"), b"fixture").unwrap();
+        symlink("entry", root.join("linked")).unwrap();
+        let anchored = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(&root)
+            .unwrap();
+        for relative in [".", "entry"] {
+            assert!(
+                metadata_at(&anchored, relative)
+                    == metadata(&root, relative).as_ref().map(Fingerprint::from)
+            );
+        }
+        let absolute = root.join("entry");
+        for relative in ["linked", "../generation/entry", absolute.to_str().unwrap()] {
+            assert!(metadata_at(&anchored, relative).is_none());
+        }
+    }
 
     #[test]
     fn covers_the_lock_files_and_every_parent_directory() {

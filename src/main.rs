@@ -461,6 +461,7 @@ fn registration(order: &[String], plugins: &BTreeMap<String, Plugin>) -> String 
         return String::new();
     }
     let mut ids = String::from("__binit_ids+=(");
+    let mut prompt_ids = Vec::new();
     let mut tables: Vec<String> = [
         "entry",
         "load_kind",
@@ -486,6 +487,9 @@ fn registration(order: &[String], plugins: &BTreeMap<String, Plugin>) -> String 
         let p = &plugins[id];
         let key = quote(id);
         ids.push_str(&format!(" {key}"));
+        if p.load == "prompt" {
+            prompt_ids.push(key.clone());
+        }
         let values = [
             format!(
                 "\"$__binit_generation_dir\"/{}",
@@ -523,6 +527,12 @@ fn registration(order: &[String], plugins: &BTreeMap<String, Plugin>) -> String 
         }
     }
     let mut text = ids + " )\n";
+    if !prompt_ids.is_empty() {
+        text.push_str(&format!(
+            "__binit_prompt_ids+=( {} )\n",
+            prompt_ids.join(" ")
+        ));
+    }
     for table in tables {
         text.push_str(&table);
         text.push_str(" )\n");

@@ -9,7 +9,7 @@ if [[ ${PROMPT_COMMAND@a} == *r* || ${PROMPT_COMMAND@a} == *A* ]] || declare -F 
     return 1
 fi
 
-declare -ga __binit_ids=() __binit_prompt_hooks=() __binit_directory_hooks=() __binit_segments=()
+declare -ga __binit_ids=() __binit_prompt_ids=() __binit_prompt_hooks=() __binit_directory_hooks=() __binit_segments=()
 declare -gA __binit_entry=() __binit_load_kind=() __binit_requires=() __binit_depends=()
 declare -gA __binit_state=() __binit_load_us=() __binit_hook_us=() __binit_hook_calls=()
 declare -gA __binit_hook_owner=() __binit_segment_value=() __binit_completion_owner=()
@@ -533,8 +533,8 @@ __binit_prompt_dispatch() {
         __binit_first_prompt_work
     fi
     if (( __binit_dispatch_pending )); then __binit_event_dispatch; fi
-    for __binit_prompt_dispatch_id in "${__binit_ids[@]}"; do
-        if [[ ${__binit_load_kind[$__binit_prompt_dispatch_id]} == prompt && ${__binit_state[$__binit_prompt_dispatch_id]} == pending ]]; then
+    for __binit_prompt_dispatch_id in "${__binit_prompt_ids[@]}"; do
+        if [[ ${__binit_state[$__binit_prompt_dispatch_id]} == pending ]]; then
             if __binit_load "$__binit_prompt_dispatch_id"; then :; fi
         fi
     done

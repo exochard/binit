@@ -2362,6 +2362,23 @@ fn generated_startup_batch_loads_dependencies_before_dependents() {
 }
 
 #[test]
+fn generated_prompt_batch_loads_once_in_dependency_order() {
+    let f = Fixture::new();
+    f.plugin("end", "load='prompt'\ndepends=['middle']", "sequence+=c\n");
+    f.plugin("middle", "load='prompt'", "sequence+=b\n");
+    f.plugin("start", "load='startup'", "sequence=a\n");
+    success(f.prepare(&["end", "middle", "start"]));
+    let startup = fs::read_to_string(f.generation().join("init.bash")).unwrap();
+    assert!(startup.contains("__binit_prompt_ids+=( 'middle' 'end' )"));
+    assert_eq!(
+        success(f.bash(
+            r#"source "$BINIT_TEST_INIT"; __binit_prompt_dispatch; __binit_prompt_dispatch; printf %s "$sequence""#
+        )),
+        "abc"
+    );
+}
+
+#[test]
 fn lines_wait_for_sync_then_load_in_the_next_shell() {
     let h = Home::new();
     let hello = h.src("hello", "hello.plugin.bash", "BINIT_HELLO=loaded\n");

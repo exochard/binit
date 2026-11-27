@@ -25,6 +25,18 @@ and updates that match the current generation keep any earlier candidate.
 Restaging the same candidate with the same manager keeps its check receipt.
 Acquisition hooks run under the same rules as `binit update`.
 
+When an update breaks one plugin, recover its saved snapshot with
+`binit candidate restore ID`. The source defaults to the previous generation.
+Pass `--from GENERATION` to choose an older verified generation. Review its
+diff and run the same checks before selecting it.
+
+Restore reads package files and metadata from the saved generation. It uses
+no checkout or acquisition hooks. The candidate keeps the other plugins'
+current snapshots and the restored plugin's current enabled setting. A
+catalog plugin takes its saved source path. For a plugin declared in Bash,
+the saved and current declarations must match so the active startup line
+can still load it.
+
 Status verifies the installed candidate's files before reporting it. The JSON
 form includes the full candidate and reference generation identifiers.
 Config-based candidates also include the config path and its SHA-256.

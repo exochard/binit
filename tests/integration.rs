@@ -3270,6 +3270,41 @@ fn stage_updates_preserve_current_snapshots_until_selection() {
     );
 }
 
+#[test]
+fn single_restore_uses_the_saved_git_pin_and_rejects_changed_declarations() {
+    let h = Home::new();
+    let repo = Repo::new(&h, "remote", "init.bash", "REMOTE=old\n");
+    let lines = format!("binit plugin {}\n", repo.url());
+    success(h.shell(&lines, "binit sync\n"));
+    let old = h.current();
+    let pin = repo.head();
+    repo.commit("init.bash", "REMOTE=new\n", "update remote");
+    success(h.binit(&["update", "remote"]));
+    let current = h.current();
+    fs::rename(&repo.dir, repo.dir.with_extension("offline")).unwrap();
+    success(h.binit(&["candidate", "restore", "remote"]));
+    let diff = success(h.binit(&["candidate", "diff"]));
+    assert!(diff.contains("revision:") && diff.contains(&pin), "{diff}");
+    assert_eq!(h.current(), current);
+    assert_eq!(
+        fs::read_to_string(h.f.state().join("previous")).unwrap(),
+        old
+    );
+    let current_line = format!("binit plugin {} load=prompt\n", repo.url());
+    success(h.shell(&current_line, "binit sync\n"));
+    let record = fs::read(h.f.state().join("candidate.json")).unwrap();
+    let current = h.current();
+    failure(
+        h.binit(&["candidate", "restore", "remote", "--from", &old]),
+        "different saved declaration",
+    );
+    assert_eq!(h.current(), current);
+    assert_eq!(
+        fs::read(h.f.state().join("candidate.json")).unwrap(),
+        record
+    );
+}
+
 // Findings from review of the Git sources.
 fn plugin_package(repo: &Repo, id: &str, body: &str) {
     repo.commit(

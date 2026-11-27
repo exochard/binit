@@ -117,6 +117,89 @@ class UpdateCandidateTests(unittest.TestCase):
         self.binit('rollback')
         self.assert_selected_generation_usable(self.first)
 
+    def test_single_restore_keeps_newer_plugins_without_reading_sources(self):
+        companion = self.root / 'companion'
+        companion.mkdir()
+        (companion / 'plugin.toml').write_text("schema=1\nid='companion'\nentry='init.bash'\nload='startup'\n")
+        (companion / 'init.bash').write_text('COMPANION=1\n')
+        self.binit('add', str(companion))
+        old = self.current()
+        replacement = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', 'tool', str(replacement))
+        (companion / 'init.bash').write_text('COMPANION=2\n')
+        self.binit('update', 'companion')
+        current = self.current()
+        previous = (self.state / 'previous').read_bytes()
+        (self.root / 'v1').rename(self.root / 'v1-unavailable')
+        replacement.rename(self.root / 'v2-unavailable')
+        companion.rename(self.root / 'companion-unavailable')
+
+        self.binit('candidate', 'restore', 'tool', '--from', old)
+        diff = self.binit('candidate', 'diff').stdout
+        self.assertIn('~ tool\n', diff)
+        self.assertNotIn('companion', diff)
+        self.assertEqual(self.current(), current)
+        self.assertEqual((self.state / 'previous').read_bytes(), previous)
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=2'])
+        self.assertNotEqual(self.binit('candidate', 'select', check=False).returncode, 0)
+
+        (self.root / 'completion.bash').write_text(
+            '[[ $COMPANION == 2 && $(complete -p tool) == *_tool* ]] && ! declare -F tool_version\n')
+        self.binit('candidate', 'check', str(self.root / 'checks.toml'))
+        self.binit('candidate', 'select')
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=none'])
+        self.binit('rollback')
+        self.assertEqual(self.current(), current)
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=2'])
+
+    def test_single_restore_defaults_to_previous_and_refuses_damaged_source(self):
+        replacement = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', 'tool', str(replacement))
+        current = self.current()
+        self.binit('candidate', 'restore', 'tool')
+        self.assertEqual(json.loads(self.binit('candidate', 'status', '--json').stdout)['generation'], self.first)
+
+        self.binit('candidate', 'prepare', str(self.root / 'config.toml'))
+        record = (self.state / 'candidate.json').read_bytes()
+        self.assertIn('no plugin changes', self.binit('candidate', 'restore', 'tool', '--from', current).stdout)
+        self.assertEqual((self.state / 'candidate.json').read_bytes(), record)
+        old_entry = self.state / 'generations' / self.first / 'plugins/tool/init.bash'
+        old_entry.write_text('damaged\n')
+        result = self.binit('candidate', 'restore', 'tool', check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('content changed: plugins/tool/init.bash', result.stderr)
+        self.assertEqual((self.state / 'candidate.json').read_bytes(), record)
+        self.assertEqual(self.current(), current)
+        self.assertEqual((self.state / 'previous').read_text(), self.first)
+        self.assertEqual(self.fresh_shell(), ['completion=yes', 'version=2'])
+
+    def test_single_restore_keeps_a_disabled_plugin_disabled(self):
+        replacement = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', 'tool', str(replacement))
+        self.binit('disable', 'tool')
+        self.binit('candidate', 'restore', 'tool', '--from', self.first)
+        diff = self.binit('candidate', 'diff').stdout
+        self.assertIn('package contents changed', diff)
+        self.assertNotIn('enabled:', diff)
+        (self.root / 'completion.bash').write_text('! complete -p tool 2>/dev/null\n')
+        self.binit('candidate', 'check', str(self.root / 'checks.toml'))
+        self.binit('candidate', 'select')
+        self.assertEqual(self.fresh_shell(), ['completion=no', 'version=none'])
+
+    def test_single_restore_missing_source_can_be_prepared_again(self):
+        replacement = self.source('v2', BASE + 'tool_version() { echo 2; }\n')
+        self.binit('update', 'tool', str(replacement))
+        current = self.current()
+        generation = self.state / 'generations' / self.first
+        generation.rename(self.root / 'unavailable-generation')
+
+        result = self.binit('candidate', 'restore', 'tool', '--from', self.first, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(generation.exists(), 'verification recreated the missing generation directory')
+        self.assertEqual(self.current(), current)
+        self.binit('candidate', 'prepare', str(self.root / 'config.toml'))
+        self.assertEqual(json.loads(self.binit('candidate', 'status', '--json').stdout)['generation'], self.first)
+
     def test_review_replaced_while_staging_reports_no_identities(self):
         self.source('v2', BASE + 'tool_version() { echo 2; }\n')
         self.source('v3', BASE + 'tool_version() { echo 3; }\n')

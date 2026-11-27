@@ -98,6 +98,9 @@ class CommandGuideTests(unittest.TestCase):
             for text, expected in (
                 ('binit cand', 'binit candidate'),
                 ('binit candidate di', 'binit candidate diff'),
+                ('binit candidate res', 'binit candidate restore'),
+                ('binit candidate restore slo', 'binit candidate restore slow'),
+                ('binit candidate restore slow --fr', 'binit candidate restore slow --from'),
                 ('binit report slo', 'binit report slow'),
                 ('binit inspect slo', 'binit inspect slow'),
             ):

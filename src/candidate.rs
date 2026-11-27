@@ -475,6 +475,10 @@ fn select_candidate(state: &Path, review: Option<&Reviewed>) -> Result<()> {
 pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
     match args {
         [action, config] if action == "prepare" => prepare_candidate(state, Path::new(config)),
+        [action, id] if action == "restore" => manager::stage_restore(state, id, None),
+        [action, id, flag, generation] if action == "restore" && flag == "--from" => {
+            manager::stage_restore(state, id, Some(generation))
+        }
         [action, plan] if action == "check" => check_candidate(state, Path::new(plan)),
         [action] if action == "diff" => diff(state),
         [action] if action == "select" => select_candidate(state, None),
@@ -497,7 +501,7 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&value)?);
             Ok(())
         }
-        _ => Err("usage: binit candidate prepare CONFIG | check PLAN | diff \
+        _ => Err("usage: binit candidate prepare CONFIG | restore ID [--from GENERATION] | check PLAN | diff \
              | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
             .into()),
     }

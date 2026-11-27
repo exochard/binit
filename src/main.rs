@@ -51,7 +51,7 @@ fn yes() -> bool {
     true
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Plugin {
     schema: u32,
@@ -220,6 +220,10 @@ fn private_dir(path: &Path) -> Result<()> {
         }
         fs::DirBuilder::new().mode(0o700).create(path)?;
     }
+    check_private_dir(path)
+}
+
+fn check_private_dir(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path)?;
     // State contains executable startup files and must belong to this user.
     let current_uid = unsafe { libc::geteuid() };
@@ -736,10 +740,10 @@ fn verify_generation_checks(state: &Path, id: &str) -> Result<Lock> {
     if !valid_digest(id) {
         return Err("invalid generation".into());
     }
-    private_dir(state)?;
-    private_dir(&state.join("generations"))?;
+    check_private_dir(state)?;
+    check_private_dir(&state.join("generations"))?;
     let root = state.join("generations").join(id);
-    private_dir(&root)?;
+    check_private_dir(&root).map_err(|error| format!("cannot open generation {id}: {error}"))?;
     let bytes = read_regular(&root.join("lock.toml"))?;
     if hash(&bytes) != id {
         return Err("lock content does not match generation".into());

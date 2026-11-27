@@ -33,7 +33,7 @@ const SHELL_COMMANDS: &[&[&str]] = &[
     ],
     &["on", "off", "emit", "dispatch"],
 ];
-const CANDIDATE_ACTIONS: &[&str] = &["prepare", "check", "diff", "select", "status"];
+const CANDIDATE_ACTIONS: &[&str] = &["prepare", "restore", "check", "diff", "select", "status"];
 const COMPLETION_ACTIONS: &[&str] = &["list", "enable", "disable", "register", "unregister"];
 
 fn commands() -> impl Iterator<Item = &'static str> {
@@ -92,6 +92,7 @@ pub(super) fn complete() -> Result<()> {
             ["candidate"] => CANDIDATE_ACTIONS,
             ["candidate", "prepare" | "check"] | ["prepare" | "diagnose" | "add"] => &["@files"],
             ["candidate", "status"] => &["--json"],
+            ["candidate", "restore", _] => &["--from"],
             ["candidate", "select", ..] => &["--base", "--generation", "--receipt"],
             ["completions"] => COMPLETION_ACTIONS,
             ["completions", "enable" | "disable"] => &["--plugin", "@completions"],
@@ -138,7 +139,9 @@ pub(super) fn complete() -> Result<()> {
                 "when=",
                 "watch=",
             ],
-            ["inspect" | "enable" | "disable" | "remove"] | ["update", ..] => {
+            ["candidate", "restore"]
+            | ["inspect" | "enable" | "disable" | "remove"]
+            | ["update", ..] => {
                 if words[0] == "update" {
                     println!("--check\n--stage\n--jobs");
                 }
@@ -149,7 +152,7 @@ pub(super) fn complete() -> Result<()> {
                 let generation = pointer(&state, "current")?;
                 let lock = verify_generation_checks(&state, &generation)?;
                 for entry in manager::catalog(&lock) {
-                    if !words[1..].contains(&entry.plugin.id.as_str()) {
+                    if words[0] != "update" || !words[1..].contains(&entry.plugin.id.as_str()) {
                         println!("{}", entry.plugin.id);
                     }
                 }
@@ -284,7 +287,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
         Some("project") => "usage: binit project DIRECTORY",
         Some("diagnose") => "usage: binit diagnose PLAN [--json] [--no-trace]",
         Some("candidate") => {
-            "usage: binit candidate prepare CONFIG | check PLAN | diff | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
+            "usage: binit candidate prepare CONFIG | restore ID [--from GENERATION] | check PLAN | diff | select [--base GEN --generation GEN --receipt SHA256] | status [--json]"
         }
         Some("releases") => {
             "usage: binit releases OWNER/REPO [--ver TAG|latest] [--asset GLOB] [--platform host|linux/x86_64|linux/arm64]"

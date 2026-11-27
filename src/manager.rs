@@ -1,7 +1,7 @@
 use super::*;
 use std::os::fd::AsRawFd;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Installed {
     pub(super) plugin: Plugin,
@@ -17,7 +17,7 @@ pub(super) struct Installed {
     pub(super) asset: Option<remote::Origin>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Origin {
     pub(super) url: String,
@@ -62,6 +62,15 @@ impl Drop for MutationGuard {
 struct Plan {
     catalog: Vec<Installed>,
     packages: BTreeMap<String, Vec<u8>>,
+}
+
+impl Plan {
+    fn replace(&mut self, position: usize, item: Installed, files: BTreeMap<String, Vec<u8>>) {
+        let prefix = format!("plugins/{}/", self.catalog[position].plugin.id);
+        self.packages.retain(|name, _| !name.starts_with(&prefix));
+        self.packages.extend(files);
+        self.catalog[position] = item;
+    }
 }
 
 pub(super) fn catalog(lock: &Lock) -> Vec<Installed> {
@@ -658,11 +667,7 @@ fn update_lines(
         return Ok(());
     }
     for (position, item, files) in changes {
-        // Remove by the installed ID, which the new package has too.
-        let prefix = format!("plugins/{}/", plan.catalog[position].plugin.id);
-        plan.packages.retain(|name, _| !name.starts_with(&prefix));
-        plan.packages.extend(files);
-        plan.catalog[position] = item;
+        plan.replace(position, item, files);
     }
     let generation = finish_update(state, plan, mode)?;
     for line in report {
@@ -679,13 +684,76 @@ fn finish_update(state: &Path, plan: Plan, mode: UpdateMode) -> Result<Option<St
         return Ok(Some(publish(plan.catalog, plan.packages, state)?));
     }
     let base = pointer(state, "current")?;
+    stage_plan(state, plan, base)?;
+    Ok(None)
+}
+
+fn stage_plan(state: &Path, plan: Plan, base: String) -> Result<()> {
     let generation = install_generation(plan.catalog, plan.packages, state)?;
     if generation == base {
         println!("no generation changes to stage");
     } else {
         candidate::save_prepared(state, generation, Some(base), None)?;
     }
-    Ok(None)
+    Ok(())
+}
+
+pub(super) fn stage_restore(state: &Path, id: &str, from: Option<&str>) -> Result<()> {
+    let _guard = MutationGuard::acquire(state)?;
+    let mut plan = current(state)?;
+    let position = plan
+        .catalog
+        .iter()
+        .position(|entry| entry.plugin.id == id)
+        .ok_or_else(|| format!("plugin not installed: {id}"))?;
+    let base = pointer(state, "current")?;
+    let source = match from {
+        Some(generation) => generation.to_owned(),
+        None => pointer(state, "previous").map_err(|error| {
+            format!("cannot read previous generation ({error}); pass --from GENERATION")
+        })?,
+    };
+    let lock = verify_generation(state, &source)?;
+    let mut item = catalog(&lock)
+        .into_iter()
+        .find(|entry| entry.plugin.id == id)
+        .ok_or_else(|| format!("plugin {id} is absent from generation {source}"))?;
+    let current = &plan.catalog[position];
+    if item.declaration != current.declaration {
+        return Err(format!(
+            "plugin {id} has a different saved declaration in generation {source}"
+        )
+        .into());
+    }
+    item.enabled = current.enabled;
+    let prefix = format!("plugins/{id}/");
+    let root = state.join("generations").join(&source);
+    let mut files = BTreeMap::new();
+    for (name, sha256) in lock
+        .files
+        .range(prefix.clone()..)
+        .take_while(|(name, _)| name.starts_with(&prefix))
+    {
+        let bytes = snapshot_file(&root, name, &lock)?;
+        if hash(&bytes) != *sha256 {
+            return Err(format!("content changed: {name}").into());
+        }
+        files.insert(name.clone(), bytes);
+    }
+    if item == *current
+        && plan
+            .packages
+            .range(prefix.clone()..)
+            .take_while(|(name, _)| name.starts_with(&prefix))
+            .eq(&files)
+    {
+        println!("no plugin changes to stage");
+        return Ok(());
+    }
+    plan.replace(position, item, files);
+    stage_plan(state, plan, base)?;
+    println!("snapshot   {id} from {source}");
+    Ok(())
 }
 
 fn update_catalog(
@@ -709,10 +777,7 @@ fn update_catalog(
     if item.plugin.id != id {
         return Err(format!("update changes plugin ID from {id} to {}", item.plugin.id).into());
     }
-    let prefix = format!("plugins/{id}/");
-    plan.packages.retain(|name, _| !name.starts_with(&prefix));
-    plan.packages.extend(files);
-    plan.catalog[position] = item;
+    plan.replace(position, item, files);
     if let Some(generation) = finish_update(state, plan, mode)? {
         announce(&format!("updated {id}"), &generation);
     }

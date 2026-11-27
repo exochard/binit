@@ -101,6 +101,11 @@ class Session:
     def send(self, data):
         os.write(self.fd, data.encode() if isinstance(data, str) else data)
 
+    def interrupt_to_prompt(self):
+        offset = len(self.raw)
+        self.send(b'\x03')
+        self.wait(lambda: PROMPT.encode() + b' ' in self.raw[offset:])
+
     def mark(self, name):
         return (self.marks / name).exists()
 

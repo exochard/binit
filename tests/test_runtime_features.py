@@ -148,8 +148,7 @@ class RuntimeFeatures(unittest.TestCase):
         startup = "before() { touch MARKS/callback; sleep 30; }; binit on before-load slow before\n"
         with test_wait.Session("touch MARKS/sourced\n", startup_body=startup) as session:
             session.wait(lambda: session.mark('callback'))
-            session.send(b'\x03')
-            session.settle()
+            session.interrupt_to_prompt()
             session.send("binit profile | grep -o 'load interrupted'\n")
             session.wait(lambda: '\nload interrupted' in session.text)
             self.assertFalse(session.mark('sourced'))
@@ -160,8 +159,7 @@ class RuntimeFeatures(unittest.TestCase):
         test_wait.BINARY = BINARY
         with test_wait.Session("touch MARKS/started; sleep 30\n") as session:
             session.wait(lambda: session.mark('started'))
-            session.send(b'\x03')
-            session.settle()
+            session.interrupt_to_prompt()
             session.send("binit profile | grep -o 'load interrupted'; t=; binit_complete effects mark t; echo \"snapshot-depth-$t\"\n")
             session.wait(lambda: '\nload interrupted' in session.text and 'snapshot-depth-1' in session.text)
 

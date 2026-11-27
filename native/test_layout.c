@@ -65,6 +65,15 @@ static void test_breaks(void)
     assert(!LAYOUT(2, 3, "\t", 0, &layout)); /* the spill would not fit a row */
 }
 
+static void test_ascii_widths(void)
+{
+    for (unsigned int byte = 0; byte < 128; ++byte) {
+        char text = (char)byte;
+        int expected = byte >= 0x20 && byte <= 0x7e ? 1 : -1;
+        assert(binit_cells(&text, 1) == expected);
+    }
+}
+
 static void test_rejects(void)
 {
     struct binit_layout layout;
@@ -116,9 +125,11 @@ static void test_fit(void)
 
 int main(void)
 {
+    test_ascii_widths();
     // The test sets its locale before running any code; it creates no threads.
     // NOLINTNEXTLINE(concurrency-mt-unsafe)
     assert(setlocale(LC_ALL, "C.UTF-8"));
+    test_ascii_widths();
     test_wrap();
     test_wide();
     test_combining();

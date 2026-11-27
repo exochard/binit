@@ -7,6 +7,11 @@
 /* Width of the first character of text and its length, or -1 when it is unmeasurable. */
 static int measure(const char *text, size_t size, size_t *length)
 {
+    unsigned char byte = (unsigned char)*text;
+    if (byte >= 0x20 && byte <= 0x7e) {
+        *length = 1;
+        return 1;
+    }
     mbstate_t state = {0};
     wchar_t character;
     size_t used = mbrtowc(&character, text, size, &state); // NOLINT(concurrency-mt-unsafe): Readline runs on Bash's shell thread.

@@ -81,7 +81,11 @@ def observe(bash, arm, failure):
         times = {}
         head = directory / '.git/HEAD'
         for metric in METRICS:
-            os.write(shell.fd, PREFIX.encode())
+            # ZLE writes the prompt before restoring editor input mode.
+            corpus.wait_for_editor(shell)
+            os.write(shell.fd, PREFIX[:1].encode())
+            shell.until(lambda: shown(PREFIX[:1]))
+            os.write(shell.fd, PREFIX[1:].encode())
             shell.until(lambda: shown(PREFIX))
             started = time.perf_counter_ns()
             os.write(shell.fd, b'\t')

@@ -43,18 +43,42 @@ printf 'instance-id: binit-ci-arm64\nlocal-hostname: binit-arm64\n' > "$work/met
 xorriso -as mkisofs -quiet -volid cidata -joliet -rock \
     -output "$work/seed.iso" "$work/user-data" "$work/meta-data"
 qemu-img create -q -f qcow2 -F qcow2 -b "$image" "$work/guest.qcow2" 12G
+truncate -s 1G "$work/swap.raw"
+
+runner_memory() {
+    local metric
+    for metric in memory.max memory.peak memory.events; do
+        if [[ -r /sys/fs/cgroup/$metric ]]; then
+            printf 'Runner %s:\n' "$metric"
+            cat "/sys/fs/cgroup/$metric" || true
+        fi
+    done
+}
 
 port=22369
-qemu-system-aarch64 -accel 'tcg,thread=multi' -machine 'virt,gic-version=3' -cpu cortex-a72 \
-    -smp 2 -m 2048 -display none -monitor none -serial "file:$work/console.log" \
+runner_memory
+# Leave room in the runner cgroup for QEMU, its translation cache and SSH.
+qemu-system-aarch64 -accel 'tcg,thread=multi,tb-size=64' -machine 'virt,gic-version=3' -cpu cortex-a72 \
+    -smp 2 -m 1536 -display none -monitor none -serial "file:$work/console.log" \
     -drive "if=pflash,format=raw,readonly=on,file=$firmware" \
     -drive "if=pflash,format=raw,file=$work/vars.fd" \
-    -drive "if=none,id=root,format=qcow2,file=$work/guest.qcow2" -device virtio-blk-pci,drive=root \
+    -drive "if=none,id=root,format=qcow2,cache=none,file=$work/guest.qcow2" -device virtio-blk-pci,drive=root \
+    -drive "if=none,id=swap,format=raw,cache=none,file=$work/swap.raw" -device virtio-blk-pci,drive=swap,serial=binit-ci-swap \
     -drive "if=none,id=seed,format=raw,readonly=on,file=$work/seed.iso" -device virtio-blk-pci,drive=seed \
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22" -no-reboot \
     > "$work/qemu.log" 2>&1 &
 guest=$!
-trap 'kill -TERM "$guest" 2>/dev/null || true; wait "$guest" 2>/dev/null || true' EXIT
+cleanup() {
+    local status=$?
+    kill -TERM "$guest" 2>/dev/null || true
+    wait "$guest" 2>/dev/null || true
+    runner_memory >&2
+    if (( status != 0 )); then
+        tail -30 -- "$work/qemu.log" "$work/console.log" >&2 || true
+    fi
+    return "$status"
+}
+trap cleanup EXIT
 ssh_guest=(ssh -F /dev/null -p "$port" -o BatchMode=yes -o ConnectTimeout=4
     -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$work/known_hosts"
     -o IdentitiesOnly=yes -i "$work/key" binit-ci@127.0.0.1)
@@ -82,6 +106,11 @@ set -euo pipefail
 test "$(uname -m)" = aarch64
 uname -smr
 cloud-init status --wait
+swap=/dev/disk/by-id/virtio-binit-ci-swap
+test -b "$swap"
+sudo -n mkswap "$swap"
+sudo -n swapon "$swap"
+free -m
 sudo -n apt-get -o Acquire::Retries=2 update -qq
 sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     gcc git make patch bison curl ca-certificates libncurses-dev python3-venv
@@ -92,7 +121,7 @@ python3 -m venv .venv
 export PATH="$PWD/.venv/bin:$HOME/.cargo/bin:$PATH"
 python3 -m pip install --disable-pip-version-check -r requirements-dev.txt
 mkdir -p tmp
-export TMPDIR="$PWD/tmp" CARGO_BUILD_JOBS=2 BINIT_NATIVE=1
+export TMPDIR="$PWD/tmp" CARGO_BUILD_JOBS=1 BINIT_NATIVE=1
 python3 scripts/ci_bash.py 5.2 "$PWD/tmp/bash-5.2"
 python3 scripts/ci_bash.py 5.3 "$PWD/tmp/bash-5.3"
 export BINIT_BASH_INCLUDE="$PWD/tmp/bash-5.3/install/include/bash"
@@ -119,5 +148,8 @@ for version in 5.2 5.3; do
 done
 GUEST
 "${ssh_guest[@]}" 'sudo -n shutdown -h now' || true
-wait "$guest"
+status=0
+wait "$guest" || status=$?
 trap - EXIT
+runner_memory
+exit "$status"

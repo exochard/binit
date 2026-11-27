@@ -297,6 +297,26 @@ class WaitTests(unittest.TestCase):
             session.wait(lambda: session.mark("done") and session.cursor_line.endswith(f"{PROMPT} x"))
             self.assertEqual((session.marks / "attempts").read_text(), "x")
 
+    def test_opt_in_acks_input_while_a_false_condition_stays_pending(self):
+        startup = (
+            "try_first() { printf x >> MARKS/attempts;\n"
+            + FIRST
+            + "return 1; }\n__binit_when[first]=try_first\n"
+        )
+        for mode in ("emacs", "vi"):
+            with self.subTest(mode=mode), Session(
+                TAIL + "touch MARKS/done\n", startup, mode=mode, first_wait_body=":", wait_edit=True
+            ) as session:
+                session.wait(lambda: session.mark("first"))
+                session.send("x")
+                (session.marks / "release").touch()
+                session.wait(lambda: session.mark("tail"))
+                session.wait(lambda: session.cursor_line.endswith(f"{PROMPT} x"), seconds=.5)
+                self.assertFalse(session.mark("done"))
+                self.assertEqual((session.marks / "attempts").read_text(), "x")
+                (session.marks / "finish").touch()
+                session.wait(lambda: session.mark("done"))
+
 
 if __name__ == "__main__":
     unittest.main()

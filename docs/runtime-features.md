@@ -25,6 +25,11 @@ emitted again. Conditions and plugins run in the current shell with the user's
 authority. Startup does no acquisition; plugin or condition code can still
 perform actions of its own.
 
+With `BINIT_WAIT_EDIT=1`, queued input can be displayed between wait
+plugins even when an earlier condition stays pending. The waiting tail
+still finishes before command execution. The earlier condition is tried
+again at a later prompt.
+
 ## Lifecycle callbacks
 
 Register existing shell functions before the plugin loads:

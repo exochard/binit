@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "reference": "911c067d4bca639b916359596bc1233984819189",
+  "workload": "A first wait condition reports ready for input and blocks on a fixture marker, then returns false. A queued command arrives before the marker is released. The next wait plugin has a 75 ms body and provides the command.",
+  "profile": "BINIT_WAIT_EDIT=1 in both arms, private homes, Emacs and vi, Bash 5.2 and 5.3",
+  "effects": [
+    "Each condition is evaluated once before the queued command.",
+    "The waiting tail plugin is loaded before the command executes.",
+    "The command receives the literal arguments and returns 37.",
+    "The false condition stays pending for a subsequent prompt."
+  ],
+  "metric": "Visible echo of the queued text after the input write, before command acknowledgement. Include only effect-checked pairs.",
+  "runs": 2,
+  "pairs_per_run": 20,
+  "maximum_paired_p95_ratio": 0.8
+}

@@ -41,6 +41,7 @@ def run(manager, bash, root, receipt, mode, editor, case, editing):
     typed = INPUT.replace(b"second_tool", b"second_short") if case == "alias" else INPUT
     command = COMMAND.replace(INPUT, typed).removesuffix(b"\n")
     release = root / "release"
+    condition = ""
     configs = ["schema=1"]
     for name, body in (
         ("first", f"""printf '\036FIRST\037'
@@ -51,13 +52,21 @@ second_tool() { printf '\036EFFECT:%d:' "$#"; printf '<%s>' "$@"; printf '\037';
 printf '\036SECOND-READY\037'
 """),
     ):
+        manifest = f"schema=1\nid='{name}'\nentry='plugin.bash'\nload='wait'\n"
+        if case == "conditional":
+            count = shlex.quote(str(root / 'attempts'))
+            if name == "first":
+                condition = f"wait_condition() {{ printf x >> {count};\n{body}return 1; }}\n"
+                body = ":\n"
+                manifest += "when='wait_condition'\n"
+            else:
+                body = body.replace('second_tool() {',
+                                    f'second_tool() {{ [[ $(<{count}) == x && ${{__binit_state[first]}} == pending ]] || return 99;')
         if name == "second" and case == "alias":
             body += "alias second_short=second_tool\n"
         package = root / name
         package.mkdir()
-        (package / "plugin.toml").write_text(
-            f"schema=1\nid='{name}'\nentry='plugin.bash'\nload='wait'\n"
-        )
+        (package / "plugin.toml").write_text(manifest)
         (package / "plugin.bash").write_text(body)
         configs.extend(["[[plugins]]", f"path='{name}'"])
     config = root / "config.toml"
@@ -67,6 +76,7 @@ printf '\036SECOND-READY\037'
     rc = root / "rc"
     rc.write_text(
         f"PS1='BENCH> '\nset -o {editor}\n"
+        + condition
         + ("bind '\"\\C-t\": accept-line'\n" if case == "alternate-accept" else "")
         +
         f"eval \"$({shlex.quote(str(manager))} init --state {shlex.quote(str(state))})\"\n"
@@ -118,7 +128,7 @@ def main():
     parser.add_argument("--runs", type=int, default=2)
     parser.add_argument("--editing", action="store_true")
     parser.add_argument("--editor", choices=["emacs", "vi"], required=True)
-    parser.add_argument("--case", choices=["queued", "alias", "alternate-accept", "pause"], required=True)
+    parser.add_argument("--case", choices=["queued", "alias", "alternate-accept", "pause", "conditional"], required=True)
     args = parser.parse_args()
     if args.runs < 1 or args.pairs < 1:
         parser.error('runs and pairs must be positive')
@@ -134,6 +144,8 @@ def main():
               "bash_sha256": digest(args.bash), "harness_sha256": digest(__file__),
               "status": "incomplete", "editor": args.editor, "case": args.case,
               "editing": args.editing, "raw": rows}
+    if args.case == 'conditional':
+        result['policy_sha256'] = digest(ROOT / 'benchmarks/deferred-condition.json')
     summary = args.output / "result.json"
     try:
         for index in range(args.runs * args.pairs):

@@ -2249,7 +2249,7 @@ static void wait_edit_display(void)
         RL_ISSTATE(RL_STATE_SIGHANDLER | RL_STATE_CALLBACK | RL_STATE_DONE |
                    RL_STATE_DISPATCHING | RL_STATE_COMPLETING)) return;
     stop_wait_edit();
-    run_wait_dispatch("__binit_wait_dispatch", WAIT_REDRAW_ALWAYS, true);
+    run_wait_dispatch("__binit_wait_dispatch resume", WAIT_REDRAW_ALWAYS, true);
 }
 
 static void finish_wait_edit(void)
@@ -2259,7 +2259,7 @@ static void finish_wait_edit(void)
                     !RL_ISSTATE(RL_STATE_EOF | RL_STATE_SIGHANDLER | RL_STATE_CALLBACK);
     stop_wait_edit();
     /* A key binding can accept a line without calling redisplay again. */
-    if (accepted) run_wait_dispatch("__binit_wait_dispatch", WAIT_REDRAW_NONE, true);
+    if (accepted) run_wait_dispatch("__binit_wait_dispatch resume", WAIT_REDRAW_NONE, true);
 }
 
 static int pre_input_hook(void)
@@ -2281,7 +2281,7 @@ static int pre_input_hook(void)
     const char *yielded = allow_edit ? get_string_value("__binit_wait_yielded") : NULL;
     if (!yielded || strcmp(yielded, "1") != 0) return 0;
     if (!can_edit_during_wait()) {
-        run_wait_dispatch("__binit_wait_dispatch", WAIT_REDRAW_ALWAYS, false);
+        run_wait_dispatch("__binit_wait_dispatch resume", WAIT_REDRAW_ALWAYS, false);
         return 0;
     }
     wait_edit_armed = true;

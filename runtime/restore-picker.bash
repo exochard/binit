@@ -14,7 +14,7 @@ __binit_restore_picker() {
     printf 'j/k move  h/l first/last  enter stage  esc cancel\n' >&2
     while :; do
         generation=${generations[index]}
-        printf '\r\033[2K%s  %d/%d' "$generation" "$((index + 1))" "${#generations[@]}" >&2
+        printf '\r\033[2K%.12s  %d/%d' "$generation" "$((index + 1))" "${#generations[@]}" >&2
         if ! IFS= read -rsn1 key; then printf '\r\033[2K\n' >&2; return 1; fi
         case $key in
             '') printf '\r\033[2K\n' >&2

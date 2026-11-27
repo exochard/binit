@@ -558,9 +558,10 @@ __binit_prompt_dispatch() {
 __binit_wait_dispatch() {
     local __binit_wait_id __binit_wait_edit=${1-} __binit_wait_index=0
     local -a __binit_wait_run=("${__binit_wait_queue[@]}")
-    __binit_wait_pending=0 __binit_wait_yielded=0
-    __binit_wait_queue=()
-    for __binit_wait_id in "${__binit_wait_run[@]}"; do
+    if [[ $__binit_wait_edit == resume ]]; then __binit_wait_index=${__binit_wait_retries-0}; fi
+    __binit_wait_pending=$((__binit_wait_index > 0)) __binit_wait_yielded=0 __binit_wait_retries=0
+    __binit_wait_queue=("${__binit_wait_run[@]:0:__binit_wait_index}")
+    for __binit_wait_id in "${__binit_wait_run[@]:__binit_wait_index}"; do
         __binit_wait_index=$((__binit_wait_index + 1))
         if [[ ${__binit_state[$__binit_wait_id]} == pending ]]; then
             if __binit_load "$__binit_wait_id"; then :; fi
@@ -568,10 +569,12 @@ __binit_wait_dispatch() {
                 __binit_wait_pending=1
                 __binit_wait_queue+=("$__binit_wait_id")
             fi
-            # The resumed batch must contain only entries that have not been tried.
+            # Keep false conditions queued for the next prompt. The current
+            # Readline resume skips them and finishes only the untouched tail.
             if [[ $__binit_wait_edit == edit ]] &&
-               (( ! __binit_wait_pending && __binit_wait_index < ${#__binit_wait_run[@]} )) &&
+               (( __binit_wait_index < ${#__binit_wait_run[@]} )) &&
                IFS= builtin read -t 0; then
+                __binit_wait_retries=${#__binit_wait_queue[@]}
                 __binit_wait_queue+=("${__binit_wait_run[@]:__binit_wait_index}")
                 __binit_wait_pending=1 __binit_wait_yielded=1
                 return 0

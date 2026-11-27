@@ -56,7 +56,7 @@ __binit_log_show() {
     fi
     if [[ -z ${__binit_log_source-} ]]; then
         if [[ $# == 1 ]]; then printf '{"schema":1,"clock":null,"dropped":0,"events":[]}\n'
-        else printf 'Logs disabled. Start a shell with BINIT_LOGS=1.\n'; fi
+        else printf 'logs disabled (set BINIT_LOGS=1 before initialization)\n'; fi
         return 0
     fi
     local __binit_log_first=0 __binit_log_index __binit_log_offset __binit_log_duration

@@ -487,6 +487,68 @@ def cleanup_quiescence(pid, bound, samples):
     return False
 
 
+def isolated_cancellation(shell, subject, directory, row, pairing=None):
+    path = tag(shell, directory, 'isolated-cancel')
+    baseline_samples = []
+    row['traces']['isolated-baseline-observations'] = baseline_samples
+    if not cleanup_quiescence(shell.pid, None, baseline_samples):
+        raise RuntimeError('isolated provider baseline is not a complete single-shell observation')
+    baseline = baseline_samples[-1]
+    resources_before = baseline['resources']
+    del row['traces']['isolated-baseline-observations']
+    started = directory / 'provider-started'
+    if started.exists():
+        raise RuntimeError('provider marker exists before isolated input')
+    shell.settled(b' wf_iso al')
+    started_before_tab = started.is_file()
+    if pairing is not None:
+        registration, bindings = pairing
+        shell.settled(b'\t')
+        deadline = time.monotonic() + .3
+        while time.monotonic() < deadline and not started.is_file():
+            shell.read(.01)
+        rendered = screen_tail(shell)
+        row['paired_provider_probe'] = {'provider_started': started.is_file(), 'rendered': rendered,
+                                        'registration': registration, 'bindings_sha256': digest(directory / 'pair-bindings.txt')}
+        if paired_provider_mismatch(started.is_file(), rendered):
+            raise EditorBehaviorMismatch('paired isolated provider did not start; Tab completed the probe filename')
+    else:
+        os.write(shell.fd, b'\t')
+    shell.until(started.is_file)
+    marker = started.read_text().strip()
+    if not re.fullmatch(r'[1-9][0-9]*', marker):
+        raise RuntimeError('provider start marker has invalid process identity')
+    provider_pid = int(marker)
+    in_flight = corpus.resource_sample(shell.pid)
+    provider_live = paired_provider_is_live(in_flight, shell.pid, provider_pid)
+    if subject in NATIVE_SUBJECTS and not provider_live:
+        raise RuntimeError('native provider liveness at input was not established')
+    before = time.perf_counter_ns()
+    os.write(shell.fd, b'x')
+    deadline = time.monotonic() + 1
+    response_ms = None
+    while time.monotonic() < deadline:
+        if 'x' in screen_tail(shell):
+            response_ms = (time.perf_counter_ns() - before) / 1e6
+            break
+        shell.read(.01)
+    row['traces']['isolated-slow-cancel'] = {'elapsed_ms': accepted(shell, b'')}
+    row['traces']['isolated-slow-cancel']['input_response_ms'] = response_ms
+    row['traces']['isolated-slow-cancel']['provider_start_phase'] = ('typing' if started_before_tab else 'tab')
+    row['traces']['isolated-slow-cancel']['provider_pid'] = provider_pid
+    row['traces']['isolated-slow-cancel']['provider_live_before_input'] = provider_live
+    row['traces']['isolated-slow-cancel']['in_flight_resources'] = in_flight
+    row['traces']['isolated-slow-cancel']['resources_before'] = resources_before
+    row['traces']['isolated-slow-cancel']['baseline_observations'] = baseline_samples
+    actual = path.read_bytes() if path.is_file() else None
+    row['traces']['isolated-slow-cancel'].update(isolated_effect(subject, actual, response_ms))
+    cleanup_samples = []
+    row['traces']['isolated-slow-cancel']['cleanup_observations'] = cleanup_samples
+    if not cleanup_quiescence(shell.pid, resources_before['fds_sum'], cleanup_samples):
+        raise RuntimeError('isolated provider owned child cleanup was not established')
+    row['traces']['isolated-slow-cancel']['resources_after'] = cleanup_samples[-1]['resources']
+
+
 def run_trace(subject, mode, history, binary, bash, source, directory, events, binit_history_range='full'):
     rc, home = configuration(subject, mode, history, directory, binary, bash, source)
     runtime = directory / 'runtime'
@@ -590,6 +652,7 @@ def run_trace(subject, mode, history, binary, bash, source, directory, events, b
         if len(counts) != 1 or int(counts[0]) < 1:
             raise EditorBehaviorMismatch(f'large completion provider was not observed: {counts!r}')
         row['traces']['completion-large-cancel']['provider_calls'] = int(counts[0])
+        pairing = None
         if subject == 'binit-blesh':
             frame(shell, 'complete -p wf_iso > pair-completion.txt && '
                          'binit completions list > pair-registry.txt && ble-bind --print > pair-bindings.txt')
@@ -600,64 +663,8 @@ def run_trace(subject, mode, history, binary, bash, source, directory, events, b
                     or 'wf_iso - enabled' not in registry
                     or not re.search(r"ble-bind -m '[^']+' -f (?:TAB|C-i) complete(?:\n|$)", bindings)):
                 raise RuntimeError('paired provider or ble Tab binding was not established')
-        path = tag(shell, directory, 'isolated-cancel')
-        baseline_samples = []
-        row['traces']['isolated-baseline-observations'] = baseline_samples
-        if not cleanup_quiescence(shell.pid, None, baseline_samples):
-            raise RuntimeError('isolated provider baseline is not a complete single-shell observation')
-        baseline = baseline_samples[-1]
-        resources_before = baseline['resources']
-        del row['traces']['isolated-baseline-observations']
-        started = directory / 'provider-started'
-        if started.exists():
-            raise RuntimeError('provider marker exists before isolated input')
-        shell.settled(b' wf_iso al')
-        started_before_tab = started.is_file()
-        if subject == 'binit-blesh':
-            shell.settled(b'\t')
-            deadline = time.monotonic() + .3
-            while time.monotonic() < deadline and not started.is_file():
-                shell.read(.01)
-            rendered = screen_tail(shell)
-            row['paired_provider_probe'] = {'provider_started': started.is_file(), 'rendered': rendered,
-                                            'registration': registration, 'bindings_sha256': digest(directory / 'pair-bindings.txt')}
-            if paired_provider_mismatch(started.is_file(), rendered):
-                raise EditorBehaviorMismatch('paired isolated provider did not start; Tab completed the probe filename')
-        else:
-            os.write(shell.fd, b'\t')
-        shell.until(started.is_file)
-        marker = started.read_text().strip()
-        if not re.fullmatch(r'[1-9][0-9]*', marker):
-            raise RuntimeError('provider start marker has invalid process identity')
-        provider_pid = int(marker)
-        in_flight = corpus.resource_sample(shell.pid)
-        provider_live = paired_provider_is_live(in_flight, shell.pid, provider_pid)
-        if subject in NATIVE_SUBJECTS and not provider_live:
-            raise RuntimeError('native provider liveness at input was not established')
-        before = time.perf_counter_ns()
-        os.write(shell.fd, b'x')
-        deadline = time.monotonic() + 1
-        response_ms = None
-        while time.monotonic() < deadline:
-            if 'x' in screen_tail(shell):
-                response_ms = (time.perf_counter_ns() - before) / 1e6
-                break
-            shell.read(.01)
-        row['traces']['isolated-slow-cancel'] = {'elapsed_ms': accepted(shell, b'')}
-        row['traces']['isolated-slow-cancel']['input_response_ms'] = response_ms
-        row['traces']['isolated-slow-cancel']['provider_start_phase'] = ('typing' if started_before_tab else 'tab')
-        row['traces']['isolated-slow-cancel']['provider_pid'] = provider_pid
-        row['traces']['isolated-slow-cancel']['provider_live_before_input'] = provider_live
-        row['traces']['isolated-slow-cancel']['in_flight_resources'] = in_flight
-        row['traces']['isolated-slow-cancel']['resources_before'] = resources_before
-        row['traces']['isolated-slow-cancel']['baseline_observations'] = baseline_samples
-        actual = path.read_bytes() if path.is_file() else None
-        row['traces']['isolated-slow-cancel'].update(isolated_effect(subject, actual, response_ms))
-        cleanup_samples = []
-        row['traces']['isolated-slow-cancel']['cleanup_observations'] = cleanup_samples
-        if not cleanup_quiescence(shell.pid, resources_before['fds_sum'], cleanup_samples):
-            raise RuntimeError('isolated provider owned child cleanup was not established')
-        row['traces']['isolated-slow-cancel']['resources_after'] = cleanup_samples[-1]['resources']
+            pairing = registration, bindings
+        isolated_cancellation(shell, subject, directory, row, pairing)
         path = tag(shell, directory, 'stateful-slow')
         shell.settled(b' wf_slow al')
         completion_ms = shell.settled(b'\t')

@@ -79,9 +79,20 @@ def observe(bash, config, work, trace, age):
             raise RuntimeError('history effect changed during redraw')
 
     def measure(keys, visible):
+        if visible():
+            raise RuntimeError('history effect already visible before input')
+        shell.screen.dirty.clear()
+
+        def updated_screen():
+            if not shell.screen.dirty:
+                return False
+            shell.screen.dirty.clear()
+            return visible()
+
+        # Cursor reports can produce PTY traffic without changing any visible text.
         started = time.perf_counter_ns()
         os.write(shell.fd, keys)
-        shell.until(visible)
+        shell.until(updated_screen)
         elapsed = (time.perf_counter_ns() - started) / 1e6
         wait_for_redraw(visible)
         return elapsed

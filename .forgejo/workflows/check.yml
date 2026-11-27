@@ -1,13 +1,14 @@
 # Forgejo runs this directory instead of .github/workflows. It mirrors the GitHub
 # checks for the self-hosted x86-64 runner: one job at a time, 4 CPUs, 3 GB and a
-# 30-minute limit per job, so the matrix is smaller than GitHub's. ARM64 runs on
-# GitHub only. Job containers are unprivileged, so the plugin check that GitHub
+# 30-minute limit for the x86-64 jobs, so the matrix is smaller than GitHub's.
+# The ARM64 check boots an isolated QEMU guest. Job containers are unprivileged,
+# so the plugin check that GitHub
 # isolates with `unshare --net` runs with the network available here.
 name: Check
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, 'ci/**']
   workflow_dispatch:
 
 env:
@@ -58,6 +59,20 @@ jobs:
         run: |
           set -o pipefail
           make check 2>&1 | tee .cache/ci/evidence/verify.log
+
+  arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install ARM64 guest tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl openssh-client qemu-efi-aarch64 qemu-system-arm qemu-utils xorriso
+      - name: Verify Bash 5.2 and 5.3 on ARM64
+        run: bash scripts/ci-arm64.bash "$PWD/.cache/ci/arm64"
 
   ecosystem:
     runs-on: ubuntu-24.04

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 import bench_ecosystem as corpus
 from bench_development_milestone import BASELINE, BINIT_HASHES, POLICY, ROOT
@@ -65,6 +66,17 @@ def prepare(directory, binary, packages, bash, editor):
     return directory, rc, home
 
 
+def prime_stamp(directory, binary, home, bash):
+    state = directory / 'state'
+    subprocess.run([binary, 'init', '--state', state], env=corpus.environment(home) | {'BINIT_BASH': str(bash)},
+                   check=True, stdout=subprocess.DEVNULL, timeout=30)
+    selected = (state / 'current').read_text().strip()
+    stamp = state / 'generations' / f'{selected}.verified'
+    if not stamp.is_file():
+        raise RuntimeError(f'{directory.name}: startup verification stamp is absent')
+    return stamp
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate', required=True, type=Path)
@@ -113,13 +125,18 @@ def main():
                 'baseline': prepare(work / 'baseline', baseline, baseline_packages, args.bash, args.editor),
                 'candidate': prepare(work / 'candidate', args.candidate, args.candidate_plugins, args.bash, args.editor),
             }
+            # Allow both generations to settle before either startup sample is timed.
+            time.sleep(2.1)
+            stamps = []
             for name, (directory, rc, home) in arms.items():
+                binary = baseline if name == 'baseline' else args.candidate
+                stamps.append(prime_stamp(directory, binary, home, args.bash))
                 observe('binit', str(args.bash), rc, directory, home, args.output / f'prime-{name}.trace')
             homes = {name: inventory_tree(home) for name, (_, _, home) in arms.items()}
             fixtures = [path for directory, rc, _ in arms.values()
                         for path in (rc, directory / 'config.toml', directory / 'history',
                                      directory / '.binit-project.toml', directory / 'state/current')]
-            result['fixture_sha256'] = {str(path.relative_to(work)): digest(path) for path in fixtures}
+            result['fixture_sha256'] = {str(path.relative_to(work)): digest(path) for path in fixtures + stamps}
             for run in range(args.runs):
                 pairs = []
                 result['runs'].append(pairs)

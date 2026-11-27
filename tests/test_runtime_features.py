@@ -158,7 +158,7 @@ class RuntimeFeatures(unittest.TestCase):
     def test_interrupted_load_releases_native_snapshots(self):
         import test_wait
         test_wait.BINARY = BINARY
-        with test_wait.Session("touch MARKS/started; sleep 30\n") as session:
+        with test_wait.Session("sh -c ': > \"$1\"; exec sleep 30' sh MARKS/started\n") as session:
             session.wait(lambda: session.mark('started'))
             session.interrupt_to_prompt()
             session.send("binit profile | grep -o 'load interrupted'; t=; binit_complete effects mark t; echo \"snapshot-depth-$t\"\n")

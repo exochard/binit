@@ -62,12 +62,19 @@ def prepare(directory, binary, nvm, zinit, editor, bash, zsh):
     return directory, rc, env, command, entry
 
 
-def accepted(shell, code):
+def accepted(shell, code, *, preflight=False):
     marker = b'\x1eDONE\x1e'
     start = len(shell.raw)
     started = time.perf_counter_ns()
     # A newline after the marker makes ZLE print a fresh prompt instead of recycling its row.
-    os.write(shell.fd, code.encode() + b"; printf '\\036DONE\\036\\n'\n")
+    payload = code.encode() + b"; printf '\\036DONE\\036\\n'"
+    if preflight:
+        # Wait for the editor to draw the first probe before sending its Enter.
+        shell.settled(payload[:1])
+        shell.settled(payload[1:])
+        os.write(shell.fd, b'\n')
+    else:
+        os.write(shell.fd, payload + b'\n')
     shell.until(lambda: marker in shell.raw[start:] and
                 shell.raw.rfind(PROMPT) > shell.raw.index(marker, start))
     return (time.perf_counter_ns() - started) / 1e6
@@ -79,7 +86,7 @@ def observe(bash, arm, failure):
     try:
         corpus.wait_for_editor(shell)
         accepted(shell, "if type nvm >/dev/null 2>&1 && ! type nvm_echo >/dev/null 2>&1; "
-                 "then printf '\\036NVM:PENDING\\037'; fi")
+                 "then printf '\\036NVM:PENDING\\037'; fi", preflight=True)
         if b'\x1eNVM:PENDING\x1f' not in shell.raw:
             raise RuntimeError('NVM was not pending before first use')
         times = {}

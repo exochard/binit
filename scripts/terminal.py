@@ -56,7 +56,7 @@ class Terminal:
             raise
         self.startup_ms = (time.perf_counter_ns() - started) / 1e6
 
-    def read_until(self, suffix, seconds=5):
+    def read_until(self, suffix, seconds=5, *, after=b""):
         deadline = time.monotonic() + seconds
         data = bytearray()
         while time.monotonic() < deadline:
@@ -71,13 +71,18 @@ class Terminal:
                     break
                 data.extend(chunk)
                 self.transcript.extend(chunk)
-                if data.endswith(suffix):
+                if after in data and data.endswith(suffix):
                     return data.decode(errors="replace")
         raise AssertionError(f"terminal did not reach {suffix!r}: {data!r}")
 
     def command(self, command):
         os.write(self.fd, command.encode() + b"\n")
         return self.read_until(self.prompt)
+
+    def clear_line(self):
+        # Readline can redraw the prompt while clearing the current input.
+        os.write(self.fd, b"\x15printf '\\036BINIT-CLEARED\\037\\n'\n")
+        self.read_until(self.prompt, after=b"\x1eBINIT-CLEARED\x1f")
 
     def _drain_exited(self):
         # A descendant can keep writing after the shell exits; keep close bounded.
@@ -177,8 +182,7 @@ def smoke(directory):
         # Exercise actual Readline TAB dispatch, rather than invoking its callback.
         os.write(terminal.fd, b"git stat\t")
         terminal.read_until(b"git status ")
-        os.write(terminal.fd, b"\x15\n")
-        terminal.read_until(PROMPT)
+        terminal.clear_line()
         output = terminal.command("binit profile")
         assert any("git-completion" in row and "loaded" in row for row in output.splitlines()), terminal.transcript.decode(errors="replace")
         terminal.command("false")
@@ -199,12 +203,10 @@ def smoke(directory):
         terminal.command('cd ../repo')
         os.write(terminal.fd, b'git switch feature/\t')
         terminal.read_until(b'git switch feature/binit ')
-        os.write(terminal.fd, b'\x15\n')
-        terminal.read_until(PROMPT)
+        terminal.clear_line()
         os.write(terminal.fd, b'git log --one\t')
         terminal.read_until(b'git log --oneline ')
-        os.write(terminal.fd, b'\x15\n')
-        terminal.read_until(PROMPT)
+        terminal.clear_line()
         transcript = terminal.transcript.decode(errors="replace")
     finally:
         terminal.close()

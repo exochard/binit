@@ -17,6 +17,19 @@ class TerminalCaptureTests(unittest.TestCase):
         rc.write_text("PS1='READY> '\ntrap 'printf \"EXIT-RECEIPT\\n\" >&2' EXIT\n")
         return Terminal(rc, directory)
 
+    def test_prompt_after_line_clear_requires_the_command_marker(self):
+        terminal = Terminal.__new__(Terminal)
+        terminal.fd = 42
+        terminal.transcript = bytearray()
+        frames = [b'\rREADY> ', b'\x1eBINIT-CLEARED\x1f\r\nREADY> ']
+        with (patch('terminal.os.write'),
+              patch('terminal.select.select', return_value=([terminal.fd], [], [])),
+              patch('terminal.os.read', side_effect=frames) as read):
+            terminal.prompt = b'READY> '
+            terminal.clear_line()
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(terminal.transcript, b''.join(frames))
+
     def test_close_preserves_exit_diagnostics_and_status(self):
         with tempfile.TemporaryDirectory(prefix='.scratch-terminal-', dir=ROOT) as directory:
             with patch.dict(os.environ, INPUTRC='/dev/null', HISTFILE='/dev/null'):

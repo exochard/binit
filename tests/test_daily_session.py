@@ -97,7 +97,8 @@ class DailySessionTests(unittest.TestCase):
     def test_git_segment_follows_cd_and_each_command(self):
         for mode in ("emacs", "vi"):
             with self.subTest(mode=mode):
-                session = self.session(mode)
+                # Check the status contents after the worker has had time to finish.
+                session = self.session(mode, extra="BINIT_GIT_PROMPT_WAIT_MS=1000")
                 self.repository(session)
                 self.assertNotIn("[", self.prompt_row(session))
                 self.run_line(session, "cd repo")

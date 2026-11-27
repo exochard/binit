@@ -75,12 +75,16 @@ def observe(bash, config, work, trace, age):
     try:
         corpus.wait_for_editor(shell)
         if not old:
-            os.write(shell.fd, DRAFT.encode())
+            os.write(shell.fd, DRAFT[:1].encode())
+            shell.until(lambda: line_is(DRAFT[:1]))
+            os.write(shell.fd, DRAFT[1:].encode())
             shell.until(lambda: line_is(DRAFT))
         opened = measure(b'\x12', lambda: any(menu in row for row in shell.screen.display))
-        filtered = measure(needle.encode(), lambda:
-                           any(menu + needle in row for row in shell.screen.display)
-                           and any(command(needle) in row for row in shell.screen.display))
+        filtered = 0.0
+        for index, key in enumerate(needle):
+            prefix = needle[:index + 1]
+            filtered += measure(key.encode(), lambda: any(menu + prefix in row for row in shell.screen.display)
+                                and (prefix != needle or any(command(needle) in row for row in shell.screen.display)))
         key = (b'\x01' if zsh else b'\r') if old else b'\x07'
         os.write(shell.fd, key)
         shell.until(lambda: line_is(command(needle) if old else DRAFT)
@@ -132,6 +136,7 @@ def main():
                   'bench_interactive.py', 'bench_ecosystem.py', 'bench_nvm_milestone.py'))]
     identities = {str(path): digest(path) for path in inputs}
     result = {'schema': 1, 'abi': abi, 'editor': args.editor, 'depth': args.depth,
+              'filter_method': 'sum of key-to-visible latencies for the complete query',
               'input_sha256': identities, 'runs': [], 'history_gate_pass': False, 'release_gate_pass': False}
     args.output.mkdir()
     receipt = args.output / 'result.json'

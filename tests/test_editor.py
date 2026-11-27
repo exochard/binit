@@ -460,6 +460,33 @@ class EditorTests(unittest.TestCase):
             session.send(b'\x06')
             self.assertEqual(session.capture()[1], 'echo sample-suggestion')
 
+    def test_opt_in_syntax_error_color_keeps_the_unexecuted_line(self):
+        extra = 'BINIT_HIGHLIGHT_ERRORS=1\nbinit_complete editor highlighting on\n'
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                session.send('echo x | | cat')
+                session.wait(lambda: foreground(session, 9) == 'red')
+                self.assertEqual(session.capture()[1], 'echo x | | cat')
+
+    def test_directory_suggestions_prefer_current_directory_then_fall_back(self):
+        extra = ("HISTCONTROL=ignorespace; BINIT_HISTORY_CONTEXT=1; "
+                 "BINIT_SUGGESTION_STRATEGIES=directory,history\n"
+                 "binit_complete editor history on\n")
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                (session.directory / 'seed').write_text(
+                    "history -c; binit_complete history record 0 \"$PWD\"\n"
+                    "history -s 'echo scoped-local'; binit_complete history record 0 /\n"
+                    "history -s 'echo scoped-remote'; binit_complete history record 0 /\n")
+                session.send(" source ./seed; printf 'seeded\\n'\n")
+                session.wait(lambda: '\nseeded' in session.text)
+                session.send('echo scoped')
+                session.wait(lambda: 'echo scoped-local' in session.text)
+                session.send(b'\x06')
+                self.assertEqual(session.capture()[1], 'echo scoped-local')
+                session.send(b'\x15echo scoped-rem')
+                session.wait(lambda: 'echo scoped-remote' in session.text)
+
     def test_history_suggestion_can_be_disabled(self):
         with Session(extra="history -s 'echo sample-suggestion'\nbinit_complete editor suggestions on\nbinit_complete editor suggestions off\n") as session:
             session.send('echo sam')

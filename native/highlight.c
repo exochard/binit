@@ -272,6 +272,28 @@ int binit_highlight(const char *line, size_t length, uint8_t *colors)
     return 1;
 }
 
+/* Mark only a second pipeline operator in a simple, unquoted command.
+   Bash accepts a trailing pipe while a line is being entered, so it is left alone. */
+void binit_highlight_errors(const char *line, size_t length, uint8_t *colors)
+{
+    if (!previous || previous_length != length || memcmp(previous_line, line, length) != 0 ||
+        !ts_node_has_error(ts_tree_root_node(previous))) return;
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char c = (unsigned char)line[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' ||
+              c == '/' || c == ' ' || c == '\t' || c == '|')) return;
+    }
+    for (size_t i = 0; i < length; ++i) {
+        if (line[i] != '|') continue;
+        size_t next = i + 1;
+        if (next < length && line[next] == '|') ++next;
+        while (next < length && (line[next] == ' ' || line[next] == '\t')) ++next;
+        if (next < length && line[next] == '|') colors[next] = HL_SYNTAX_ERROR;
+        i = next ? next - 1 : next;
+    }
+}
+
 int binit_highlight_extended(const char *line, size_t length, size_t cursor,
                             uint8_t *colors, struct binit_highlight_tokens *tokens)
 {

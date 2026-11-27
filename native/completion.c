@@ -137,9 +137,9 @@ static bool poll_explicit;
 static long last_poll;
 static rl_hook_func_t *previous_event_hook;
 static bool suggestions_enabled;
-enum suggestion_strategy { SUGGEST_HISTORY = 1, SUGGEST_PREVIOUS, SUGGEST_COMPLETION };
+enum suggestion_strategy { SUGGEST_HISTORY = 1, SUGGEST_PREVIOUS, SUGGEST_COMPLETION, SUGGEST_DIRECTORY };
 enum suggestion_unit { SUGGEST_FULL, SUGGEST_WORD, SUGGEST_CHARACTER };
-static enum suggestion_strategy suggestion_strategies[3] = {SUGGEST_HISTORY};
+static enum suggestion_strategy suggestion_strategies[4] = {SUGGEST_HISTORY};
 static size_t suggestion_strategy_count = 1;
 static enum suggestion_unit suggestion_accept;
 static int suggestion_limit = 4096;
@@ -171,6 +171,7 @@ static void completion_cleanup(void *);
 static void select_history_delete(struct context *);
 static void delete_history_line(const struct context *);
 static const struct history_context_entry *history_context_for(const char *);
+static const struct history_context_entry *history_context_at(HIST_ENTRY *, int);
 static void install_poll_hook(void);
 static void remove_poll_hook(void);
 static void detach_poll_hook(void);
@@ -196,16 +197,21 @@ static bool suggestion_eligible(void)
     return binit_cells(rl_line_buffer, (size_t)rl_end) >= 0;
 }
 
-static const char *history_prefix(bool previous)
+static const char *history_prefix(bool previous, bool directory)
 {
     HIST_ENTRY **entries = history_list();
     if (!entries) return NULL;
     int lower = history_length > 1000 ? history_length - 1000 : 0;
     const char *fallback = NULL;
     const char *last = history_length > 0 ? entries[history_length - 1]->line : NULL;
+    const char *cwd = directory ? get_string_value("PWD") : NULL;
     for (int i = history_length - 1; i >= lower; --i) {
         const char *line = entries[i]->line;
         if (!line || strncmp(line, rl_line_buffer, (size_t)rl_end) != 0 || !line[rl_end]) continue;
+        if (directory) {
+            const struct history_context_entry *entry = history_context_at(entries[i], i);
+            if (!entry || !cwd || strcmp(entry->directory, cwd) != 0) continue;
+        }
         const char *suffix = line + rl_end;
         size_t size = strnlen(suffix, 1025);
         if (size > 1024 || binit_cells(suffix, size) < 0) return NULL;
@@ -229,7 +235,7 @@ static const char *history_suggestion(void)
             suffix = cwd && suggestion_preview_value[0] && strcmp(suggestion_preview_directory, cwd) == 0 &&
                 strcmp(suggestion_preview_line, rl_line_buffer) == 0 ? suggestion_preview_value : NULL;
         } else {
-            suffix = history_prefix(strategy == SUGGEST_PREVIOUS);
+            suffix = history_prefix(strategy == SUGGEST_PREVIOUS, strategy == SUGGEST_DIRECTORY);
         }
         if (suffix) return suffix;
     }
@@ -272,7 +278,7 @@ static void move_to(int *row, int to_row, int to_column)
 }
 
 #ifdef BINIT_HIGHLIGHT
-static bool highlighting_extended;
+static bool highlighting_extended, highlighting_errors;
 static bool highlight_custom_styles;
 extern int expand_aliases;
 extern int find_reserved_word(char *);
@@ -300,6 +306,7 @@ static const struct {
     [HL_REDIRECTION] = {"redirection", "94"},
     [HL_BRACKET] = {"bracket", "7;35"},
     [HL_GIT] = {"git", "1;34"},
+    [HL_SYNTAX_ERROR] = {"syntax-error", "1;31"},
 };
 static char highlight_overrides[HL_COLOR_COUNT][24];
 
@@ -333,8 +340,13 @@ static bool highlight_same_word(size_t i, const char *name)
 static bool highlight_options(void)
 {
     const char *extended = get_string_value("BINIT_HIGHLIGHT_EXTENDED");
+    const char *errors = get_string_value("BINIT_HIGHLIGHT_ERRORS");
     if (extended && *extended && strcmp(extended, "0") != 0 && strcmp(extended, "1") != 0) {
         fputs("binit: highlighting: invalid BINIT_HIGHLIGHT_EXTENDED\n", stderr);
+        return false;
+    }
+    if (errors && *errors && strcmp(errors, "0") != 0 && strcmp(errors, "1") != 0) {
+        fputs("binit: highlighting: invalid BINIT_HIGHLIGHT_ERRORS\n", stderr);
         return false;
     }
     char styles[HL_COLOR_COUNT][sizeof highlight_overrides[0]] = {{0}};
@@ -362,6 +374,7 @@ static bool highlight_options(void)
     }
     memcpy(highlight_overrides, styles, sizeof styles);
     highlighting_extended = extended && strcmp(extended, "1") == 0;
+    highlighting_errors = errors && strcmp(errors, "1") == 0;
     highlight_custom_styles = custom;
     return true;
 bad_style:
@@ -583,7 +596,7 @@ static void paint_text(struct paint_cursor *cursor, const char *text, size_t siz
 static void paint_color(unsigned int *color, unsigned int wanted, bool styled_plain)
 {
     if (wanted == *color) return;
-    if ((*color || styled_plain) && (wanted || styled_plain) && (highlighting_extended || highlight_custom_styles))
+    if ((*color || styled_plain) && (wanted || styled_plain) && (highlighting_extended || highlighting_errors || highlight_custom_styles))
         fputs("\033[0m", rl_outstream);
     *color = wanted;
     const char *style = highlight_overrides[wanted][0] ? highlight_overrides[wanted] : highlight_styles[wanted].sgr;
@@ -612,6 +625,7 @@ static bool paint_colors(const struct binit_layout *layout, int columns, int *ro
         if (tokens.count) highlight_live(colors, &tokens);
     } else if (alias_context_unknown(rl_line_buffer)) memset(colors, 0, (size_t)rl_end);
     else if (!binit_highlight(rl_line_buffer, (size_t)rl_end, colors)) return false;
+    if (highlighting_errors) binit_highlight_errors(rl_line_buffer, (size_t)rl_end, colors);
     move_to(row, 0, layout->column[0]);
     unsigned int color = 0;
     bool styled_plain = highlight_overrides[HL_PLAIN][0] != '\0';
@@ -900,7 +914,7 @@ static bool suggestion_options(void)
     if (!limit) limit = "4096";
     if (!ignore) ignore = "";
     if (!completion_ignore) completion_ignore = "";
-    enum suggestion_strategy order[3];
+    enum suggestion_strategy order[4];
     size_t count = 0;
     bool preview = false;
     for (const char *p = strategies; *p;) {
@@ -909,8 +923,9 @@ static bool suggestion_options(void)
         if (length == 7 && !strncmp(p, "history", length)) item = SUGGEST_HISTORY;
         else if (length == 8 && !strncmp(p, "previous", length)) item = SUGGEST_PREVIOUS;
         else if (length == 10 && !strncmp(p, "completion", length)) item = SUGGEST_COMPLETION;
+        else if (length == 9 && !strncmp(p, "directory", length)) item = SUGGEST_DIRECTORY;
         else return false;
-        if (count == 3 || (p[length] && !p[length + 1])) return false;
+        if (count == 4 || (p[length] && !p[length + 1])) return false;
         for (size_t j = 0; j < count; ++j) if (order[j] == item) return false;
         order[count++] = item;
         preview |= item == SUGGEST_COMPLETION;
@@ -982,6 +997,15 @@ static long milliseconds(void)
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
     return now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static int timeline_clock(void)
+{
+    struct timespec now;
+    char value[32];
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return EXECUTION_FAILURE;
+    snprintf(value, sizeof value, "%jd", (intmax_t)now.tv_sec * 1000000 + now.tv_nsec / 1000);
+    return bind_variable("__binit_log_time", value, 0) ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
 }
 
 static void terminal_size(int *rows, int *columns)
@@ -1641,7 +1665,7 @@ static int history_action(WORD_LIST *args)
     if (strcmp(action, "list") != 0 || !parse_history_scope(second, &scope) || strlen(first) >= BINIT_QUERY_SIZE)
         return EX_USAGE;
     const char *items[HISTORY_RESULTS];
-    size_t count = history_collect(items, HISTORY_RESULTS, first, scope, false);
+    size_t count = history_collect(items, HISTORY_RESULTS, first, scope, scope == HISTORY_ALL);
     for (size_t i = 0; i < count; ++i) {
         const struct history_context_entry *entry = history_context_for(items[i]);
         if (history_context_enabled) {
@@ -2336,7 +2360,7 @@ static void refresh_completion_suggestion(void)
     for (size_t i = 0; i < suggestion_strategy_count; ++i) {
         enum suggestion_strategy strategy = suggestion_strategies[i];
         if (strategy == SUGGEST_COMPLETION) break;
-        if (history_prefix(strategy == SUGGEST_PREVIOUS)) return;
+        if (history_prefix(strategy == SUGGEST_PREVIOUS, strategy == SUGGEST_DIRECTORY)) return;
     }
     memcpy(suggestion_preview_line, rl_line_buffer, (size_t)rl_end + 1);
     memcpy(suggestion_preview_directory, cwd, strlen(cwd) + 1);
@@ -2521,6 +2545,7 @@ EXPORT int binit_complete_builtin(WORD_LIST *arguments)
     if (strcmp(action, "history") == 0) return history_action(arguments->next);
     if (strcmp(action, "prompt-worker") == 0) return binit_prompt_worker(arguments->next);
     if (strcmp(action, "effects") == 0) return binit_effects(arguments->next);
+    if (strcmp(action, "clock") == 0) return arguments->next ? EX_USAGE : timeline_clock();
     if (strcmp(action, "editor") == 0) {
         WORD_LIST *feature = arguments->next;
         WORD_LIST *setting = feature ? feature->next : NULL;

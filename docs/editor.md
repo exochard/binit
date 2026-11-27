@@ -64,6 +64,8 @@ margin is cut with an ellipsis; accepting it still inserts all of it.
 
 The autosuggestions plugin accepts an ordered
 `BINIT_SUGGESTION_STRATEGIES` list, such as `previous,history,completion`.
+Use `directory,history` with `BINIT_HISTORY_CONTEXT=1` and history enabled to
+prefer commands recorded in the current directory, then fall back to history.
 Completion previews use registered isolated providers for unquoted input.
 They start during Readline idle time and cancel on pending input.
 `BINIT_SUGGESTION_ACCEPT=word` or `character` changes the forward key to
@@ -105,6 +107,10 @@ empty override list. Set terminal styles with a value such as
 `alias=96,path=4;32,bracket=7;35` and run
 `binit_complete editor highlighting on` to apply the settings. All syntax
 styles use the 4,096-byte input ceiling.
+
+Set `BINIT_HIGHLIGHT_ERRORS=1` to mark duplicate pipeline operators in simple
+unquoted commands. Override its color with `syntax-error` in
+`BINIT_HIGHLIGHT_STYLES`.
 
 The default native build contains no syntax grammar and enabling highlighting
 reports an error. To build the experiment, acquire the pinned grammar and

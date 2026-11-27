@@ -29,6 +29,16 @@ static void expect_incremental(const char *prefix, const char *line)
     assert(!memcmp(first, second, length));
 }
 
+static void expect_error(const char *line, size_t marked)
+{
+    uint8_t colors[4096];
+    size_t length = strlen(line);
+    assert(binit_highlight(line, length, colors));
+    binit_highlight_errors(line, length, colors);
+    for (size_t i = 0; i < length; ++i)
+        assert((colors[i] == HL_SYNTAX_ERROR) == (i == marked));
+}
+
 int main(void)
 {
     const char *cases[] = {"echo 'hello'", "echo ${ printf x; }", "case x in x) : ;;& esac", "cat <<EOF\nbody\nEOF\n", "echo café"};
@@ -50,6 +60,13 @@ int main(void)
     expect("echo hi; ls", "3333" "00000" "33");
     expect_incremental("for f in a b; do ec", "for f in a b; do echo \"$f\"");
     expect_incremental("echo \"op", "echo \"open $HOME");
+    expect_error("echo x | | cat", 9);
+    expect_error("echo x ||| cat", 9);
+    expect_error("echo x |", (size_t)-1);
+    expect_error("if true; then", (size_t)-1);
+    expect_error("echo 'open", (size_t)-1);
+    expect_error("echo \"| |\"", (size_t)-1);
+    expect_error("cat <<EOF\nbody\n", (size_t)-1);
     binit_highlight_clear();
     return 0;
 }

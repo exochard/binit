@@ -92,6 +92,28 @@ class HistoryContractTests(unittest.TestCase):
             self.assertNotIn('printf old-delete-entry',
                              (session.directory / 'saved-history').read_text().splitlines())
 
+    def test_ctrl_r_reaches_50000_entry_history_and_cancel_keeps_input(self):
+        extra = ("HISTSIZE=60000; history -c; history -s 'printf ancient-needle'\n"
+                 "for ((i=0; i<50000; i++)); do history -s \"printf recent-$i\"; done\n"
+                 "binit_complete editor history on\n")
+        for mode in ('emacs', 'vi'):
+            with self.subTest(mode=mode), Session(extra=extra, mode=mode) as session:
+                session.send(b'echo draft\x12ancient-needle')
+                session.wait(lambda: 'printf ancient-needle' in session.text, seconds=10)
+                session.send(b'\x07')
+                self.assertEqual(session.capture()[1], 'echo draft')
+
+    def test_native_all_history_list_finds_old_word_and_fuzzy_matches(self):
+        for method, query in (('words', 'needle printf'), ('fuzzy', 'prtf ndle')):
+            extra = (f"HISTSIZE=4096; BINIT_HISTORY_MATCH={method}; "
+                     "history -c; history -s 'printf needle-old'\n"
+                     "for ((i=0; i<1100; i++)); do history -s \"printf recent-$i\"; done\n"
+                     "binit_complete editor history on\n")
+            with self.subTest(method=method), Session(extra=extra) as session:
+                session.send(f"binit_complete history list '{query}' all > result\n")
+                result = session.directory / 'result'
+                session.wait(lambda: result.exists() and 'printf needle-old' in result.read_text())
+
     def test_confirmed_history_deletion_closes_without_inserting_or_executing(self):
         extra = ("BINIT_HISTORY_DELETE=1\nhistory -s 'touch delete-witness'\n"
                  "binit_complete editor history on\n")

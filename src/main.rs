@@ -632,6 +632,7 @@ fn install_generation(
     }
     init.push_str(&registration(&order, &plugins));
     let mut activate = Vec::new();
+    let mut startup_only = true;
     for id in &order {
         let declaration = catalog
             .iter()
@@ -640,6 +641,11 @@ fn install_generation(
             .unwrap_or_default();
         if declaration.is_empty() {
             activate.push(quote(id));
+            let plugin = &plugins[id];
+            startup_only &= plugin.load == "startup"
+                && plugin.when.is_empty()
+                && plugin.completions.is_empty()
+                && plugin.commands.is_empty();
         } else {
             init.push_str(&format!(
                 "__binit_declare_line {} {}\n",
@@ -657,7 +663,8 @@ fn install_generation(
     init.push_str("if [[ ${BINIT_LOGS-0} == 1 ]]; then __binit_log_start; fi\n");
     if !activate.is_empty() {
         init.push_str(&format!(
-            "__binit_activate_plugins {}\n",
+            "__binit_activate_plugins {}{}\n",
+            if startup_only { "--startup-only " } else { "" },
             activate.join(" ")
         ));
     }
@@ -1157,21 +1164,28 @@ fn run() -> Result<()> {
         ("sync", 1) => manager::sync_with_jobs(&state, jobs, from_shell)?,
         ("declare", 1) => manager::declare(&state)?,
         ("init", 1) => {
-            if matches!(
-                fs::symlink_metadata(state.join("current")),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound
-            ) {
-                // First use: publish an empty plan so the source line exists.
-                let _guard = manager::MutationGuard::acquire(&state)?;
-                if !state.join("current").exists() {
-                    publish(Vec::new(), BTreeMap::new(), &state)?;
+            let is_missing = |error: &(dyn std::error::Error + 'static)| {
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            };
+            let id = match pointer(&state, "current") {
+                Err(error) if is_missing(error.as_ref()) => {
+                    let _guard = manager::MutationGuard::acquire(&state)?;
+                    match pointer(&state, "current") {
+                        Err(error) if is_missing(error.as_ref()) => {
+                            publish(Vec::new(), BTreeMap::new(), &state)?;
+                            pointer(&state, "current")?
+                        }
+                        result => result?,
+                    }
                 }
-            }
-            let id = pointer(&state, "current")?;
+                result => result?,
+            };
             // A shell start re-hashes the generation only when its files' metadata has moved.
             private_dir(&state)?;
             private_dir(&state.join("generations"))?;
-            if !valid_digest(&id) || !init_stamp::unchanged(&state, &id) {
+            if !init_stamp::unchanged(&state, &id) {
                 let started = init_stamp::now();
                 let lock = verify_generation(&state, &id)?;
                 // The stamp only saves time; a state directory it cannot be written to still starts.

@@ -2332,6 +2332,36 @@ fn init_publishes_an_empty_generation_only_when_none_exists() {
 }
 
 #[test]
+fn init_does_not_publish_over_a_dangling_current_symlink() {
+    let f = Fixture::new();
+    fs::DirBuilder::new().create(f.state()).unwrap();
+    fs::set_permissions(f.state(), fs::Permissions::from_mode(0o700)).unwrap();
+    let current = f.state().join("current");
+    symlink("absent", &current).unwrap();
+    failure(f.cli(&["init"]), "expected a regular file");
+    assert_eq!(fs::read_link(current).unwrap(), Path::new("absent"));
+    assert!(!f.state().join("generations").exists());
+}
+
+#[test]
+fn generated_startup_batch_loads_dependencies_before_dependents() {
+    let f = Fixture::new();
+    f.plugin(
+        "dependent",
+        "load='startup'\ndepends=['parent']",
+        "printf dependent\n",
+    );
+    f.plugin("parent", "load='startup'", "printf 'parent\\n'\n");
+    success(f.prepare(&["dependent", "parent"]));
+    let startup = fs::read_to_string(f.generation().join("init.bash")).unwrap();
+    assert!(startup.contains("__binit_activate_plugins --startup-only 'parent' 'dependent'"));
+    assert_eq!(
+        success(f.bash("source \"$BINIT_TEST_INIT\"")),
+        "parent\ndependent"
+    );
+}
+
+#[test]
 fn lines_wait_for_sync_then_load_in_the_next_shell() {
     let h = Home::new();
     let hello = h.src("hello", "hello.plugin.bash", "BINIT_HELLO=loaded\n");

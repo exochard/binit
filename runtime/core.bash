@@ -1161,12 +1161,16 @@ __binit_load_direct() {
 __binit_activate_plugins() {
     local __binit_activate_id __binit_activate_command __binit_activate_definition
     local -a __binit_activate_names __binit_activate_general=()
-    # A startup plugin with no condition, command or completion needs only the load pass; the other
-    # passes act on the rest, so a long plugin list skips most of them.
-    for __binit_activate_id in "$@"; do
-        [[ ${__binit_load_kind[$__binit_activate_id]} == startup && -z ${__binit_when[$__binit_activate_id]-}${__binit_completions[$__binit_activate_id]}${__binit_commands[$__binit_activate_id]} ]] ||
-            __binit_activate_general+=("$__binit_activate_id")
-    done
+    # A generated startup-only batch needs just the load pass. A plugin line may
+    # activate later, so classify its triggers in the calling shell.
+    if [[ ${1-} == --startup-only ]]; then
+        shift
+    else
+        for __binit_activate_id in "$@"; do
+            [[ ${__binit_load_kind[$__binit_activate_id]} == startup && -z ${__binit_when[$__binit_activate_id]-}${__binit_completions[$__binit_activate_id]}${__binit_commands[$__binit_activate_id]} ]] ||
+                __binit_activate_general+=("$__binit_activate_id")
+        done
+    fi
     for __binit_activate_id in "${__binit_activate_general[@]}"; do
         if [[ ${__binit_load_kind[$__binit_activate_id]} == timed ]]; then
             __binit_dispatch_pending=1

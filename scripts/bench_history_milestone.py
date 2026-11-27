@@ -101,7 +101,12 @@ def observe(bash, config, work, trace, age):
         os.close(shell.fd)
 
 
+def stop_run(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
 def main():
+    signal.signal(signal.SIGTERM, stop_run)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate', required=True, type=Path)
     parser.add_argument('--baseline-dir', default=BASELINE, type=Path)

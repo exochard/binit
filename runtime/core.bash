@@ -25,6 +25,7 @@ declare -gA __binit_audit_before=() __binit_audit_after=() __binit_audit_attribu
 declare -ga __binit_line_counts=() __binit_line_args=()
 declare -g __binit_loading='' __binit_callback_owner='' __binit_last_directory='' BINIT_LAST_STATUS=0 BINIT_PROMPT_TEXT=''
 declare -g __binit_line_text='' __binit_first_prompt=0 __binit_lines_total=0 __binit_lines_matched=0
+declare -g __binit_git_prompt_branch_available=1
 declare -gi __binit_wait_pending=0 __binit_wait_armed=0 __binit_wait_yielded=0 __binit_dispatch_pending=0 __binit_load_active=0 __binit_event_changed=0
 declare -ga __binit_wait_queue=()
 

@@ -1091,6 +1091,9 @@ fn run() -> Result<()> {
     if raw_args.first().is_some_and(|arg| arg == "__prompt-worker") {
         return process::run_prompt_worker(&raw_args[1..]);
     }
+    if raw_args.len() == 2 && raw_args[0] == "__git-prompt-branch" {
+        return process::run_git_branch(&raw_args[1]);
+    }
     if raw_args.len() == 1 && raw_args[0] == "__highlight-worker" {
         return process::run_highlight_worker();
     }

@@ -5,6 +5,7 @@ import pty
 import select
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import tempfile
 import time
@@ -162,6 +163,29 @@ class RuntimeFeatures(unittest.TestCase):
             session.interrupt_to_prompt()
             session.send("binit profile | grep -o 'load interrupted'; t=; binit_complete effects mark t; echo \"snapshot-depth-$t\"\n")
             session.wait(lambda: '\nload interrupted' in session.text and 'snapshot-depth-1' in session.text)
+
+    def test_git_prompt_interrupt_reaps_the_provider(self):
+        tools = self.root / 'tools'
+        tools.mkdir()
+        marker = self.root / 'git-started'
+        git = tools / 'git'
+        git.write_text('#!/bin/sh\nprintf "%s\\n" "$$" > '
+                       + shlex.quote(str(marker)) + '\nexec sleep 2\n')
+        git.chmod(0o700)
+        env = {**self.env, 'PATH': f'{tools}{os.pathsep}{self.env["PATH"]}'}
+        with subprocess.Popen([BINARY, '__git-prompt-branch', self.root], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True) as worker:
+            deadline = time.monotonic() + 3
+            while not marker.exists() or marker.stat().st_size == 0:
+                self.assertIsNone(worker.poll())
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.01)
+            provider = int(marker.read_text())
+            worker.send_signal(signal.SIGINT)
+            stdout, stderr = worker.communicate(timeout=3)
+            self.assertEqual(worker.returncode, 1, stderr)
+            self.assertEqual(stdout, b'')
+            self.assertFalse(Path(f'/proc/{provider}').exists())
 
     @unittest.skipIf(os.environ.get("BINIT_NATIVE") == "0", "idle dispatch requires the native module")
     def test_timed_plugin_runs_at_idle_without_enter(self):

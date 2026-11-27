@@ -1,7 +1,7 @@
 use crate::Result;
 use std::ffi::{CString, OsStr, OsString};
 use std::io::{self, Read, Seek, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -114,10 +114,11 @@ pub(super) fn run_with_trace(mut command: Command, timeout: Duration) -> Result<
 struct SignalGuard {
     int: libc::sigaction,
     term: libc::sigaction,
+    hup: Option<libc::sigaction>,
 }
 
 impl SignalGuard {
-    fn install() -> Result<Self> {
+    fn install(catch_hangup: bool) -> Result<Self> {
         // sigaction and the lock-free integer store are signal-safe on the
         // supported Linux targets. The manager serializes hook executions.
         unsafe {
@@ -134,7 +135,19 @@ impl SignalGuard {
                 libc::sigaction(libc::SIGINT, &int, std::ptr::null_mut());
                 return Err(std::io::Error::last_os_error().into());
             }
-            Ok(Self { int, term })
+            let mut guard = Self {
+                int,
+                term,
+                hup: None,
+            };
+            if catch_hangup {
+                let mut hup = std::mem::zeroed();
+                if libc::sigaction(libc::SIGHUP, &action, &mut hup) != 0 {
+                    return Err(io::Error::last_os_error().into());
+                }
+                guard.hup = Some(hup);
+            }
+            Ok(guard)
         }
     }
 }
@@ -144,6 +157,9 @@ impl Drop for SignalGuard {
         unsafe {
             libc::sigaction(libc::SIGINT, &self.int, std::ptr::null_mut());
             libc::sigaction(libc::SIGTERM, &self.term, std::ptr::null_mut());
+            if let Some(hup) = &self.hup {
+                libc::sigaction(libc::SIGHUP, hup, std::ptr::null_mut());
+            }
         }
     }
 }
@@ -260,6 +276,8 @@ fn prompt_output(
     mut output: ChildStdout,
     pid: u32,
     started: Instant,
+    cancel_fd: RawFd,
+    limit: usize,
 ) -> io::Result<Option<Vec<u8>>> {
     let fd = output.as_raw_fd();
     if unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) } == -1 {
@@ -267,12 +285,25 @@ fn prompt_output(
     }
     let mut bytes = Vec::new();
     let mut buffer = [0; PROMPT_OUTPUT_LIMIT + 1];
+    let exit_fd = if cancel_fd < 0 {
+        // When stdout closes before the child exits, a pidfd lets poll wait for both events.
+        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if descriptor >= 0 {
+            Some(unsafe { OwnedFd::from_raw_fd(descriptor as RawFd) })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let mut eof = false;
     let mut exited = false;
-    while started.elapsed() < PROMPT_TIMEOUT {
+    while started.elapsed() < PROMPT_TIMEOUT
+        && (cancel_fd >= 0 || INTERRUPTED.load(Ordering::Relaxed) == 0)
+    {
         let mut poll = [
             libc::pollfd {
-                fd: libc::STDIN_FILENO,
+                fd: cancel_fd,
                 events: libc::POLLIN,
                 revents: 0,
             },
@@ -281,8 +312,22 @@ fn prompt_output(
                 events: libc::POLLIN,
                 revents: 0,
             },
+            libc::pollfd {
+                fd: if eof && !exited {
+                    exit_fd.as_ref().map_or(-1, AsRawFd::as_raw_fd)
+                } else {
+                    -1
+                },
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
-        if unsafe { libc::poll(poll.as_mut_ptr(), 2, 10) } < 0 {
+        let wait_ms = if eof && cancel_fd < 0 && exit_fd.is_none() {
+            1
+        } else {
+            10
+        };
+        if unsafe { libc::poll(poll.as_mut_ptr(), poll.len() as libc::nfds_t, wait_ms) } < 0 {
             let error = io::Error::last_os_error();
             if error.kind() == io::ErrorKind::Interrupted {
                 continue;
@@ -295,9 +340,10 @@ fn prompt_output(
         if poll[1].revents != 0 {
             match output.read(&mut buffer) {
                 Ok(0) => eof = true,
-                Ok(count) if bytes.len() + count <= PROMPT_OUTPUT_LIMIT => {
+                Ok(count) if bytes.len() + count <= limit => {
                     bytes.extend_from_slice(&buffer[..count]);
                 }
+                Ok(_) if cancel_fd < 0 => return Err(io::ErrorKind::InvalidData.into()),
                 Ok(_) => return Ok(None),
                 Err(error)
                     if matches!(
@@ -353,7 +399,20 @@ pub(super) fn run_prompt_worker(arguments: &[OsString]) -> Result<()> {
     run_local_worker(command, started)
 }
 
-fn run_local_worker(mut command: Command, started: Instant) -> Result<()> {
+fn run_local_worker(command: Command, started: Instant) -> Result<()> {
+    if let Some(bytes) = capture_prompt(command, started, libc::STDIN_FILENO, PROMPT_OUTPUT_LIMIT)?
+    {
+        io::stdout().write_all(&bytes)?;
+    }
+    Ok(())
+}
+
+fn capture_prompt(
+    mut command: Command,
+    started: Instant,
+    cancel_fd: RawFd,
+    limit: usize,
+) -> Result<Option<Vec<u8>>> {
     command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -365,15 +424,42 @@ fn run_local_worker(mut command: Command, started: Instant) -> Result<()> {
         child.stdout.take().expect("piped stdout"),
         child.id(),
         started,
+        cancel_fd,
+        limit,
     );
     group.stop();
     let status = child.wait()?;
-    if let Some(bytes) = result?
-        && status.success()
-        && !bytes.contains(&0)
-    {
-        io::stdout().write_all(&bytes)?;
+    let bytes = result?;
+    if cancel_fd < 0 && bytes.as_ref().is_some_and(|bytes| bytes.contains(&0)) {
+        return Err(io::Error::from(io::ErrorKind::InvalidData).into());
     }
+    Ok(bytes.filter(|bytes| status.success() && !bytes.contains(&0)))
+}
+
+pub(super) fn run_git_branch(directory: &OsStr) -> Result<()> {
+    let _signals = SignalGuard::install(true)?;
+    let lookup = |arguments: &[&str]| -> Result<Option<Vec<u8>>> {
+        let started = Instant::now();
+        let mut git = Command::new("git");
+        git.args(["--no-optional-locks", "-C"])
+            .arg(directory)
+            .args(arguments)
+            .stdin(Stdio::null());
+        let bytes = capture_prompt(git, started, -1, OUTPUT_LIMIT)?;
+        if INTERRUPTED.load(Ordering::Relaxed) != 0 {
+            return Err(io::Error::from(io::ErrorKind::Interrupted).into());
+        }
+        Ok(bytes.filter(|bytes| bytes.iter().any(|byte| *byte != b'\n')))
+    };
+    let mut branch = match lookup(&["symbolic-ref", "--quiet", "--short", "HEAD"])? {
+        Some(bytes) => bytes,
+        None => lookup(&["rev-parse", "--short", "HEAD"])?.unwrap_or_default(),
+    };
+    if let Some(end) = branch.iter().position(|byte| *byte == b'\n') {
+        branch.truncate(end);
+    }
+    branch.push(b'\n');
+    io::stdout().lock().write_all(&branch)?;
     Ok(())
 }
 
@@ -536,7 +622,7 @@ fn run_inner(command: &mut Command, timeout: Duration, trace: Option<TracePipe>)
     let _lock = SIGNAL_LOCK
         .lock()
         .map_err(|_| "process signal lock is poisoned")?;
-    let signals = SignalGuard::install()?;
+    let signals = SignalGuard::install(false)?;
     let parent = unsafe { libc::getpid() };
     command
         .stdin(Stdio::null())

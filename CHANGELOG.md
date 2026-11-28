@@ -11,6 +11,10 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
   support for reviewing the plugin changes in a candidate generation.
 - Added `binit candidate restore ID --pick` to stage a plugin snapshot from a
   verified generation for review.
+- Added `binit plugins --session` to compare the running shell's plugins with
+  the next shell's configuration, including why a plugin could not load.
+- Added `binit sync --stage` to prepare the current plugin declarations for
+  candidate review before selecting them for new shells.
 - Added an opt-in timeline for plugin loads and hooks. Set `BINIT_LOGS=1`
   before initialization, then run `binit logs` to inspect the session.
 - Added optional minimum Binit versions for plugin packages.
@@ -22,6 +26,8 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
 ### Changed
 
 - Made bare `binit update` refresh declared local plugins along with Git pins.
+- Showed sample numbers during interactive candidate checks and reported
+  cancellation after Ctrl-C. Set `BINIT_PROGRESS=0` for plain output.
 - Reduced the work of creating and checking a generation's startup
   verification stamp.
 - Extended Ctrl-R to search the shell's full in-memory history and show up to
@@ -33,6 +39,8 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
   state on cancellation.
 - Preserved argument highlighting after simple aliases.
 - Made version flags work in initialized shells.
+- Loaded verified plugin declarations in `binit shell` even when their original
+  sources are unavailable.
 
 ## 0.1.1
 

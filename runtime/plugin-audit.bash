@@ -34,7 +34,7 @@ __binit_audit_entries() {
         printf '%s\0%s\0' "completion:${BASH_REMATCH[1]}" "$__binit_audit_line"
     done < <(builtin complete -p)
     [[ $- == *i* ]] || return 0
-    for __binit_audit_map in emacs-standard emacs-meta emacs-ctlx vi-command vi-insertion; do
+    for __binit_audit_map in emacs-standard emacs-meta emacs-ctlx vi-command vi-insert; do
         while IFS= read -r __binit_audit_line; do
             [[ $__binit_audit_line =~ $__binit_audit_key ]] || continue
             printf '%s\0%s\0' "binding:$__binit_audit_map/${BASH_REMATCH[1]}" "$__binit_audit_line"

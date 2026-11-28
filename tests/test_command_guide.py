@@ -126,6 +126,7 @@ before_audit_fixture() {
     AUDITED=old
     complete -W 'old choice' audit_cmd
     bind -m emacs-standard '"\C-xq": beginning-of-line'
+    bind -m vi-insert '"\C-xq": beginning-of-line'
 }
 binit on before-load slow before_audit_fixture
 """
@@ -135,6 +136,7 @@ unset -f bring_back
 export AUDITED=fixture-value-must-stay-private
 complete -W 'new choice' audit_cmd
 bind -m emacs-standard '"\C-xq": end-of-line'
+bind -m vi-insert '"\C-xq": end-of-line'
 return 9
 """
         with Session(change, setup, menu=False) as shell:
@@ -149,6 +151,8 @@ return 9
             self.assertIn('effect changed variable AUDITED current  -- -> -x', report)
             self.assertIn('effect changed completion audit_cmd current', report)
             self.assertIn('effect changed binding emacs-', report)
+            self.assertIn('effect changed binding vi-insert/', report)
+            self.assertNotIn(b'invalid keymap name', shell.raw)
             self.assertNotIn('fixture-value-must-stay-private', report)
             shell.send('binit unload slow && ! shopt -q extglob && '
                        '(shopt -s extglob; restore_me; keep_me; bring_back) > marks/result\n')

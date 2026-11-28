@@ -266,7 +266,9 @@ class RuntimeFeatures(unittest.TestCase):
 
     @unittest.skipIf(os.environ.get("BINIT_NATIVE") == "0", "idle dispatch requires the native module")
     def test_interrupt_during_idle_load_recovers_at_prompt(self):
-        self.plugin('sample', 'touch "$HOME/idle-start"\nsleep 30\ntouch "$HOME/idle-done"\n', 'load=timed', 'delay_ms=200')
+        worker = ('sh -c \'printf "%s\\n" "$$" > "$HOME/idle-start"; exec sleep 30\'\n'
+                  'touch "$HOME/idle-done"\n')
+        self.plugin('sample', worker, 'load=timed', 'delay_ms=200')
         self.sync()
         self.rc.write_text(f'eval "$({shlex.quote(str(BINARY))} init)"\n' + '\n'.join(self.lines) + '\n')
         pid, fd = pty.fork()
@@ -291,6 +293,15 @@ class RuntimeFeatures(unittest.TestCase):
             except OSError:
                 return None
 
+        def idle_worker_is_foreground():
+            try:
+                witness = started.read_text()
+                if not witness.endswith('\n') or not witness.strip().isdigit():
+                    return False
+                return os.getpgid(int(witness)) == foreground_group()
+            except (FileNotFoundError, ProcessLookupError):
+                return False
+
         def read_terminal(destination):
             data = os.read(fd, 65536)
             if not data:
@@ -304,8 +315,8 @@ class RuntimeFeatures(unittest.TestCase):
             self.assertTrue(predicate(), f'{description}\n{context()}')
 
         try:
-            wait_for(lambda: prompt in startup and started.exists(), startup, time.monotonic() + 5,
-                     'The idle plugin did not start after the initial prompt')
+            wait_for(lambda: prompt in startup and idle_worker_is_foreground(), startup, time.monotonic() + 5,
+                     'The idle worker did not enter the foreground after the initial prompt')
             foreground.append(foreground_group())
             os.write(fd, b'\x03')
             deadline = time.monotonic() + 5

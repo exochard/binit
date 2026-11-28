@@ -920,15 +920,60 @@ pub(super) fn shell(state: &Path) -> Result<()> {
             .into());
     }
     let id = pointer(state, "current")?;
-    verify_generation(state, &id)?;
+    let lock = verify_generation(state, &id)?;
     let init = fs::canonicalize(state.join("generations").join(id).join("init.bash"))?;
-    let error = std::process::Command::new(&bash)
-        .arg("--noprofile")
-        .arg("--rcfile")
-        .arg(init)
+    let declarations: Vec<_> = lock
+        .catalog
+        .iter()
+        .filter(|entry| entry.enabled && !entry.declaration.is_empty())
+        .map(|entry| entry.declaration.as_slice())
+        .collect();
+    let mut command = std::process::Command::new(&bash);
+    command.args(["--noprofile", "--rcfile"]);
+    if declarations.is_empty() {
+        return Err(command.arg(init).arg("-i").exec().into());
+    }
+    let startup = isolated_shell_startup(&init, &declarations)?;
+    Err(command
+        .arg(format!("/proc/self/fd/{}", startup.as_raw_fd()))
         .arg("-i")
-        .exec();
-    Err(error.into())
+        .exec()
+        .into())
+}
+
+fn isolated_shell_startup(init: &Path, declarations: &[&[String]]) -> Result<fs::File> {
+    use std::io::{Seek, SeekFrom};
+    use std::os::fd::FromRawFd;
+
+    let descriptor = unsafe {
+        libc::memfd_create(
+            c"binit-shell".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut file = unsafe { fs::File::from_raw_fd(descriptor) };
+    let init = quote(init.to_str().ok_or("initialization path must be UTF-8")?);
+    // Bash opens the rc path before sourcing it. Close the inherited descriptor
+    // before any plugin or user command can keep it open in a child.
+    writeln!(file, "exec {descriptor}<&-\nsource {init} || return")?;
+    for line in declarations {
+        write!(file, "__binit_plugin_line")?;
+        for arg in *line {
+            write!(file, " {}", quote(arg))?;
+        }
+        writeln!(file)?;
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    if unsafe { libc::fcntl(descriptor, libc::F_ADD_SEALS, seals) } < 0
+        || unsafe { libc::fcntl(descriptor, libc::F_SETFD, 0) } < 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(file)
 }
 
 pub(super) fn apply(state: &Path) -> Result<()> {

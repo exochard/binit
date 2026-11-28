@@ -154,7 +154,7 @@ Mirrors are bare clones in `$state/sources/<hash of URL>-<repo>`; a private ref 
 
 Every successful change selects a verified generation. Invalid dependency graphs leave the current generation intact. One filesystem lock serializes catalog mutations and rollback. Rollback restores the earlier catalog together with its code. Schema-1 generations remain readable and migrate on the next change.
 
-Use `binit shell` to open a new Bash with the selected generation. Existing shells keep their own state. `prepare CONFIG` imports the complete catalog, including disabled packages.
+Use `binit shell` to open an isolated Bash with the selected generation. It loads catalog plugins and replays the generation's saved plugin lines. Existing shells keep their own state. `prepare CONFIG` imports the complete catalog, including disabled packages.
 
 ## Package
 

@@ -2753,6 +2753,55 @@ fn staged_sync_reviews_new_declarations_before_selecting_them() {
 }
 
 #[test]
+fn isolated_shell_loads_the_selected_declarations() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let h = Home::new();
+    let plugin = h.src(
+        "a plugin's source",
+        "init.bash",
+        "BINIT_RECIPE_EFFECT=yes\n",
+    );
+    let lines = format!("binit plugin {} id=sample\n", sh_quote(&plugin));
+    success(h.shell(&lines, "binit sync\n"));
+    let wrapper = h.src(
+        "wrapper",
+        "plugin.bash",
+        "binit() { printf 'command-wrapper\\n'; }\n",
+    );
+    h.f.write(
+        "src/wrapper/plugin.toml",
+        "schema=1\nid='wrapper'\nentry='plugin.bash'\nload='startup'\n",
+    );
+    success(h.binit(&["add", &wrapper]));
+    h.f.write("home/.bashrc", "BINIT_DOTFILE_LOADED=yes\n");
+    let declaration = fs::read(h.declared()).unwrap();
+    let saved = h.current();
+    fs::rename(&plugin, h.f.root().join("offline-source")).unwrap();
+
+    let mut child = h
+        .isolate(
+            Command::new(env!("CARGO_BIN_EXE_binit"))
+                .arg("shell")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .env("HISTFILE", "/dev/null")
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(
+        b"printf 'recipe:%s dotfile:%s\\n' \"${BINIT_RECIPE_EFFECT-absent}\" \"${BINIT_DOTFILE_LOADED-absent}\"\nbinit\nexit 0\n"
+    ).unwrap();
+    let output = success(child.wait_with_output().unwrap());
+    assert!(output.contains("recipe:yes dotfile:absent"), "{output}");
+    assert!(output.contains("command-wrapper"), "{output}");
+    assert_eq!(h.current(), saved);
+    assert_eq!(fs::read(h.declared()).unwrap(), declaration);
+}
+
+#[test]
 fn a_failed_sync_leaves_the_current_generation_untouched() {
     let h = Home::new();
     let good = h.src("good", "init.sh", "BINIT_GOOD=1\n");

@@ -1,9 +1,10 @@
 # Forgejo runs this directory instead of .github/workflows. It mirrors the GitHub
 # checks for the self-hosted x86-64 runner: one job at a time, 4 CPUs, 3 GB and a
-# 30-minute limit for the x86-64 jobs, so the matrix is smaller than GitHub's.
-# The ARM64 check boots an isolated QEMU guest. Job containers are unprivileged,
-# so the plugin check that GitHub
-# isolates with `unshare --net` runs with the network available here.
+# 30-minute limit per job, so the matrix is smaller than GitHub's.
+# The ARM64 check boots an emulated QEMU guest and needs hours, beyond that
+# limit, so it runs only on manual dispatch; GitHub covers ARM64 natively on
+# every push to main. Job containers are unprivileged, so the plugin check that
+# GitHub isolates with `unshare --net` runs with the network available here.
 name: Check
 
 on:
@@ -61,6 +62,7 @@ jobs:
           make check 2>&1 | tee .cache/ci/evidence/verify.log
 
   arm64:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:

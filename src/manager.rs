@@ -809,7 +809,7 @@ pub(super) fn list(state: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn plugin_session(state: &Path) -> Result<()> {
+pub(super) fn plugin_session(state: &Path, json: bool) -> Result<()> {
     use std::io::IsTerminal;
 
     let mut input = Vec::new();
@@ -826,21 +826,23 @@ pub(super) fn plugin_session(state: &Path) -> Result<()> {
         None => Vec::new(),
     };
     let stdout = std::io::stdout();
+    let rows = installed.iter().map(|entry| {
+        (
+            entry.plugin.id.as_str(),
+            entry.enabled,
+            entry.plugin.load.as_str(),
+        )
+    });
+    if json {
+        return session.write_json(&mut stdout.lock(), selected.as_deref(), rows);
+    }
     let terminal = stdout.is_terminal();
-    let color = terminal
-        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
-        && std::env::var_os("TERM").is_some_and(|value| !value.is_empty() && value != "dumb");
+    let color = crate::terminal_ui::color(terminal);
     session.write(
         &mut stdout.lock(),
         selected.as_deref(),
-        installed.iter().map(|entry| {
-            (
-                entry.plugin.id.as_str(),
-                entry.enabled,
-                entry.plugin.load.as_str(),
-            )
-        }),
-        help::display_width(terminal),
+        rows,
+        crate::terminal_ui::width(terminal, libc::STDOUT_FILENO),
         color,
     )
 }

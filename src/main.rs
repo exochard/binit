@@ -27,6 +27,7 @@ mod progress;
 mod publication;
 mod releases;
 mod remote;
+mod terminal_ui;
 mod trace;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -1176,11 +1177,13 @@ fn run() -> Result<()> {
         ("enable" | "disable" | "remove", 2) => manager::change(&state, &args[1], command)?,
         ("update", _) => manager::update_command_with_jobs(&state, &args[1..], jobs)?,
         ("plugins", 1) => manager::list(&state)?,
-        ("plugins", 2) if args[1] == "--session" => {
+        ("plugins", 2 | 3)
+            if args[1] == "--session" && (args.len() == 2 || args[2] == "--json") =>
+        {
             if !from_shell {
                 return Err("binit plugins --session requires an initialized shell".into());
             }
-            manager::plugin_session(&state)?;
+            manager::plugin_session(&state, args.len() == 3)?;
         }
         ("inspect", 2) => manager::inspect(&state, &args[1])?,
         ("shell", 1) => manager::shell(&state)?,

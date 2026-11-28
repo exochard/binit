@@ -953,8 +953,8 @@ binit() {
             *) printf 'usage: binit sync [--stage] [--jobs N]\n' >&2; return 2 ;;
         esac
         command "$__binit_manager" sync "${@:2}" --stdin --state "$BINIT_STATE_DIR" < <(__binit_declared_stream)
-    elif [[ $# == 2 && $1 == plugins && $2 == --session ]]; then
-        __binit_plugin_session
+    elif [[ ${1-} == plugins && ${2-} == --session ]]; then
+        __binit_plugin_session "${@:3}"
     else
         if command "$__binit_manager" "$@" --state "$BINIT_STATE_DIR"; then
             if [[ ${1-} == trust ]]; then __binit_last_directory=''; fi
@@ -965,7 +965,7 @@ binit() {
 }
 
 __binit_plugin_session() {
-    command "$__binit_manager" plugins --session --stdin --state "$BINIT_STATE_DIR" < <(
+    command "$__binit_manager" plugins --session "$@" --stdin --state "$BINIT_STATE_DIR" < <(
         local __binit_plugin_session_id
         printf '%s\0' "${__binit_generation_dir##*/}"
         for __binit_plugin_session_id in "${__binit_ids[@]}"; do

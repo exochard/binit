@@ -1,5 +1,6 @@
 """Command discovery works through the executable and initialized shells."""
 import os
+import json
 import fcntl
 from pathlib import Path
 import shlex
@@ -39,10 +40,15 @@ class CommandGuideTests(unittest.TestCase):
             result = self.command(COLUMNS=width, NO_COLOR='1', BINIT_STATE='relative')
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('current shell', result.stdout)
+            commands = ('sync --stage', 'candidate diff', 'candidate check PLAN', 'candidate select')
+            for command in commands:
+                self.assertIn(command, result.stdout)
+            steps = [result.stdout.index(command) for command in commands]
+            self.assertEqual(steps, sorted(steps))
+            self.assertIn('show recorded lifecycle events', result.stdout)
             self.assertNotIn('\x1b', result.stdout)
             self.assertTrue(all(len(line) <= int(width) for line in result.stdout.splitlines()))
-            if width == '80':
-                self.assertLessEqual(len(result.stdout.splitlines()), 24)
+            self.assertLessEqual(len(result.stdout.splitlines()), 24)
         self.assertFalse(self.state.exists())
 
     def test_command_help_and_unknown_topic(self):
@@ -65,8 +71,9 @@ class CommandGuideTests(unittest.TestCase):
                                                  'COLUMNS': '80', 'NO_COLOR': no_color}, timeout=15)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     output = os.read(reader, 4096).replace(b'\r\n', b'\n')
-                    self.assertIn(b'  update --check\n    preview plugin updates\n', output)
-                    self.assertEqual(b'\x1b[1mplugins\x1b[0m' in output, not no_color)
+                    self.assertIn(b'  update --check  preview plugin updates\n', output)
+                    for heading in (b'plugins', b'candidate', b'current shell'):
+                        self.assertEqual(b'\x1b[1m' + heading + b'\x1b[0m' in output, not no_color)
                 finally:
                     os.close(writer)
                     os.close(reader)
@@ -122,14 +129,23 @@ class CommandGuideTests(unittest.TestCase):
             (plugin / 'plugin.toml').write_text("schema=1\nid='next-plugin'\nentry='plugin.bash'\nload='startup'\n")
             (plugin / 'plugin.bash').write_text(':\n')
             shell.send(f'binit disable early && binit remove slow && binit add {shlex.quote(str(plugin))} && '
-                       'COLUMNS=80 binit plugins --session > marks/view\n')
-            shell.wait(lambda: shell.mark('view') and shell.cursor_line == PROMPT)
+                       'COLUMNS=80 binit plugins --session > marks/view && '
+                       'binit plugins --session --json > marks/view.json\n')
+            shell.wait(lambda: shell.mark('view.json') and shell.cursor_line == PROMPT)
             view = (shell.marks / 'view').read_text()
             self.assertIn('different generations', view)
             self.assertRegex(view, r'(?m)^early\s+Loaded\s+Disabled\s+Startup$')
             self.assertRegex(view, r'(?m)^slow\s+Loaded\s+Removed\s+After prompt$')
             self.assertRegex(view, r'(?m)^next-plugin\s+Absent\s+Enabled\s+Startup$')
             self.assertNotIn('\x1b', view)
+            data = json.loads((shell.marks / 'view.json').read_bytes())
+            self.assertEqual(data['schema'], 1)
+            self.assertNotEqual(data['current_generation'], data['next_generation'])
+            plugins = {entry['id']: entry for entry in data['plugins']}
+            self.assertEqual(plugins['early']['current']['state'], 'loaded')
+            self.assertFalse(plugins['early']['next']['enabled'])
+            self.assertIsNone(plugins['slow']['next'])
+            self.assertIsNone(plugins['next-plugin']['current'])
 
     def test_plugin_session_rejects_an_invalid_current_pointer(self):
         self.state.mkdir()

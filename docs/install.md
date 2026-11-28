@@ -7,6 +7,10 @@ run `./bin/binit install`. It installs the executable in `~/.local/bin` and
 prints the startup line. Pass `--rc-file ~/.bashrc` to add that line in a
 managed block.
 
+In a terminal, slower installs and removals show progress. Set
+`BINIT_PROGRESS=0` to disable the animation or `NO_COLOR=1` for uncolored
+output.
+
 ## Install the published 0.1.1 release
 
 Binit 0.1.1 requires Linux, glibc 2.34 or newer, and GNU Bash 5.2 or later.

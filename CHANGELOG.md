@@ -15,6 +15,7 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
   verified generation for review.
 - Added `binit plugins --session` to compare the running shell's plugins with
   the next shell's configuration, including why a plugin could not load.
+  Add `--json` for a machine-readable comparison.
 - Added `binit sync --stage` to prepare the current plugin declarations for
   candidate review before selecting them for new shells.
 - Added an opt-in timeline for plugin loads and hooks. Set `BINIT_LOGS=1`
@@ -27,6 +28,8 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
 
 ### Changed
 
+- Grouped the command guide by workflow and added terminal progress to
+  install and uninstall.
 - Made bare `binit update` refresh declared local plugins along with Git pins.
 - Showed sample numbers during interactive candidate checks and reported
   cancellation after Ctrl-C. Set `BINIT_PROGRESS=0` for plain output.

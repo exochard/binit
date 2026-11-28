@@ -1,9 +1,12 @@
-use super::{Result, hash, process::SignalGuard, quote, unique, valid_digest};
+use super::{
+    Result, hash, process::SignalGuard, progress::Progress, quote, terminal_ui, unique,
+    valid_digest,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
@@ -357,7 +360,33 @@ pub(super) fn command(uninstall: bool, args: &[OsString]) -> Result<()> {
         Some(source.map_or_else(std::env::current_exe, Ok)?)
     };
     let _signals = SignalGuard::install(true)?;
-    install(&prefix, source.as_deref(), rc, uninstall)
+    let progress = Progress::start(if uninstall {
+        "Removing Binit"
+    } else {
+        "Installing Binit"
+    });
+    if let Some(progress) = &progress {
+        progress.phase("checking files");
+    }
+    let result = install(&prefix, source.as_deref(), rc, uninstall, progress.as_ref());
+    drop(progress);
+    let (status, output) = result?;
+    let terminal = io::stdout().is_terminal() && io::stderr().is_terminal();
+    if uninstall {
+        println!(
+            "{}",
+            terminal_ui::styled(status, "1;32", terminal_ui::color(terminal))
+        );
+    } else {
+        if terminal_ui::ansi(terminal) {
+            eprintln!(
+                "{}",
+                terminal_ui::styled(status, "1;32", terminal_ui::color(terminal))
+            );
+        }
+        println!("{output}");
+    }
+    Ok(())
 }
 
 fn install(
@@ -365,7 +394,8 @@ fn install(
     source: Option<&Path>,
     rc_path: Option<PathBuf>,
     uninstall: bool,
-) -> Result<()> {
+    progress: Option<&Progress>,
+) -> Result<(&'static str, String)> {
     let incoming = source
         .map(|path| -> Result<Contents> {
             let contents = Target::open(path.to_path_buf(), false, 0)?
@@ -393,6 +423,7 @@ fn install(
         .as_ref()
         .map(|data| serde_json::from_slice(&data.bytes))
         .transpose()?;
+    let updating = receipt.is_some();
     let block = match (&receipt, &previous) {
         (Some(receipt), Some(previous)) => {
             let block = receipt.block(&binary.path)?;
@@ -444,6 +475,13 @@ fn install(
         .transpose()?;
     let mut changes = Vec::new();
     let mut receipt_block = None;
+    if let Some(progress) = progress {
+        progress.phase(if uninstall {
+            "verifying startup block"
+        } else {
+            "preparing changes"
+        });
+    }
     if let Some(target) = &rc {
         let before = target.read()?;
         let old = before
@@ -514,16 +552,20 @@ fn install(
             after: Some(Contents { bytes, mode: 0o600 }),
         });
     }
+    if let Some(progress) = progress {
+        progress.phase("applying changes");
+    }
     transact(&changes, Target::replace, SignalGuard::check)?;
-    println!(
-        "{}",
-        if uninstall {
-            "Binit uninstalled"
-        } else {
-            &startup
-        }
-    );
-    Ok(())
+    let status = if uninstall {
+        "Binit uninstalled"
+    } else if changes.is_empty() {
+        "Binit already installed"
+    } else if updating {
+        "Binit installation updated"
+    } else {
+        "Binit installed"
+    };
+    Ok((status, if uninstall { status.into() } else { startup }))
 }
 
 #[cfg(test)]

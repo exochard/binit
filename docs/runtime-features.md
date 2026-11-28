@@ -49,7 +49,8 @@ marks the load failed. Previously sourced shell effects may remain on failure.
 ## Reports and unload
 
 Use `binit plugins --session` to compare live plugin state and load rules
-with the catalog selected for the next shell.
+with the catalog selected for the next shell. Add `--json` to get both
+generation IDs and each plugin's current and next state as JSON.
 
 Set `BINIT_LOGS=1` before `binit init` to keep the last 256 lifecycle events
 in the current shell. `binit profile --timeline` and `binit logs` show the

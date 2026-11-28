@@ -1,4 +1,4 @@
-use crate::{Result, valid_digest, valid_name};
+use crate::{Result, terminal_ui::styled, valid_digest, valid_name};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
@@ -36,6 +36,35 @@ impl<'a> Session<'a> {
             generation,
             plugins,
         })
+    }
+
+    pub(super) fn write_json<'next>(
+        &self,
+        output: &mut impl Write,
+        next_generation: Option<&str>,
+        installed: impl IntoIterator<Item = (&'next str, bool, &'next str)>,
+    ) -> Result<()> {
+        use serde_json::{Value, json};
+        let mut rows = BTreeMap::<&str, (Value, Value)>::new();
+        for (&id, &(state, load, reason)) in &self.plugins {
+            rows.entry(id).or_default().0 = json!({"state": state, "load": load, "reason": reason});
+        }
+        for (id, enabled, load) in installed {
+            rows.entry(id).or_default().1 = json!({"enabled": enabled, "load": load});
+        }
+        let plugins: Vec<_> = rows
+            .into_iter()
+            .map(|(id, (current, next))| json!({"id": id, "current": current, "next": next}))
+            .collect();
+        serde_json::to_writer_pretty(
+            &mut *output,
+            &json!({
+                "schema": 1, "current_generation": self.generation,
+                "next_generation": next_generation, "plugins": plugins,
+            }),
+        )?;
+        writeln!(output)?;
+        Ok(())
     }
 
     pub(super) fn write<'next>(
@@ -162,14 +191,6 @@ impl<'a> Session<'a> {
             "Details  binit report ID · binit inspect ID",
         )?;
         Ok(())
-    }
-}
-
-fn styled(text: &str, code: &str, enabled: bool) -> String {
-    if enabled {
-        format!("\x1b[{code}m{text}\x1b[0m")
-    } else {
-        text.into()
     }
 }
 

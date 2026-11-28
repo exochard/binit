@@ -1,4 +1,4 @@
-use super::Result;
+use super::{Result, terminal_ui};
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Read};
 use std::os::unix::ffi::OsStrExt;
@@ -107,6 +107,7 @@ pub(super) fn complete() -> Result<()> {
             ["candidate", "diff"] => &["--files"],
             ["profile"] => &["--timeline"],
             ["plugins"] => &["--session"],
+            ["plugins", "--session"] => &["--json"],
             ["candidate", "restore", _] => &["--from", "--pick"],
             ["candidate", "select", ..] => &["--base", "--generation", "--receipt"],
             ["completions"] => COMPLETION_ACTIONS,
@@ -188,40 +189,51 @@ pub(super) fn complete() -> Result<()> {
     Ok(())
 }
 
-const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nplugins\n  plugins         list plugins for the next shell\n  plugins --session  compare this shell with the next\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview plugin updates\n  update --stage  prepare updates for review\n  rollback        select the previous generation\n\ncurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nall commands     binit --help\ncommand help     binit help COMMAND";
-
-pub(super) fn display_width(terminal: bool) -> usize {
-    if terminal {
-        let mut size = std::mem::MaybeUninit::<libc::winsize>::uninit();
-        // TIOCGWINSZ initializes the supplied winsize on success.
-        if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) } == 0 {
-            let columns = unsafe { size.assume_init() }.ws_col;
-            if columns != 0 {
-                return columns.into();
-            }
-        }
-    }
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|width| *width > 0)
-        .unwrap_or(80)
-}
+const GUIDE: &str = concat!(
+    "usage: binit COMMAND [ARG...]\n",
+    "\n",
+    "plugins\n",
+    "  plugins --session       compare with next shell\n",
+    "  inspect ID              show source and load rules\n",
+    "  sync --stage            stage current declarations\n",
+    "  update --check          preview plugin updates\n",
+    "  update --stage          stage plugin updates\n",
+    "\n",
+    "candidate\n",
+    "  candidate diff          review staged changes\n",
+    "  candidate check PLAN    run candidate checks\n",
+    "  candidate select        use checked generation\n",
+    "  rollback                use the previous generation\n",
+    "\n",
+    "current shell\n",
+    "  profile                 show plugin state and load time\n",
+    "  logs                    show recorded lifecycle events\n",
+    "  report ID               show recorded plugin effects\n",
+    "  completions             list managed completions\n",
+    "  editor                  show enabled editor features\n",
+    "\n",
+    "all commands     binit --help\n",
+    "command help     binit help COMMAND",
+);
 
 fn print_guide() {
     let terminal = io::stdout().is_terminal();
-    let narrow = display_width(terminal) < 60;
-    let style = terminal
-        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
-        && std::env::var_os("TERM").is_some_and(|value| value != "dumb");
+    let width = terminal_ui::width(terminal, libc::STDOUT_FILENO);
+    let style = terminal_ui::color(terminal);
     for line in GUIDE.lines() {
-        if narrow
+        if width < 60
             && let Some((command, description)) =
                 line.strip_prefix("  ").and_then(|row| row.split_once("  "))
         {
-            println!("  {}\n    {}", command.trim_end(), description.trim_start());
-        } else if style && matches!(line, "plugins" | "current shell") {
-            println!("\x1b[1m{line}\x1b[0m");
+            let command = command.trim_end();
+            let description = description.trim_start();
+            if command.len() + description.len() + 4 <= width {
+                println!("  {command}  {description}");
+            } else {
+                println!("  {command}\n    {description}");
+            }
+        } else if style && matches!(line, "plugins" | "candidate" | "current shell") {
+            println!("{}", terminal_ui::styled(line, "1", style));
         } else {
             println!("{line}");
         }
@@ -299,7 +311,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
             "usage: binit profile [--timeline [--json]]\n\nRequires an initialized shell."
         }
         Some("plugins") => {
-            "usage: binit plugins [--session]\n\n--session also shows live state. Requires an initialized shell."
+            "usage: binit plugins [--session [--json]]\n\n--session also shows live state. Requires an initialized shell."
         }
         Some("dispatch" | "shell" | "apply" | "init" | "status" | "rollback" | "declare") => {
             println!("usage: binit {}", topic.unwrap());

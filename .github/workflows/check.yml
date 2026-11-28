@@ -3,9 +3,9 @@ name: Check
 on:
   workflow_dispatch:
   push:
-    branches: [dev]
+    branches: [main]
   pull_request:
-    branches: [dev]
+    branches: [main]
 
 permissions:
   contents: read

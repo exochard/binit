@@ -40,11 +40,10 @@ version.
 
 | Branch | Purpose |
 | --- | --- |
-| `main` | Stable release line. The `vX.Y.Z` tag identifies the exact published commit. |
-| `dev` | Integration branch for reviewed changes with passing checks. Work here can ship in a later release. |
-| `release-X.Y.Z` | Candidate cut from `dev` once the release scope is settled. Qualify the exact candidate, carry release fixes back to `dev`, and advance `main` with the qualified commit. |
+| `main` | Long-lived integration branch for reviewed changes with passing checks. The `vX.Y.Z` tag identifies the exact published commit. |
+| `release-X.Y.Z` | Temporary candidate cut from `main` once the release scope is settled. Qualify the exact candidate and integrate its release changes into `main`. |
 
-Name topic branches `intent/area/outcome`. Start from `dev` and keep each
+Name topic branches `intent/area/outcome`. Start from `main` and keep each
 branch focused on one outcome. Use lowercase words separated by hyphens
 within each part. The prefix groups topics by name.
 

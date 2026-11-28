@@ -62,11 +62,11 @@ identities in `verification/`.
 `BINIT_NATIVE=0 make check` qualifies the native-disabled build:
 Rust and Python unit checks, first-prompt loading fallback, and terminal smoke.
 Native completion and post-prompt PTY checks run in native-enabled jobs.
-GitHub runs `make check` on pushes and pull requests to `dev` on Ubuntu
-24.04 x86_64 with Bash 5.2 and 5.3, each with the native module enabled
-and disabled. Forgejo runs its x86_64 workflow on pushes to `dev` and
-`main`. Start the full GitHub matrix and the separate editor workflow
-from the Actions tab.
+GitHub runs `make check` on pushes and pull requests to `main` on Ubuntu
+24.04 x86_64 and ARM64. Each architecture tests Bash 5.2 and 5.3 with the
+native module enabled and disabled. Forgejo checks pushes to `main` and
+`ci/**`, including its emulated ARM64 job. Start the full GitHub matrix
+and the separate editor workflow from the Actions tab.
 Each matrix cell uses the same check target with its own Bash and compiler.
 The ecosystem, ABI mismatch and sanitizer jobs have separate inputs.
 
@@ -122,9 +122,9 @@ is useful for diagnosis; only the complete paired runs are comparable.
 
 See [Binit conventions](CONVENTIONS.md) for topic branches and release versions.
 
-`main` holds released code only; development happens on `dev`. Branch from
-`dev`, open pull requests against `dev`, and use a concise conventional commit
-subject, for example `fix: preserve completion arguments`. Explain the behavior before and after
+`main` is the long-lived integration branch. Branch from `main`, open
+pull requests against it, and use a concise conventional commit subject
+such as `fix: preserve completion arguments`. Explain the behavior before and after
 the change, and include the exact checks run. Use ordinary Bash terminology
 for names. Put generated builds and raw machine logs under ignored paths.
 

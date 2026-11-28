@@ -27,6 +27,23 @@ class SourceTrialObserverTests(unittest.TestCase):
         ], cursor=SimpleNamespace(y=1))
         self.assertIn('printf source-trial-suggestion', input_display(screen))
 
+    def test_a_wrapped_prompt_cannot_borrow_an_earlier_command(self):
+        directory = '[trial-branch] binit /' + 'a' * 104 + '/core '
+        screen = SimpleNamespace(display=[
+            directory, '$ binit profile; printf "\\036DONE\\036"',
+            directory, '$ history -s "printf source-trial-suggestion"',
+            directory, '$ printf source-trial-s',
+        ], cursor=SimpleNamespace(y=5))
+        self.assertEqual(input_display(screen), 'printf source-trial-s')
+
+    def test_a_prompt_marker_split_across_rows_is_found(self):
+        screen = SimpleNamespace(display=[
+            'binit /source $ history -s "printf source-trial-suggestion"',
+            'binit /' + 'a' * 111 + ' $',
+            ' printf source-trial-suggestion',
+        ], cursor=SimpleNamespace(y=2))
+        self.assertEqual(input_display(screen), 'printf source-trial-suggestion')
+
 
 class ChromeTests(unittest.TestCase):
     """The harness must recognize the frozen reference's chrome and the candidate's."""

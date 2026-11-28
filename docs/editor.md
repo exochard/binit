@@ -74,7 +74,8 @@ partial acceptance. End still accepts the whole suggestion.
 Prompt width is measured on the last line of the prompt. Text inside `\[` and
 `\]` counts as zero width, so colors and title sequences are fine, and the
 `show-mode-in-prompt` string is included. The overlays are left to Readline when
-the prompt contains other unmarked escape sequences, when the line contains tabs
+the prompt contains other unmarked escape sequences, when the last line of the
+prompt is as wide as the terminal, when the line contains tabs
 or other control characters, when the input and the history panel would not fit
 on the screen, and while another builtin such as `read -e` owns the line reader.
 

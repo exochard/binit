@@ -17,10 +17,11 @@ def digest(path):
 
 
 def input_display(screen):
+    """The displayed text after the last prompt marker at or above the cursor.
+    A long prompt wraps, so its marker can sit on a later row than its directory."""
     rows, cursor = screen.display, screen.cursor
-    start = max((index for index in range(cursor.y + 1)
-                 if 'binit ' in rows[index] and '$ ' in rows[index]), default=cursor.y)
-    return ''.join(row.rstrip() for row in rows[start:cursor.y + 1])
+    _, marker, current = ''.join(row.rstrip() for row in rows[:cursor.y + 1]).rpartition('$ ')
+    return current if marker else rows[cursor.y].rstrip()
 
 
 def check(trial):
@@ -40,7 +41,7 @@ def check(trial):
     environment.update(HOME=str(home), BINIT_PLUGIN_ROOT=str(plugins),
                        BINIT_DEMO_ROOT=str(private / 'demo'), CARGO_TARGET_DIR=str(core / 'tmp/build'),
                        INPUTRC=str(home / '.inputrc'), TERM='xterm-256color', LC_ALL='C.UTF-8',
-                       GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
+                       GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_CEILING_DIRECTORIES=str(trial),
                        XDG_DATA_HOME=str(home / '.local/share'), XDG_CONFIG_HOME=str(home / '.config'))
     terminal.PROMPT = b'$ '
 

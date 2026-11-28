@@ -138,11 +138,15 @@ class EditorTests(unittest.TestCase):
             "    sock.close()\n"
             "    print('online', end='')\n"
         )
-        with Session(extra=f"binit_complete prompt-worker start {manager} {executable} -c {program}\n") as session:
-            session.pump(.3)
-            session.send("__binit_result=; binit_complete prompt-worker take __binit_result; result=$__binit_result; printf 'WORKER:%s\\n' \"$result\"\n")
+        with Session() as session:
+            session.send(
+                f"binit_complete prompt-worker start {manager} {executable} -c {program} && "
+                "binit_complete prompt-worker wait 1000 && "
+                "__binit_result= && binit_complete prompt-worker take __binit_result; "
+                "status=$?; printf 'WORKER:%s:%s\\n' \"$status\" \"${__binit_result-}\"\n"
+            )
             session.wait(lambda: b"\rWORKER:" in session.transcript)
-            self.assertIn(b"\rWORKER:offline", session.transcript)
+            self.assertIn(b"\rWORKER:0:offline", session.transcript)
 
     def test_prompt_worker_is_cancelled_by_input_in_both_editing_modes(self):
         manager = shlex.quote(str(terminal.BINARY.resolve()))

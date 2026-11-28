@@ -74,7 +74,7 @@ cleanup() {
     wait "$guest" 2>/dev/null || true
     runner_memory >&2
     if (( status != 0 )); then
-        tail -30 -- "$work/qemu.log" "$work/console.log" >&2 || true
+        tail -n 30 -- "$work/qemu.log" "$work/console.log" >&2 || true
     fi
     return "$status"
 }

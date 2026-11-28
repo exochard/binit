@@ -1,11 +1,20 @@
 use std::io::{self, IsTerminal, Write};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+
 use std::thread;
 use std::time::Duration;
+
+#[derive(Clone, Copy)]
+struct SampleCount {
+    current: usize,
+    total: usize,
+}
 
 pub(super) struct Progress {
     stop: mpsc::Sender<()>,
     thread: thread::JoinHandle<()>,
+    sample: Arc<Mutex<Option<SampleCount>>>,
 }
 
 impl Progress {
@@ -18,6 +27,8 @@ impl Progress {
             return None;
         }
         let (stop, receive) = mpsc::channel();
+        let sample = Arc::new(Mutex::new(None::<SampleCount>));
+        let displayed_sample = Arc::clone(&sample);
         let thread = thread::Builder::new()
             .spawn(move || {
                 if receive.recv_timeout(Duration::from_millis(150))
@@ -26,8 +37,15 @@ impl Progress {
                     return;
                 }
                 for frame in ['|', '/', '-', '\\'].into_iter().cycle() {
+                    let count = displayed_sample.lock().ok().and_then(|sample| *sample);
                     let mut stderr = io::stderr().lock();
                     if write!(stderr, "\r\x1b[2K{frame} {label}")
+                        .and_then(|()| match count {
+                            Some(count) => {
+                                write!(stderr, "  sample {}/{}", count.current, count.total)
+                            }
+                            None => Ok(()),
+                        })
                         .and_then(|()| stderr.flush())
                         .is_err()
                     {
@@ -44,7 +62,17 @@ impl Progress {
                 let _ = stderr.write_all(b"\r\x1b[2K").and_then(|()| stderr.flush());
             })
             .ok()?;
-        Some(Self { stop, thread })
+        Some(Self {
+            stop,
+            thread,
+            sample,
+        })
+    }
+
+    pub(super) fn sample(&self, current: usize, total: usize) {
+        if let Ok(mut sample) = self.sample.lock() {
+            *sample = Some(SampleCount { current, total });
+        }
     }
 
     pub(super) fn finish(self) {

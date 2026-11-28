@@ -103,11 +103,43 @@ class CommandGuideTests(unittest.TestCase):
                 ('binit candidate restore slow --fr', 'binit candidate restore slow --from'),
                 ('binit report slo', 'binit report slow'),
                 ('binit inspect slo', 'binit inspect slow'),
+                ('binit plugins --sess', 'binit plugins --session'),
             ):
                 with self.subTest(mode=mode, text=text), Session(':\n', menu=False, mode=mode) as shell:
                     shell.wait(lambda: shell.cursor_line == PROMPT)
                     shell.send(text + '\t')
                     shell.wait(lambda: shell.cursor_line == f'{PROMPT} {expected}')
+
+    def test_plugin_session_separates_live_and_next_generation(self):
+        result = self.command('plugins', '--session')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('requires an initialized shell', result.stderr)
+        with Session(':\n', ':\n', menu=False) as shell:
+            shell.wait(lambda: shell.cursor_line == PROMPT)
+            plugin = shell.directory / 'next-plugin'
+            plugin.mkdir()
+            (plugin / 'plugin.toml').write_text("schema=1\nid='next-plugin'\nentry='plugin.bash'\nload='startup'\n")
+            (plugin / 'plugin.bash').write_text(':\n')
+            shell.send(f'binit disable early && binit remove slow && binit add {shlex.quote(str(plugin))} && '
+                       'COLUMNS=80 binit plugins --session > marks/view\n')
+            shell.wait(lambda: shell.mark('view') and shell.cursor_line == PROMPT)
+            view = (shell.marks / 'view').read_text()
+            self.assertIn('different generations', view)
+            self.assertRegex(view, r'(?m)^early\s+Loaded\s+Disabled\s+Startup$')
+            self.assertRegex(view, r'(?m)^slow\s+Loaded\s+Removed\s+After prompt$')
+            self.assertRegex(view, r'(?m)^next-plugin\s+Absent\s+Enabled\s+Startup$')
+            self.assertNotIn('\x1b', view)
+
+    def test_plugin_session_rejects_an_invalid_current_pointer(self):
+        self.state.mkdir()
+        (self.state / 'current').symlink_to(self.state / 'missing-pointer-target')
+        generation = 'a' * 64
+        result = subprocess.run([str(BINARY), 'plugins', '--session', '--stdin'],
+                                input=f'{generation}\0', capture_output=True, text=True,
+                                env=self.env, cwd=self.root, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('expected a regular file', result.stderr)
+        self.assertEqual(result.stdout, '')
 
     def test_tab_preserves_the_callers_completion_specification(self):
         with Session('', 'complete -W custom-result binit\n', menu=False) as shell:

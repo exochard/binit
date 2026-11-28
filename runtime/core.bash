@@ -948,11 +948,13 @@ binit() {
     elif [[ ${1-} == plugin ]]; then
         __binit_plugin_line "${@:2}"
     elif [[ ${1-} == sync ]]; then
-        if (( $# != 1 )) && { (( $# != 3 )) || [[ $2 != --jobs ]]; }; then
-            printf 'usage: binit sync [--jobs N]\n' >&2
-            return 2
-        fi
+        case "$#:${2-}:${3-}:${4-}" in
+            1::: | 2:--stage:: | 3:--jobs:*: | 4:--stage:--jobs:* | 4:--jobs:*:--stage) ;;
+            *) printf 'usage: binit sync [--stage] [--jobs N]\n' >&2; return 2 ;;
+        esac
         command "$__binit_manager" sync "${@:2}" --stdin --state "$BINIT_STATE_DIR" < <(__binit_declared_stream)
+    elif [[ $# == 2 && $1 == plugins && $2 == --session ]]; then
+        __binit_plugin_session
     else
         if command "$__binit_manager" "$@" --state "$BINIT_STATE_DIR"; then
             if [[ ${1-} == trust ]]; then __binit_last_directory=''; fi
@@ -960,6 +962,17 @@ binit() {
             return "$?"
         fi
     fi
+}
+
+__binit_plugin_session() {
+    command "$__binit_manager" plugins --session --stdin --state "$BINIT_STATE_DIR" < <(
+        local __binit_plugin_session_id
+        printf '%s\0' "${__binit_generation_dir##*/}"
+        for __binit_plugin_session_id in "${__binit_ids[@]}"; do
+            printf '%s\0' "$__binit_plugin_session_id" "${__binit_state[$__binit_plugin_session_id]-}" \
+                "${__binit_load_kind[$__binit_plugin_session_id]-}" "${__binit_reason[$__binit_plugin_session_id]-}"
+        done
+    )
 }
 
 # Records this shell's plugin lines as records of an argument count and that

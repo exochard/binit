@@ -48,6 +48,9 @@ marks the load failed. Previously sourced shell effects may remain on failure.
 
 ## Reports and unload
 
+Use `binit plugins --session` to compare live plugin state and load rules
+with the catalog selected for the next shell.
+
 Set `BINIT_LOGS=1` before `binit init` to keep the last 256 lifecycle events
 in the current shell. `binit profile --timeline` and `binit logs` show the
 same timeline. `binit logs --json` also gives the dropped event count.

@@ -340,7 +340,7 @@ pub(super) fn command(state: &Path, args: &[String]) -> Result<()> {
     let id = hash(&unique().to_le_bytes());
     let root = parent.join(&id);
     fs::DirBuilder::new().mode(0o700).create(&root)?;
-    let receipt = checks::run(&subject, &state, plan, &root, trace)?;
+    let receipt = checks::run(&subject, &state, plan, &root, trace, None)?;
     let reports = reports(&root)?;
     if json {
         println!(

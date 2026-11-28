@@ -407,6 +407,10 @@ fn run_sample(
 }
 
 impl Receipt {
+    pub(super) fn interrupted(&self) -> bool {
+        self.samples.iter().any(|sample| sample.interrupted != 0)
+    }
+
     pub(super) fn failure_reason(&self) -> String {
         if let Some(error) = &self.error {
             return error.clone();
@@ -551,6 +555,7 @@ pub(super) fn run(
     plan: &Path,
     root: &Path,
     diagnostic: bool,
+    progress: Option<&crate::progress::Progress>,
 ) -> Result<Receipt> {
     let mut receipt = Receipt {
         schema: 1,
@@ -601,10 +606,20 @@ pub(super) fn run(
             diagnostic,
             report_budget: crate::diagnose::MAX_RUN_REPORT_BYTES,
         };
+        let total = inputs
+            .binding
+            .plan
+            .checks
+            .iter()
+            .map(|check| check.samples as usize)
+            .sum();
         for spec in &inputs.binding.plan.checks {
             for sample in 0..spec.samples {
                 if diagnostic && samples.report_budget < 4096 {
                     return Err("diagnostic run reached its retained-report budget".into());
+                }
+                if let Some(progress) = progress {
+                    progress.sample(receipt.samples.len() + 1, total);
                 }
                 let result = run_sample(&samples, receipt.samples.len(), spec, sample)?;
                 let interrupted = result.interrupted;

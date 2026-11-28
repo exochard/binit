@@ -2685,6 +2685,74 @@ fn invalid_lines_are_rejected_and_the_shell_continues() {
 }
 
 #[test]
+fn staged_sync_reviews_new_declarations_before_selecting_them() {
+    let h = Home::new();
+    let original = h.src("old", "init.bash", "BINIT_OLD=1\n");
+    let added = h.src("staged", "init.bash", "BINIT_STAGED=1\n");
+    let old_lines = format!("binit plugin {}\n", sh_quote(&original));
+    let staged_line = format!("binit plugin {}\n", sh_quote(&added));
+    success(h.shell(&old_lines, "binit sync\n"));
+    let selected = h.current();
+    let declared = fs::read(h.declared()).unwrap();
+    let staged = success(h.shell(&old_lines, &format!(
+        "{staged_line}binit sync --jobs 1 --stage || exit\nprintf 'live:%s\\n' \"${{BINIT_STAGED-absent}}\"\n"
+    )));
+    assert!(staged.contains("state      prepared"), "{staged}");
+    assert!(staged.contains("live:absent"), "{staged}");
+    assert_eq!(h.current(), selected);
+    assert_eq!(fs::read(h.declared()).unwrap(), declared);
+    let diff = success(h.binit(&["candidate", "diff"]));
+    assert!(diff.contains("staged"), "{diff}");
+
+    let candidate = success(h.binit(&["candidate", "status", "--json"]));
+    let missing = h.f.root().join("missing-recipe-source");
+    failure(
+        h.shell(
+            &old_lines,
+            &format!(
+                "binit plugin {}\nbinit sync --stage\n",
+                sh_quote(missing.to_str().unwrap())
+            ),
+        ),
+        "plugin line",
+    );
+    assert_eq!(h.current(), selected);
+    assert_eq!(fs::read(h.declared()).unwrap(), declared);
+    assert_eq!(
+        success(h.binit(&["candidate", "status", "--json"])),
+        candidate
+    );
+
+    h.f.write(
+        "recipe-check.bash",
+        &format!("{staged_line}[[ ${{BINIT_STAGED-}} == 1 ]]\n"),
+    );
+    let checks = h.f.write(
+        "recipe-checks.toml",
+        "schema=1\n[[checks]]\nid='recipe'\nscript='recipe-check.bash'\ntimeout_ms=4000\n",
+    );
+    success(h.binit(&["candidate", "check", checks.to_str().unwrap()]));
+    assert_eq!(h.current(), selected);
+    let checked = success(h.binit(&["candidate", "status", "--json"]));
+    let restaged = success(h.shell(
+        &old_lines,
+        &format!("{staged_line}binit sync --stage --jobs 1\n"),
+    ));
+    assert!(restaged.contains("state      unchanged"), "{restaged}");
+    assert_eq!(
+        success(h.binit(&["candidate", "status", "--json"])),
+        checked
+    );
+    success(h.binit(&["candidate", "select"]));
+    assert_ne!(h.current(), selected);
+    let shell = success(h.shell(
+        &format!("{old_lines}{staged_line}"),
+        "echo loaded:$BINIT_STAGED\n",
+    ));
+    assert!(shell.contains("loaded:1"), "{shell}");
+}
+
+#[test]
 fn a_failed_sync_leaves_the_current_generation_untouched() {
     let h = Home::new();
     let good = h.src("good", "init.sh", "BINIT_GOOD=1\n");

@@ -691,16 +691,16 @@ fn finish_update(state: &Path, plan: Plan, mode: UpdateMode) -> Result<Option<St
         return Ok(Some(publish(plan.catalog, plan.packages, state)?));
     }
     let base = pointer(state, "current")?;
-    stage_plan(state, plan, base)?;
+    stage_plan(state, plan, Some(base))?;
     Ok(None)
 }
 
-fn stage_plan(state: &Path, plan: Plan, base: String) -> Result<()> {
+fn stage_plan(state: &Path, plan: Plan, base: Option<String>) -> Result<()> {
     let generation = install_generation(plan.catalog, plan.packages, state)?;
-    if generation == base {
+    if base.as_deref() == Some(generation.as_str()) {
         println!("no generation changes to stage");
     } else {
-        candidate::save_prepared(state, generation, Some(base), None)?;
+        candidate::save_prepared(state, generation, base, None)?;
     }
     Ok(())
 }
@@ -758,7 +758,7 @@ pub(super) fn stage_restore(state: &Path, id: &str, from: Option<&str>) -> Resul
         return Ok(());
     }
     plan.replace(position, item, files);
-    stage_plan(state, plan, base)?;
+    stage_plan(state, plan, Some(base))?;
     println!("snapshot   {id} from {source}");
     Ok(())
 }
@@ -807,6 +807,42 @@ pub(super) fn list(state: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+pub(super) fn plugin_session(state: &Path) -> Result<()> {
+    use std::io::IsTerminal;
+
+    let mut input = Vec::new();
+    std::io::stdin()
+        .take(DECLARED_MAX + 1)
+        .read_to_end(&mut input)?;
+    if input.len() as u64 > DECLARED_MAX {
+        return Err("plugin session exceeds 256 KiB".into());
+    }
+    let session = plugin_session::Session::parse(&input)?;
+    let selected = candidate::selected_id(state)?;
+    let installed = match selected.as_deref() {
+        Some(id) => catalog(&verify_generation(state, id)?),
+        None => Vec::new(),
+    };
+    let stdout = std::io::stdout();
+    let terminal = stdout.is_terminal();
+    let color = terminal
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
+        && std::env::var_os("TERM").is_some_and(|value| !value.is_empty() && value != "dumb");
+    session.write(
+        &mut stdout.lock(),
+        selected.as_deref(),
+        installed.iter().map(|entry| {
+            (
+                entry.plugin.id.as_str(),
+                entry.enabled,
+                entry.plugin.load.as_str(),
+            )
+        }),
+        help::display_width(terminal),
+        color,
+    )
 }
 
 pub(super) fn inspect(state: &Path, id: &str) -> Result<()> {
@@ -1012,17 +1048,29 @@ fn kept_git_pin(
 /// With `from_shell`, the invoking shell sends its lines on standard input and
 /// they are recorded under the mutation lock, so another shell writing its own
 /// list meanwhile cannot change what this sync publishes.
-pub(super) fn sync_with_jobs(state: &Path, jobs: usize, from_shell: bool) -> Result<()> {
+pub(super) fn sync_with_jobs(
+    state: &Path,
+    jobs: usize,
+    from_shell: bool,
+    stage: bool,
+) -> Result<()> {
     let input = if from_shell {
         Some(declared_input()?)
     } else {
         None
     };
     let _guard = MutationGuard::acquire(state)?;
+    let base = if stage {
+        candidate::selected_id(state)?
+    } else {
+        None
+    };
     git::clean_leftovers(state);
     let lines = match input {
         Some(bytes) => {
-            atomic_write(&state.join("declared"), &bytes)?;
+            if !stage {
+                atomic_write(&state.join("declared"), &bytes)?;
+            }
             parse_declared(&bytes)?
         }
         None => read_declared(state)?,
@@ -1167,6 +1215,9 @@ pub(super) fn sync_with_jobs(state: &Path, jobs: usize, from_shell: bool) -> Res
         }
         plan.catalog.push(item);
         plan.packages.extend(files);
+    }
+    if stage {
+        return stage_plan(state, plan, base);
     }
     let previous = pointer(state, "current").ok();
     let generation = publish(plan.catalog, plan.packages, state)?;

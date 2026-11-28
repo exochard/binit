@@ -107,6 +107,7 @@ class CheckTerminalTests(unittest.TestCase):
                             self.assertTrue(sent_interrupt)
                             self.assertNotEqual(os.waitstatus_to_exitcode(status), 0)
                             self.assertIn('interrupted by signal 2', text)
+                            self.assertIn('checks     cancelled', text)
                             self.assertEqual((state / 'current').read_bytes(), before)
                             time.sleep(.4)
                             self.assertFalse(late.exists(), 'owned descendant survived interruption')

@@ -23,7 +23,7 @@ struct CheckRun {
     receipt_sha256: Option<String>,
 }
 
-fn selected_id(state: &Path) -> Result<Option<String>> {
+pub(super) fn selected_id(state: &Path) -> Result<Option<String>> {
     match fs::symlink_metadata(state.join("current")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
@@ -506,7 +506,7 @@ fn check_candidate(state: &Path, plan: &Path) -> Result<()> {
     });
     save(&state, &candidate)?;
     let progress = progress::Progress::start("Running candidate checks");
-    let checked = checks::run(&subject, &state, plan, &root, false);
+    let checked = checks::run(&subject, &state, plan, &root, false, progress.as_ref());
     if let Some(progress) = progress {
         progress.finish();
     }
@@ -519,11 +519,16 @@ fn check_candidate(state: &Path, plan: &Path) -> Result<()> {
         .receipt_sha256 = Some(hash(&bytes));
     save(&state, &candidate)?;
     println!("candidate  {}", candidate.generation);
-    println!(
-        "checks     {}",
-        if checked.passed() { "passed" } else { "failed" }
-    );
-    if !checked.passed() {
+    let passed = checked.passed();
+    let outcome = if passed {
+        "passed"
+    } else if checked.interrupted() {
+        "cancelled"
+    } else {
+        "failed"
+    };
+    println!("checks     {outcome}");
+    if !passed {
         return Err(checked.failure_reason().into());
     }
     Ok(())

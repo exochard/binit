@@ -17,6 +17,12 @@ does not source the plugin code or change the `current` or `previous` pointer.
 Preparing a new candidate replaces the candidate record after successful
 installation; a failed preparation retains the earlier record.
 
+Use `binit sync --stage` to prepare the plugin lines from the current shell
+for review before selecting them for new shells. Staged sync keeps the
+selected generation and the saved declaration list. The same acquisition and
+preparation hooks run as for `binit sync`. Review those hooks before staging.
+The next shell needs matching declarations to activate the selected plugins.
+
 Use `binit update --stage [ID...]` to refresh declarations from the current
 generation and review them through the same commands. For a catalog plugin,
 `binit update --stage ID [PATH]` snapshots its local source or a replacement.
@@ -59,8 +65,9 @@ generations and marks the current, previous and candidate states. Add
 `--json` for machine-readable generation identifiers and status flags.
 
 `check` runs the explicit [check plan](candidate-checks.md) and saves its receipt.
-On a terminal it animates a progress line during longer checks. Set
-`BINIT_PROGRESS=0` to use plain output in an interactive terminal.
+On a terminal, longer checks show the sample being checked and the total.
+Ctrl-C during a sample ends the run and reports cancellation. Set
+`BINIT_PROGRESS=0` for plain output in an interactive terminal.
 The selected generation stays in place throughout checking. `select` requires
 a complete passing receipt whose declared inputs and runtime still match.
 Successful selection makes the candidate current for new shells and retains

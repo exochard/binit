@@ -99,6 +99,7 @@ pub(super) fn complete() -> Result<()> {
             }
             ["candidate", "diff"] => &["--files"],
             ["profile"] => &["--timeline"],
+            ["plugins"] => &["--session"],
             ["candidate", "restore", _] => &["--from", "--pick"],
             ["candidate", "select", ..] => &["--base", "--generation", "--receipt"],
             ["completions"] => COMPLETION_ACTIONS,
@@ -112,7 +113,7 @@ pub(super) fn complete() -> Result<()> {
             ["on" | "off", "before-load" | "after-load"] | ["report" | "load" | "unload"] => {
                 &["@live"]
             }
-            ["sync"] => &["--jobs"],
+            ["sync"] | ["sync", "--stage"] | ["sync", "--jobs", _] => &["--jobs", "--stage"],
             ["update" | "sync", .., "--jobs"] => &["1", "2", "3", "4", "5", "6", "7", "8"],
             ["run"] => &["--engine", "--", "@files"],
             ["run", "--engine"] | ["run", "--"] => &["@files"],
@@ -176,9 +177,9 @@ pub(super) fn complete() -> Result<()> {
     Ok(())
 }
 
-const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nplugins\n  plugins         list plugins for the next shell\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview plugin updates\n  update --stage  prepare updates for review\n  rollback        select the previous generation\n\ncurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nall commands     binit --help\ncommand help     binit help COMMAND";
+const GUIDE: &str = "usage: binit COMMAND [ARG...]\n\nplugins\n  plugins         list plugins for the next shell\n  plugins --session  compare this shell with the next\n  inspect ID      show source and load rules\n  sync            prepare a verified generation\n  update --check  preview plugin updates\n  update --stage  prepare updates for review\n  rollback        select the previous generation\n\ncurrent shell\n  profile         show plugin state and load time\n  report ID       show recorded plugin effects\n  completions     list managed completions\n  editor          show enabled editor features\n\nall commands     binit --help\ncommand help     binit help COMMAND";
 
-fn display_width(terminal: bool) -> usize {
+pub(super) fn display_width(terminal: bool) -> usize {
     if terminal {
         let mut size = std::mem::MaybeUninit::<libc::winsize>::uninit();
         // TIOCGWINSZ initializes the supplied winsize on success.
@@ -258,7 +259,7 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
             "usage: binit extension ID [ARG...]\n\nRun a verified plugin manager extension."
         }
         Some("sync") => {
-            "usage: binit sync [--jobs N]\n\nPrepare plugin declarations. Jobs range from 1 to 8 (default 4)."
+            "usage: binit sync [--stage] [--jobs N]\n\nUse --stage to prepare a candidate for review. Jobs range from 1 to 8 (default 4)."
         }
         Some("report" | "unload" | "load" | "inspect" | "enable" | "disable" | "remove") => {
             println!("usage: binit {} ID", topic.unwrap());
@@ -280,9 +281,10 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
         Some("profile") => {
             "usage: binit profile [--timeline [--json]]\n\nRequires an initialized shell."
         }
-        Some(
-            "dispatch" | "plugins" | "shell" | "apply" | "init" | "status" | "rollback" | "declare",
-        ) => {
+        Some("plugins") => {
+            "usage: binit plugins [--session]\n\n--session also shows live state. Requires an initialized shell."
+        }
+        Some("dispatch" | "shell" | "apply" | "init" | "status" | "rollback" | "declare") => {
             println!("usage: binit {}", topic.unwrap());
             if matches!(topic, Some("dispatch")) {
                 println!("\nrequires an initialized shell");

@@ -20,6 +20,7 @@ mod init_stamp;
 mod lazy_runtime;
 mod manager;
 mod package;
+mod plugin_session;
 mod process;
 mod progress;
 mod publication;
@@ -1137,8 +1138,10 @@ fn run() -> Result<()> {
     // The shell's `binit sync` sends its plugin lines on standard input.
     let mut from_shell = false;
     if let Some(position) = args.iter().position(|s| s == "--stdin") {
-        if !args.first().is_some_and(|s| s == "sync") {
-            return Err("--stdin is supported only for sync".into());
+        let shell_plugins = args.first().is_some_and(|s| s == "plugins")
+            && args.get(1).is_some_and(|s| s == "--session");
+        if !args.first().is_some_and(|s| s == "sync") && !shell_plugins {
+            return Err("--stdin is supported only for sync and plugins --session".into());
         }
         args.remove(position);
         from_shell = true;
@@ -1167,6 +1170,12 @@ fn run() -> Result<()> {
         ("enable" | "disable" | "remove", 2) => manager::change(&state, &args[1], command)?,
         ("update", _) => manager::update_command_with_jobs(&state, &args[1..], jobs)?,
         ("plugins", 1) => manager::list(&state)?,
+        ("plugins", 2) if args[1] == "--session" => {
+            if !from_shell {
+                return Err("binit plugins --session requires an initialized shell".into());
+            }
+            manager::plugin_session(&state)?;
+        }
         ("inspect", 2) => manager::inspect(&state, &args[1])?,
         ("shell", 1) => manager::shell(&state)?,
         ("apply", 1) => manager::apply(&state)?,
@@ -1174,7 +1183,10 @@ fn run() -> Result<()> {
             let _guard = manager::MutationGuard::acquire(&state)?;
             println!("prepared {}", prepare(Path::new(&args[1]), &state)?);
         }
-        ("sync", 1) => manager::sync_with_jobs(&state, jobs, from_shell)?,
+        ("sync", 1) => manager::sync_with_jobs(&state, jobs, from_shell, false)?,
+        ("sync", 2) if args[1] == "--stage" => {
+            manager::sync_with_jobs(&state, jobs, from_shell, true)?;
+        }
         ("declare", 1) => manager::declare(&state)?,
         ("init", 1) => {
             let is_missing = |error: &(dyn std::error::Error + 'static)| {

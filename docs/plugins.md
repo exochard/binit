@@ -123,6 +123,9 @@ Use `--asset GLOB` to narrow names. Discovery lists exact assets and available
 published digests; it does not change a pin. `--platform` also accepts
 `linux/x86_64` and `linux/arm64`.
 
+`binit sync --stage` prepares declarations for `binit candidate diff`, `check`,
+and `select`. It keeps the currently selected generation while you review.
+
 `binit sync --jobs N` and `binit update --jobs N` bound independent Git acquisition
 to 1–8 workers (default 4). SSH acquisitions remain serial and foreground for
 authentication. Foreground SSH cleanup stops the direct Git process; its

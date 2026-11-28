@@ -7,6 +7,7 @@ import struct
 import subprocess
 import tempfile
 import termios
+import time
 import unittest
 
 from test_wait import PROMPT, Session
@@ -172,9 +173,15 @@ bind -m vi-insert '"\C-xq": end-of-line'
 return 9
 """
         with Session(change, setup, menu=False) as shell:
-            shell.wait(lambda: shell.cursor_line == PROMPT)
+            # This case takes full Bash namespace snapshots on the fallback path.
+            deadline = time.monotonic() + 60
+
+            def wait_for_audit(predicate):
+                shell.wait(predicate, seconds=deadline - time.monotonic())
+
+            wait_for_audit(lambda: shell.cursor_line == PROMPT)
             shell.send('keep_me() { echo user; }; binit report slow > marks/report\n')
-            shell.wait(lambda: shell.mark('report') and shell.cursor_line == PROMPT)
+            wait_for_audit(lambda: shell.mark('report') and shell.cursor_line == PROMPT)
             report = (shell.marks / 'report').read_text()
             self.assertIn('state failed', report)
             self.assertIn('effect changed function restore_me current', report)
@@ -188,5 +195,5 @@ return 9
             self.assertNotIn('fixture-value-must-stay-private', report)
             shell.send('binit unload slow && ! shopt -q extglob && '
                        '(shopt -s extglob; restore_me; keep_me; bring_back) > marks/result\n')
-            shell.wait(lambda: shell.mark('result') and shell.cursor_line == PROMPT)
+            wait_for_audit(lambda: shell.mark('result') and shell.cursor_line == PROMPT)
             self.assertEqual((shell.marks / 'result').read_text(), 'old\nuser\nold\n')

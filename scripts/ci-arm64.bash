@@ -141,7 +141,9 @@ for version in 5.2 5.3; do
         export BINIT_TEST_MODULE="$generation/completion-5.2.so"
     fi
     sha256sum -- "$BINIT_BASH" "$BINIT_TEST_MODULE"
-    for suite in test_completion.py test_editor.py test_wait.py test_update_candidate.py; do
+    for suite in test_completion.py test_editor.py test_wait.py test_update_candidate.py \
+        test_install.py test_command_guide.py test_check_terminal.py test_runtime_features.py; do
+        printf 'Bash %s %s\n' "$version" "$suite"
         python3 -m unittest discover -s tests -p "$suite"
     done
     python3 scripts/terminal.py smoke

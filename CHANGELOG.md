@@ -6,6 +6,8 @@ Changes are grouped by release following [Keep a Changelog](https://keepachangel
 
 ### Added
 
+- Added `binit install` and `binit uninstall`. The executable handles setup
+  and reads installation receipts from earlier releases.
 - Added a command guide and per-command help in initialized shells.
 - Added per-plugin completion controls, a summary of recorded effects, and
   support for reviewing the plugin changes in a candidate generation.

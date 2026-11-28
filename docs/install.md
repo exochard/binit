@@ -1,6 +1,13 @@
 # User-local installation
 
-## Install the release
+## Install from an extracted archive
+
+From the directory of a verified archive that includes the Rust installer,
+run `./bin/binit install`. It installs the executable in `~/.local/bin` and
+prints the startup line. Pass `--rc-file ~/.bashrc` to add that line in a
+managed block.
+
+## Install the published 0.1.1 release
 
 Binit 0.1.1 requires Linux, glibc 2.34 or newer, and GNU Bash 5.2 or later.
 Download the archive for `x86_64` or `aarch64` and `SHA256SUMS` from the
@@ -16,9 +23,8 @@ sha256sum -- "$archive.tar.gz" | grep -Fx -f - SHA256SUMS &&
   )
 ```
 
-`--binary` points the installer at the archive's executable; without it the
-installer looks for a source build in `target/release/`. Installation prints
-the startup line to add to `~/.bashrc`.
+The 0.1.1 archive includes its original Python installer. Installation
+prints the startup line to add to `~/.bashrc`.
 
 ## Install from source
 
@@ -29,7 +35,7 @@ build fails; build with `--no-default-features` to skip the module.
 ```bash
 cargo fetch --locked
 make build
-python3 scripts/install.py
+./target/release/binit install
 ```
 
 `make build` runs Cargo with `--offline`, so `cargo fetch --locked` must
@@ -39,7 +45,7 @@ The default destination is `~/.local/bin/binit`. Installation prints the exact
 startup line. It leaves startup files alone unless one is explicitly selected:
 
 ```bash
-python3 scripts/install.py --rc-file ~/.bashrc
+./target/release/binit install --rc-file ~/.bashrc
 ```
 
 This adds a marked initialization block after backing up an existing file.
@@ -79,9 +85,12 @@ to use the selected generation.
 ## Uninstall
 
 ```bash
-python3 scripts/install.py --uninstall
+command binit uninstall
 ```
 
+For 0.1.1, run `python3 -I install.py --uninstall` from that release's archive.
+The `command` prefix reaches the new executable from shells initialized by
+an older release.
 Use the same `--prefix` if a custom root was installed. Uninstall removes the
 unchanged recorded executable and exact owned initialization block. It keeps
 plugin state, backups and custom declarations. Remove or guard those plugin

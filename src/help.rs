@@ -18,7 +18,14 @@ const MANAGER_COMMANDS: &[&[&str]] = &[
         "project",
         "releases",
     ],
-    &["run", "extension", "declare", "sync"],
+    &[
+        "run",
+        "extension",
+        "declare",
+        "sync",
+        "install",
+        "uninstall",
+    ],
 ];
 const SHELL_COMMANDS: &[&[&str]] = &[
     &[
@@ -117,6 +124,10 @@ pub(super) fn complete() -> Result<()> {
             ["update" | "sync", .., "--jobs"] => &["1", "2", "3", "4", "5", "6", "7", "8"],
             ["run"] => &["--engine", "--", "@files"],
             ["run", "--engine"] | ["run", "--"] => &["@files"],
+            ["install" | "uninstall", .., "--prefix"] => &["@directories"],
+            ["install", .., "--rc-file" | "--binary"] => &["@files"],
+            ["install", ..] => &["--prefix", "--rc-file", "--binary"],
+            ["uninstall", ..] => &["--prefix"],
             ["add", _] => &["--disabled"],
             ["trust" | "project"] => &["@directories"],
             ["trust", _] => &["--sha256"],
@@ -246,6 +257,12 @@ pub(super) fn handle(args: &[OsString]) -> Result<bool> {
         return Ok(false);
     };
     let text = match topic {
+        Some("install") => {
+            "usage: binit install [--prefix PATH] [--rc-file PATH] [--binary PATH]\n\nInstall this executable to ~/.local/bin. Pass --rc-file to add a managed startup block."
+        }
+        Some("uninstall") => {
+            "usage: binit uninstall [--prefix PATH]\n\nRemove the verified executable and startup block recorded by the installer. Plugin state is kept."
+        }
         Some("update") => {
             "usage: binit update [--check | --stage] [--jobs N] [ID...]\n       binit update [--stage] ID [PATH]\n\n--check previews Git revisions and lists local sources.\n--stage prepares a candidate for binit candidate diff, check and select.\n--jobs fetches 1 to 8 repositories at once (default 4).\nFor a catalog plugin, ID [PATH] snapshots its local source."
         }

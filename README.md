@@ -1,7 +1,7 @@
 # Binit
 
-Binit runs the plugins in your interactive Bash from a pinned, verified
-snapshot and loads each one when it is needed. It also draws a completion
+Binit is a Rust plugin manager for GNU Bash. It runs plugins from a pinned,
+verified snapshot and loads each one when it is needed. It also draws a completion
 menu, history search and suggestions inside Bash itself, and a completion
 that runs in its own process never holds up the line you are typing.
 
@@ -20,24 +20,20 @@ the verdict rules. Every number comes from the timing archive attached to each
 
 ## Install
 
-Binit 0.1.1 runs on Linux with glibc 2.34 or newer and GNU Bash 5.2 or
-later. Download the archive for your architecture and `SHA256SUMS` from the
-[latest release](https://github.com/exochard/binit/releases/latest), then:
+Binit builds on Linux with Rust and GNU Bash 5.2 or later. From a checkout with
+the [build prerequisites](docs/install.md#install-from-source), build and
+install with the Rust executable.
 
 ```bash
-archive="binit-0.1.1-linux-$(uname -m)"
-sha256sum -- "$archive.tar.gz" | grep -Fx -f - SHA256SUMS &&
-  tar -xzf "$archive.tar.gz" &&
-  (
-    cd "$archive" &&
-    python3 -I install.py --binary "$PWD/bin/binit"
-  )
+cargo fetch --locked
+make build
+./target/release/binit install
 ```
 
-The installer puts `binit` in `~/.local/bin` and prints the line to add to
-`~/.bashrc`. It edits no startup file unless you pass `--rc-file`. Your system
-shell stays as it is. [Installation](docs/install.md) covers upgrades, source builds, and
-`--uninstall`.
+The installer puts `binit` in `~/.local/bin` and prints the startup line.
+Pass `--rc-file ~/.bashrc` to add that line in a managed block. The
+[installation guide](docs/install.md) covers release archives, upgrades from
+0.1.1, and `binit uninstall`.
 
 ## Declare plugins
 

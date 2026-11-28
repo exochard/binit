@@ -943,7 +943,7 @@ binit() {
             printf 'binit: completion menu unavailable in this shell\n' >&2
             return 1
         fi
-    elif [[ ${1-} == run ]]; then
+    elif [[ ${1-} == run || ${1-} == install || ${1-} == uninstall ]]; then
         command "$__binit_manager" "$@"
     elif [[ ${1-} == plugin ]]; then
         __binit_plugin_line "${@:2}"

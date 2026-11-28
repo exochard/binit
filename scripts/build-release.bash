@@ -55,7 +55,6 @@ stage=$build/$archive
 mkdir -p -- "$stage/bin" "$build/dist"
 install -m 0755 "$binary" "$stage/bin/binit"
 install -m 0644 LICENSE "$stage/LICENSE"
-install -m 0644 scripts/install.py "$stage/install.py"
 install -m 0644 docs/install.md "$stage/INSTALL.md"
 
 mapfile -t modules < <(find "$CARGO_TARGET_DIR/release/build" -name 'completion*.so' -type f -print)
@@ -91,7 +90,7 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$build" \
 mkdir -p "$build/unpacked" "$build/smoke-home"
 tar -xzf "$build/dist/$archive.tar.gz" -C "$build/unpacked"
 package=$build/unpacked/$archive
-HOME="$build/smoke-home" python3 -I "$package/install.py" --binary "$package/bin/binit"
+HOME="$build/smoke-home" "$package/bin/binit" install
 export BINIT_TEST_BINARY="$build/smoke-home/.local/bin/binit"
 test "$("$BINIT_TEST_BINARY" --version)" = "binit $version"
 export BINIT_EXPECT_HIGHLIGHT=1
@@ -109,3 +108,6 @@ for abi in 5.2 5.3; do
     python3 -m unittest discover -s tests -p test_completion.py -k verified_generation
     python3 -m unittest discover -s tests -p test_editor.py
 done
+HOME="$build/smoke-home" "$BINIT_TEST_BINARY" uninstall
+test ! -e "$BINIT_TEST_BINARY"
+test -d "$state"

@@ -111,14 +111,14 @@ pub(super) fn run_with_trace(mut command: Command, timeout: Duration) -> Result<
     )
 }
 
-struct SignalGuard {
+pub(super) struct SignalGuard {
     int: libc::sigaction,
     term: libc::sigaction,
     hup: Option<libc::sigaction>,
 }
 
 impl SignalGuard {
-    fn install(catch_hangup: bool) -> Result<Self> {
+    pub(super) fn install(catch_hangup: bool) -> Result<Self> {
         // sigaction and the lock-free integer store are signal-safe on the
         // supported Linux targets. The manager serializes hook executions.
         unsafe {
@@ -149,6 +149,14 @@ impl SignalGuard {
             }
             Ok(guard)
         }
+    }
+
+    pub(super) fn check() -> Result<()> {
+        let signal = INTERRUPTED.load(Ordering::Relaxed);
+        if signal != 0 {
+            return Err(format!("interrupted by signal {signal}").into());
+        }
+        Ok(())
     }
 }
 

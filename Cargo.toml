@@ -15,6 +15,7 @@ name = "binit"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
@@ -24,5 +25,4 @@ tar = "0.4.46"
 flate2 = "1.1.9"
 zip = { version = "2.4.2", default-features = false, features = ["deflate-flate2", "flate2"] }
 
-[dev-dependencies]
 tempfile = "3"

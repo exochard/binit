@@ -17,6 +17,7 @@ mod git;
 mod help;
 mod hooks;
 mod init_stamp;
+mod installer;
 mod lazy_runtime;
 mod manager;
 mod package;
@@ -1106,6 +1107,11 @@ fn run() -> Result<()> {
     }
     if raw_args.first().is_some_and(|arg| arg == "extension") {
         return extensions::command(&raw_args[1..]);
+    }
+    if let Some(command) = raw_args.first()
+        && (command == "install" || command == "uninstall")
+    {
+        return installer::command(command == "uninstall", &raw_args[1..]);
     }
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if let [flag] = args.as_slice()

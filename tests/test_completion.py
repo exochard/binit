@@ -131,6 +131,32 @@ complete -F __lazy lazy_cmd
 
 
 class CompletionTests(unittest.TestCase):
+    def test_lazy_plugin_releases_a_stub_it_does_not_replace(self):
+        with tempfile.TemporaryDirectory(prefix="binit-lazy-completion-") as directory:
+            plugin = Path(directory)
+            (plugin / "plugin.toml").write_text(
+                "schema=1\nid='lazy-test'\nentry='plugin.bash'\nload='completion'\n"
+                "completions=['declared_cmd', 'missing_cmd']\n"
+            )
+            (plugin / "plugin.bash").write_text(
+                "__declared() { COMPREPLY=(registered); }\n"
+                "complete -F __declared declared_cmd\n"
+            )
+            fallback = "__default() { COMPREPLY=(fallback); }\ncomplete -D -F __default\n"
+            with Session(framework=True, extra=fallback, plugins=(plugin,)) as session:
+                session.send("builtin complete -p missing_cmd\n")
+                session.wait(lambda: b"\rcomplete -F __binit_complete missing_cmd\r\n" in session.transcript)
+                session.send("missing_cmd f\t")
+                session.capture()
+                self.assertNotIn(b"possible retry loop", session.transcript)
+                session.send("\x15builtin complete -p missing_cmd &>/dev/null; echo named:$?\n")
+                session.wait(lambda: re.search(rb"\rnamed:[01]\r\n", session.transcript))
+                self.assertIn(b"\rnamed:1\r\n", session.transcript)
+                session.send("missing_cmd f\t")
+                self.assertEqual(session.capture()[1], "missing_cmd fallback ")
+                session.send("\x15declared_cmd r\t")
+                self.assertEqual(session.capture()[1], "declared_cmd registered ")
+
     def test_cursor_reply_within_probe_deadline_opens_menu_without_leaking_input(self):
         with Session(replies=False) as session:
             def delayed_reply(text):

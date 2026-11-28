@@ -49,6 +49,14 @@ __binit_capture_plugin_completions() {
         [[ ${__binit_pre_completion[$__binit_comp_name]-safe} == safe ]] || continue
         __binit_comp_current=$( { builtin complete -p -- "$__binit_comp_name" 1>&"$__binit_definition_fd" 2>/dev/null; } {__binit_definition_fd}>&1 >/dev/null ) || __binit_comp_current=''
         [[ -n $__binit_comp_current ]] || continue
+        # A successful load can leave some declared completions unregistered.
+        # Remove our remaining stub so it does not shadow the default provider.
+        if [[ ${__binit_state[$__binit_comp_id]} == loaded ]] &&
+           builtin test "$__binit_comp_current" = "complete -F __binit_complete $__binit_comp_name" &&
+           builtin complete -r -- "$__binit_comp_name"; then
+            unset '__binit_completion_spec[$__binit_comp_name]'
+            continue
+        fi
         __binit_completion_spec[$__binit_comp_name]=$__binit_comp_current
         if [[ ${__binit_completion_disabled[$__binit_comp_name]-0} == 1 ]]; then
             builtin complete -r -- "$__binit_comp_name" || :

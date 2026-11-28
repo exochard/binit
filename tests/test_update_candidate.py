@@ -187,7 +187,7 @@ class UpdateCandidateTests(unittest.TestCase):
                 self.assertIn(b'checks     passed', output)
                 self.assertEqual(b'Running candidate checks' in output, enabled == '1')
                 if enabled == '1':
-                    self.assertRegex(output, rb'Running candidate checks\r\x1b\[2Kcandidate ')
+                    self.assertRegex(output, rb'Running candidate checks  sample 1/1\r\x1b\[2Kcandidate ')
             finally:
                 os.close(slave)
                 os.close(master)
